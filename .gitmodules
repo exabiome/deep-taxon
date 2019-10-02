@@ -1,0 +1,3 @@
+[submodule "wgsim"]
+	path = wgsim.git
+	url = git@github.com:ajtritt/wgsim.git
