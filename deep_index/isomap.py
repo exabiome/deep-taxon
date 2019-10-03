@@ -9,7 +9,8 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('dist_h5', type=str, help='the HDF5 file with distance data (output by tree2dmat)')
 parser.add_argument('out_h5', type=str, help='the HDF5 file to save the embedding to')
-parser.add_argument('-p', '--n_components', type=int, default=50, help='the number of components to use')
+parser.add_argument('-p', '--n_components', type=int, default=2, help='the number of components to use')
+parser.add_argument('-n', '--n_neighbors', type=int, default=5, help='the number of neighbors to use')
 args = parser.parse_args()
 
 
@@ -19,7 +20,7 @@ with h5py.File(args.dist_h5, 'r') as f:
 
 dist = squareform(dist)
 
-nn = NearestNeighbors(metric='precomputed')
+nn = NearestNeighbors(n_neighbors=args.n_neighbors, metric='precomputed')
 nn.fit(dist)
 
 imap = Isomap(n_components=args.n_components)
