@@ -30,13 +30,13 @@ with open('%s.ncbi_paths.txt' % args.output_base, 'w') as f:
             continue
         good_taxa.append(t)
         source, prefix, number = t.split('_')
+        accession = "%s_%s" % (prefix, number)
         dirs = ['genomes', 'all', prefix]
         for i in range(0, 9, 3):
             dirs.append(number[i:i+3])
-        dirs.append("%s*" % t)
-        f.write("%s/%s_*[0-9]_genomic.fna.gz\n" % ("/".join(dirs), t))
-        f.write("%s/%s_*[0-9]_protein.faa.gz\n" % ("/".join(dirs), t))
-        f.write("%s/%s_*[0-9]_cds_from_genomic.fna.gz\n" % ("/".join(dirs), t))
+        dirs.append("%s*" % accession)
+        f.write("ftp.ncbi.nlm.nih.gov/%s/%s*genomic.fna.gz\n" % ("/".join(dirs), accession))
+        f.write("ftp.ncbi.nlm.nih.gov/%s/%s*protein.faa.gz\n" % ("/".join(dirs), accession))
 
 with open('%s.ignored_taxa.txt' % args.output_base, 'w') as f:
     for t in bad_taxa:
