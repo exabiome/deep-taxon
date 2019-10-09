@@ -1,3 +1,4 @@
+import os
 import sys
 import numpy as np
 import h5py
@@ -46,3 +47,10 @@ with h5py.File(args.out_h5, 'w') as f:
     f.create_dataset(EMBEDDING, data=emb)
     dset = f.create_dataset(LEAF_NAMES, shape=taxa_names.shape, dtype=h5py.special_dtype(vlen=str))
     dset[:] = taxa_names
+
+for _ in taxa_names:
+    t = _[3:]
+    dirs = ["genomes", "all", t[0:3]]
+    dirs.extend(t[x:x+3] for x in range(4, 13, 3))
+    dirs.append("%s*" % t)
+    print(os.path.join(*dirs))
