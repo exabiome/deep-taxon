@@ -1,9 +1,5 @@
 import dendropy
-from dendropy import treecalc
 import argparse
-from itertools import combinations
-import h5py
-import numpy as np
 
 parser = argparse.ArgumentParser()
 parser.add_argument('tree', type=str, help='the tree file to convert')
