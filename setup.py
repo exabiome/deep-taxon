@@ -9,7 +9,7 @@ with open('README.md', 'r') as fp:
 pkgs = find_packages('src', exclude=['data'])
 print('found these packages:', pkgs)
 
-schema_dir = 'common/hdmf-common-schema/common'
+schema_dir = 'schema'
 
 reqs_re = re.compile("[<=>]+")
 with open('requirements.txt', 'r') as fp:
@@ -29,7 +29,7 @@ setup_args = {
     'install_requires': reqs,
     'packages': pkgs,
     'package_dir': {'': 'src'},
-    'package_data': {'exabiome': ["%s/*.yaml" % schema_dir, "%s/*.json" % schema_dir]},
+    'package_data': {'exabiome.sequence': ["%s/*.yaml" % schema_dir, "%s/*.json" % schema_dir]},
     'classifiers': [
         "Programming Language :: Python",
         "Programming Language :: Python :: 3.5",
