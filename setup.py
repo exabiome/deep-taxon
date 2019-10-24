@@ -3,8 +3,6 @@
 from setuptools import setup, find_packages
 import re
 
-import versioneer
-
 with open('README.md', 'r') as fp:
     readme = fp.read()
 
