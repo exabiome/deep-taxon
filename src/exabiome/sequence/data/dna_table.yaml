@@ -1,0 +1,21 @@
+datasets:
+- data_type_def: BitpackedIndex
+  data_type_inc: VectorIndex
+  dtype: int
+  doc: A VectorIndex that indexes bitpacked DNA
+groups:
+- data_type_def: DNATable
+  data_type_inc: DynamicTable
+  doc: A table for storing sequence data
+  datasets:
+  - name: names
+    data_type_inc: VectorData
+    dtype: text
+    doc: Names for sequences
+  - name: sequence
+    data_type_inc: VectorData
+    dtype: uint8
+    doc: Packed DNA sequence
+  - name: sequence_index
+    data_type_inc: BitpackedIndex
+    doc: Index for 'sequence'
