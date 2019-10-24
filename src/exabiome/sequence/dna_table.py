@@ -7,8 +7,6 @@ from hdmf.common import VectorIndex, VectorData, DynamicTable,\
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
 
 
-load_namespaces('deep_index.namespace.yaml')
-
 NS = 'deep-index'
 
 @register_class('BitpackedIndex', NS)
