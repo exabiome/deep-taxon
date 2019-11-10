@@ -33,12 +33,14 @@ class DNATable(DynamicTable):
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'names', 'type': ('array_data', 'data'), 'doc': 'sequence names'},
             {'name': 'sequence', 'type': ('array_data', 'data'), 'doc': 'bitpacked DNA sequence'},
-            {'name': 'index', 'type': ('array_data', 'data'), 'doc': 'index for sequence'})
+            {'name': 'index', 'type': ('array_data', 'data'), 'doc': 'index for sequence'},
+            {'name': 'taxon', 'type': ('array_data', 'data'), 'doc': 'index for sequence'})
     def __init__(self, **kwargs):
-        names, index, sequence = popargs('names', 'index', 'sequence', kwargs)
+        names, index, sequence, taxon = popargs('names', 'index', 'sequence', 'taxon', kwargs)
         columns = list()
         columns.append(VectorData('names', 'sequence names', data=names))
         columns.append(VectorData('sequence', 'bitpacked DNA sequences', data=sequence))
         columns.append(BitpackedIndex('sequence_index', index, columns[-1]))
+        columns.append(VectorData('taxon', 'taxa for each sequence', data=taxon))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)

@@ -19,3 +19,7 @@ groups:
   - name: sequence_index
     data_type_inc: BitpackedIndex
     doc: Index for 'sequence'
+  - name: taxon
+    data_type_inc: VectorData
+    dtype: uint16
+    doc: integer ID for the taxa that each sequence belongs to

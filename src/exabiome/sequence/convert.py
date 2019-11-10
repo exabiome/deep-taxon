@@ -10,9 +10,11 @@ import math
 from collections import deque
 
 class SeqIterator(object):
-    ltag_re = re.compile('\[locus_tag=([A-Za-z0-9_]+)\]')
+    #ltag_re = re.compile('\[locus_tag=([A-Za-z0-9_]+)\]')
+    ltag_re = re.compile('>lcl|([A-Za-z0-9_.]+)')
 
-    def __init__(self, paths):
+    def __init__(self, paths, verbose=False):
+        self.verbose = verbose
         self.dna_chars = 'ATCGN'
 
         chars = self.dna_chars
@@ -34,6 +36,7 @@ class SeqIterator(object):
         self.__path_iter = None
         self.__name_queue = None
         self.__index_queue = None
+        self.__taxon_queue = None
         self.__id_queue = None
         self.__total_len = 0
         self.__nseqs = 0
@@ -51,6 +54,10 @@ class SeqIterator(object):
         return self.__name_queue
 
     @property
+    def taxon(self):
+        return self.__taxon_queue
+
+    @property
     def index(self):
         return self.__index_queue
 
@@ -58,14 +65,21 @@ class SeqIterator(object):
     def ids(self):
         return self.__id_queue
 
+    @property
     def index_iter(self):
-        return QueueIterator(self.index)
+        return QueueIterator(self.index, self)
 
+    @property
     def names_iter(self):
-        return QueueIterator(self.names)
+        return QueueIterator(self.names, self)
 
+    @property
     def id_iter(self):
-        return QueueIterator(self.ids)
+        return QueueIterator(self.ids, self)
+
+    @property
+    def taxon_iter(self):
+        return QueueIterator(self.taxon, self)
 
     def __iter__(self):
         self.__path_iter = iter(self.__paths)
@@ -73,11 +87,13 @@ class SeqIterator(object):
         self.__curr_iter = self.__read(next(self.__path_iter))
         self.__name_queue = deque()
         self.__index_queue = deque()
+        self.__taxon_queue = deque()
         self.__id_queue = deque()
         self.__total_len = 0
         self.__nseqs = 0
         self.__curr_block = np.zeros((0,4), dtype=np.uint8)
         self.__curr_block_idx = 0
+        self.__curr_file_idx = 0
         return self
 
     def __read_next_seq(self):
@@ -87,20 +103,28 @@ class SeqIterator(object):
                 self.__name_queue.append(seqname)
                 self.__total_len += len(seq)
                 self.__index_queue.append(self.__total_len)
+                self.__taxon_queue.append(np.uint16(self.__curr_file_idx))
                 self.__id_queue.append(self.__nseqs)
                 self.__nseqs += 1
                 return seq
             except StopIteration:
                 try:
                     self.__curr_iter = self.__read(next(self.__path_iter))
+                    self.__curr_file_idx += 1
                 except StopIteration:
                     self.__name_queue.append(None)
                     self.__index_queue.append(None)
+                    self.__taxon_queue.append(None)
                     self.__name_queue.append(None)
                     raise StopIteration()
 
     def __next__(self):
-        ret = None
+        self._load_buffer()
+        ret = self.__curr_block[self.__curr_block_idx]
+        self.__curr_block_idx += 1
+        return ret
+
+    def _load_buffer(self):
         if self.__curr_block_idx == self.__curr_block.shape[0]:
             # this raises the final StopIteration
             # when nothing is left to read
@@ -114,17 +138,22 @@ class SeqIterator(object):
                 pass
             self.__curr_block, self.__padded = self.__pack(seq)
             self.__curr_block_idx = 0
-        ret = self.__curr_block[self.__curr_block_idx]
-        self.__curr_block_idx += 1
-        return ret
+
+    @classmethod
+    def get_seqname(cls, seq):
+        ### parse locus_tag
+        # ltag = self.ltag_re.search(seq.metadata['description'])
+        # if ltag is None:
+        #     ltags = str(seq_i)
+        # else:
+        #     ltag = ltag.groups()[0]
+        return seq.metadata['id']
 
     def __read(self, path):
+        if self.verbose:
+            print('reading', path)
         for seq_i, seq in enumerate(skbio.io.read(path, format='fasta',)):
-            ltag = self.ltag_re.search(seq.metadata['description'])
-            if ltag is None:
-                ltags = str(seq_i)
-            else:
-                ltag = ltag.groups()[0]
+            ltag = self.get_seqname(seq)
             yield seq, ltag
 
     def __pack(self, seq):
@@ -144,13 +173,18 @@ class SeqIterator(object):
 
 class QueueIterator(object):
 
-    def __init__(self, queue):
+    def __init__(self, queue, seqit):
         self.__queue = queue
+        self.q=self.__queue
+        self.__seqit = seqit
+        self.sit=self.__seqit
 
     def __iter__(self):
         return self
 
     def __next__(self):
+        if len(self.__queue) == 0:
+            self.__seqit._load_buffer()
         ret = self.__queue.popleft()
         if ret is None:
             raise StopIteration()
