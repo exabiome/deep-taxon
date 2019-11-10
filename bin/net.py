@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class SpatialPyramidPool1d(nn.Module):
-    def __init__(self, num_levels, shift=0, pool_type='max_pool'):
+    def __init__(self, num_levels, shift=0, pool_type='avg_pool'):
         super(SpatialPyramidPool1d, self).__init__()
         self.num_levels = num_levels
         self.shift = shift            # the shift in sample length as
