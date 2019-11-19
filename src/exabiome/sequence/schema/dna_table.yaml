@@ -30,15 +30,17 @@ groups:
     data_type_inc: VectorData
     dtype: text
     doc: Taxon ID from GTDB
-  - name: sequence
+  - name: embedding
     data_type_inc: VectorData
-    dtype: uint8
-    doc: Packed DNA sequence
+    dtype: float
+    doc: embedding of each taxa on n-dimensional space
 - data_type_def: DeepIndexFile
   data_type_inc: Container
   doc: A file that has taxonomy and sequence information for running deep index
   groups:
   - name: dna_table
+    data_type_inc: DNATable
     doc: DNA sequence table
   - name: taxa_table
+    data_type_inc: TaxaTable
     doc: Taxa table
