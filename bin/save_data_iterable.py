@@ -65,16 +65,17 @@ taxa = DataChunkIterator.from_iterable(seqit.taxon_iter, maxshape=(None,), buffe
 
 io = get_hdf5io(h5path, 'w')
 
+taxa_table = TaxaTable('taxa_table', 'a table for storing taxa data', taxa_ids, embeddings)
+
 dna = DNATable('dna_table', 'a table for storing DNA',
                io.set_dataio(names,    compression='gzip', chunks=(2**15,)),
                io.set_dataio(packed,   compression='gzip', maxshape=(None,), chunks=(2**15,)),
                io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=(2**15,)),
                io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=(2**15,)),
+               taxa_table,
                id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=(2**15,)))
 
-taxa = TaxaTable('taxa_table', 'a table for storing taxa data', taxa_ids, embeddings)
-
-difile = DeepIndexFile(dna, taxa)
+difile = DeepIndexFile(dna, taxa_table)
 
 io.write(difile, exhaust_dci=False)
 io.close()
