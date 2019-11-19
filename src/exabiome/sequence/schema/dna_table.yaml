@@ -20,6 +20,25 @@ groups:
     data_type_inc: BitpackedIndex
     doc: Index for 'sequence'
   - name: taxon
-    data_type_inc: VectorData
-    dtype: uint16
+    data_type_inc: DynamicTableRegion
     doc: integer ID for the taxa that each sequence belongs to
+- data_type_def: TaxaTable
+  data_type_inc: DynamicTable
+  doc: A table for storing taxa information
+  datasets:
+  - name: taxon_id
+    data_type_inc: VectorData
+    dtype: text
+    doc: Taxon ID from GTDB
+  - name: sequence
+    data_type_inc: VectorData
+    dtype: uint8
+    doc: Packed DNA sequence
+- data_type_def: DeepIndexFile
+  data_type_inc: Container
+  doc: A file that has taxonomy and sequence information for running deep index
+  groups:
+  - name: dna_table
+    doc: DNA sequence table
+  - name: taxa_table
+    doc: Taxa table

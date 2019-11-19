@@ -5,6 +5,7 @@ import numpy as np
 from hdmf.common import VectorIndex, VectorData, DynamicTable,\
                         register_class, load_namespaces
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
+from hdmf import Container
 
 
 NS = 'deep-index'
@@ -44,3 +45,30 @@ class DNATable(DynamicTable):
         columns.append(VectorData('taxon', 'taxa for each sequence', data=taxon))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
+
+
+@register_class('TaxaTable', NS)
+class TaxaTable(DynamicTable):
+
+    @docval(*get_docval(DynamicTable.__init__),
+            {'name': 'taxon_id', 'type': ('array_data', 'data'), 'doc': 'the taxon ID'},
+            {'name': 'embedding', 'type': ('array_data', 'data'), 'doc': 'the embedding for each taxon'})
+    def __init__(self, **kwargs):
+        taxon_id, embedding = popargs('taxon_id', 'embedding', kwargs)
+        columns = list()
+        columns.append(VectorData('taxon_id', 'taxonomy IDs from NCBI', data=taxon_id))
+        columns.append(VectorData('embedding', 'an embedding for each species', data=embedding))
+        kwargs['columns'] = columns
+        call_docval_func(super().__init__, kwargs)
+
+@register_class('DeepIndexFile', NS)
+class DeepIndexFile(Container):
+
+    __fields__ = ('dna_table', 'taxa_table')
+
+    @docval({'name': 'dna_table', 'type': DNATable, 'doc': 'the table storing DNA sequences'},
+            {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'})
+    def __init__(self, **kwargs):
+        dna_table, taxa_table = popargs('dna_table', 'taxa_table', kwargs)
+        call_docval_func(super().__init__, {'name': 'root'})
+        self.dna_table, self.taxa_table = dna_table, taxa_table
