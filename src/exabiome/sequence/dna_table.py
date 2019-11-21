@@ -25,7 +25,10 @@ class BitpackedIndex(VectorIndex):
         """
         Slice ragged array of *packed* one-hot encoded DNA sequence
         """
-        return self.__get_single_item(args[0])
+        if isinstance(args, int):
+            return self.__get_single_item(args)
+        else:
+            raise ValueError("Can only index bitpacked sequence with integers")
 
 
 @register_class('DNATable', NS)
@@ -86,7 +89,11 @@ class DeepIndexFile(Container):
         self.dna_table, self.taxa_table = dna_table, taxa_table
 
     def __getitem__(self, i):
-        (name, seq, (taxon_name, taxon_emb)) = self.dna_table[i]
+        """
+        Return a tuple containing (taxon_name, sequence_name, sequence, taxon_embedding)
+        """
+        (seq_i, seq_name, sequence, (tax_i, taxon_name, taxon_emb)) = self.dna_table[i]
+        return {'taxon': taxon_name, 'seqname': seq_name, "sequence": sequence, "emedding": taxon_emb}
 
     def __len__(self):
         return len(self.dna_table)
