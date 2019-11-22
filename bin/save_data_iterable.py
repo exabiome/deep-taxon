@@ -6,7 +6,7 @@ import h5py
 from hdmf.common import get_hdf5io
 from hdmf.data_utils import DataChunkIterator
 
-from exabiome.sequence.convert import SeqIterator
+from exabiome.sequence.convert import DNASeqIterator
 from exabiome.sequence.dna_table import DNATable, TaxaTable, DeepIndexFile
 
 def get_taxa_id(path):
@@ -55,7 +55,7 @@ h5path = args.out
 print("reading %d Fasta files" % len(fnapaths))
 print("Total size:", sum(os.path.getsize(f) for f in fnapaths))
 
-seqit = SeqIterator(fnapaths, verbose=True)
+seqit = DNASeqIterator(fnapaths, verbose=True)
 
 packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=2**15, dtype=np.dtype('uint8'))
 seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
@@ -72,7 +72,7 @@ dna = DNATable('dna_table', 'a table for storing DNA',
                io.set_dataio(packed,   compression='gzip', maxshape=(None,), chunks=(2**15,)),
                io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=(2**15,)),
                io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=(2**15,)),
-               taxa_table,
+               taxon_table=taxa_table,
                id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=(2**15,)))
 
 difile = DeepIndexFile(dna, taxa_table)

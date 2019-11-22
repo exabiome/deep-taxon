@@ -1,5 +1,5 @@
 datasets:
-- data_type_def: BitpackedIndex
+- data_type_def: PackedDNAIndex
   data_type_inc: VectorIndex
   dtype: int
   doc: A VectorIndex that indexes bitpacked DNA
@@ -17,7 +17,7 @@ groups:
     dtype: uint8
     doc: Packed DNA sequence
   - name: sequence_index
-    data_type_inc: BitpackedIndex
+    data_type_inc: PackedDNAIndex
     doc: Index for 'sequence'
   - name: taxon
     data_type_inc: DynamicTableRegion

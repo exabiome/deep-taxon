@@ -1,3 +1,4 @@
+from abc import ABCMeta, abstractmethod
 import math
 
 import numpy as np
@@ -10,16 +11,17 @@ from hdmf import Container
 
 NS = 'deep-index'
 
-@register_class('BitpackedIndex', NS)
-class BitpackedIndex(VectorIndex):
+class BitpackedIndex(VectorIndex, metaclass=ABCMeta):
 
-    def __get_single_item(self, i):
+
+    def _start_end(self, i):
         start = 0 if i == 0 else self.data[i-1]
         end = self.data[i]
-        shift = start % 2
-        unpacked = np.unpackbits(self.target[start//2:math.ceil(end/2)])
-        unpacked = unpacked.reshape(-1, 4)[shift:shift+end-start].T
-        return unpacked
+        return start, end
+
+    @abstractmethod
+    def _get_single_item(self, i):
+        pass
 
     def __getitem__(self, args):
         """
@@ -31,8 +33,33 @@ class BitpackedIndex(VectorIndex):
             raise ValueError("Can only index bitpacked sequence with integers")
 
 
-@register_class('DNATable', NS)
-class DNATable(DynamicTable):
+@register_class('PackedDNAIndex', NS)
+class PackedDNAIndex(BitpackedIndex):
+
+    def _get_single_item(self, i):
+        start, end = self._start_end(i)
+        shift = start % 2
+        unpacked = np.unpackbits(self.target[start//2:math.ceil(end/2)])
+        unpacked = unpacked.reshape(-1, 4)[shift:shift+end-start].T
+        return unpacked
+
+
+#@register_class('AAIndex', NS)
+class AAIndex(BitpackedIndex):
+
+    def _get_single_item(self, i):
+        start, end = self._start_end(i)
+        shift = start % 2
+        unpacked = np.unpackbits(self.target[start:end]).reshape(-1, 8)
+        unpacked = unpacked[:, ]
+        return unpacked
+
+
+class SequenceTable(DynamicTable, metaclass=ABCMeta):
+
+    @abstractmethod
+    def get_index(self, data, target):
+        pass
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'names', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
@@ -51,10 +78,17 @@ class DNATable(DynamicTable):
         else:
             columns.append(VectorData('names', 'sequence names', data=names))
             columns.append(VectorData('sequence', 'bitpacked DNA sequences', data=sequence))
-            columns.append(BitpackedIndex('sequence_index', index, columns[-1]))
+            columns.append(self.get_index(index, columns[-1]))
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
+
+
+@register_class('DNATable', NS)
+class DNATable(SequenceTable):
+
+    def get_index(self, data, target):
+        return PackedDNAIndex('sequence_index', data, target)
 
 
 @register_class('TaxaTable', NS)

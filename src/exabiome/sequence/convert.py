@@ -8,26 +8,31 @@ import h5py
 import os
 import math
 from collections import deque
+from abc import ABCMeta, abstractmethod
 
-class SeqIterator(object):
-    #ltag_re = re.compile('\[locus_tag=([A-Za-z0-9_]+)\]')
+class AbstractSeqIterator(object, metaclass=ABCMeta):
+
+    @classmethod
+    @abstractmethod
+    def characters(cls):
+        pass
+
+    @abstractmethod
+    def pack(self, seq):
+        pass
+
     ltag_re = re.compile('>lcl|([A-Za-z0-9_.]+)')
 
     def __init__(self, paths, verbose=False):
         self.verbose = verbose
-        self.dna_chars = 'ATCGN'
 
-        chars = self.dna_chars
-        chars = list(chars + chars.lower())
+        # setup our characters
+        chars = self.characters()
+        chars = list(chars.upper() + chars.lower())
         self.nchars = len(chars)//2
 
         self.ohe = OneHotEncoder(sparse=False)
         self.ohe.fit(np.array(chars).reshape(-1, 1))
-        categories = self.ohe.categories_[0][:self.nchars]
-
-        self._col2drop = categories == 'N'
-        self._row_mask = np.zeros(len(categories), dtype=bool)
-        self._row_mask[np.logical_not(self._col2drop)] = True
 
         if isinstance(paths, str):
             paths = [paths]
@@ -41,13 +46,8 @@ class SeqIterator(object):
         self.__total_len = 0
         self.__nseqs = 0
 
-        self.__curr_block = np.zeros((0,4), dtype=np.uint8)
+        self.__curr_block = np.zeros((0, self.nchars), dtype=np.uint8)
         self.__curr_block_idx = 0
-        self.__padded = False
-
-    @property
-    def padded(self):
-        return self.__padded
 
     @property
     def names(self):
@@ -91,7 +91,7 @@ class SeqIterator(object):
         self.__id_queue = deque()
         self.__total_len = 0
         self.__nseqs = 0
-        self.__curr_block = np.zeros((0,4), dtype=np.uint8)
+        self.__curr_block = np.zeros((0, self.nchars), dtype=np.uint8)
         self.__curr_block_idx = 0
         self.__curr_file_idx = 0
         return self
@@ -136,7 +136,7 @@ class SeqIterator(object):
             except StopIteration:
                 # there are no more files to read
                 pass
-            self.__curr_block, self.__padded = self.__pack(seq)
+            self.__curr_block = self.pack(seq)
             self.__curr_block_idx = 0
 
     @classmethod
@@ -156,20 +156,66 @@ class SeqIterator(object):
             ltag = self.get_seqname(seq)
             yield seq, ltag
 
-    def __pack(self, seq):
+
+class DNASeqIterator(AbstractSeqIterator):
+
+    @classmethod
+    def characters(cls):
+        return 'ATCGN'
+
+    def __init__(self, paths, verbose=False):
+        super().__init__(paths, verbose=verbose)
+
+        categories = self.ohe.categories_[0][:self.nchars]
+
+        self._col2drop = categories == 'N'
+        self._row_mask = np.zeros(len(categories), dtype=bool)
+        self._row_mask[np.logical_not(self._col2drop)] = True
+
+    def pack(self, seq):
         tfm = self.ohe.transform(seq.values.astype('U').reshape(-1,1)).T
+        # the first half will be uppercase and the second half will be lowercase
+        # - combine upper and lower
         tfm[:self.nchars] += tfm[self.nchars:]
         tfm = tfm[:self.nchars]
+
         col_mask = tfm[self._col2drop].squeeze() == 1
         tfm = (tfm[self._row_mask]).astype(np.uint8)
         tfm[:,col_mask] = 1
         tfm = tfm.T
-        padded = False
         if tfm.shape[0] % 2 == 1:
-            padded = True
             tfm = np.append(tfm, [[0, 0, 0, 0]], axis=0)
         packed = np.packbits(np.concatenate((tfm[0::2], tfm[1::2]), axis=1))
-        return packed, padded
+        return packed
+
+
+class AASeqIterator(AbstractSeqIterator):
+
+
+    aa_map = np.array([0]*66 + [0,  1, 2,  3,  4,  5,  6,  7, 0, 8,
+                                9, 10, 11,  0, 12, 13, 14, 15, 16,
+                                0, 17, 18,  0, 19,], dtype=np.uint8)
+
+    @classmethod
+    def characters(cls):
+        return 'ACDEFGHIKLMNPQRSTVWY'
+
+    def __init__(self, paths, verbose=False):
+        super().__init__(paths, verbose=verbose)
+
+    def pack(self, seq):
+        nbits = len(seq)*5
+        start = (8 - nbits%8)
+        nbits += start
+        bits = np.zeros(nbits, dtype=np.uint8)
+        s = start
+        for i, aa in enumerate(seq):
+            num = self.aa_map[ord(aa)]
+            e = s + 5
+            bits[s:e] = np.unpackbits(num)[3:]
+            s = e
+        packed = np.packbits(bits)
+
 
 class QueueIterator(object):
 
