@@ -93,7 +93,7 @@ class DeepIndexFile(Container):
         Return a tuple containing (taxon_name, sequence_name, sequence, taxon_embedding)
         """
         (seq_i, seq_name, sequence, (tax_i, taxon_name, taxon_emb)) = self.dna_table[i]
-        return {'taxon': taxon_name, 'seqname': seq_name, "sequence": sequence, "emedding": taxon_emb}
+        return {'taxon': taxon_name, 'seqname': seq_name, "sequence": sequence, "embedding": taxon_emb}
 
     def __len__(self):
         return len(self.dna_table)
