@@ -26,7 +26,6 @@ with open(args.fof, 'r') as f:
 
 taxa_ids = list(map(get_taxa_id, fapaths))
 taxa_id_map = {t: i for i, t in enumerate(taxa_ids)}
-print(taxa_id_map)
 
 
 to_get = list()
@@ -41,15 +40,11 @@ try:
             target_indices.append(taxa_id_map[v])
 
     target_indices = np.array(target_indices)
-    print(target_indices)
 
     embeddings = np.zeros((len(to_get), emb_file['embedding'].shape[1]))
     embeddings[target_indices] = emb_file['embedding'][to_get]
 finally:
     emb_file.close()
-
-for _1, _2 in zip(taxa_ids, embeddings):
-    print(_1, _2)
 
 h5path = args.out
 
