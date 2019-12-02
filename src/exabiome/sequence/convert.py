@@ -1,6 +1,6 @@
 import h5py
 import skbio.io
-from skbio.sequence import DNA
+from skbio.sequence import DNA, Protein
 import re
 from sklearn.preprocessing import OneHotEncoder
 import numpy as np
@@ -23,7 +23,7 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
 
     ltag_re = re.compile('>lcl|([A-Za-z0-9_.]+)')
 
-    def __init__(self, paths, verbose=False):
+    def __init__(self, paths, verbose=False, faa=False):
         self.verbose = verbose
 
         # setup our characters
@@ -45,6 +45,9 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
         self.__id_queue = None
         self.__total_len = 0
         self.__nseqs = 0
+        self.skbio_cls = Protein if faa else DNA
+        if self.verbose:
+            print('reading %s' % self.skbio_cls.__name__)
 
         self.__curr_block = np.zeros((0, self.nchars), dtype=np.uint8)
         self.__curr_block_idx = 0
@@ -131,7 +134,7 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
             seq = self.__read_next_seq()
             try:
                 while len(seq) % 2 == 1:
-                    tmp = DNA.concat([seq, self.__read_next_seq()])
+                    tmp = self.skbio_cls.concat([seq, self.__read_next_seq()])
                     seq = tmp
             except StopIteration:
                 # there are no more files to read
@@ -152,7 +155,8 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
     def __read(self, path):
         if self.verbose:
             print('reading', path)
-        for seq_i, seq in enumerate(skbio.io.read(path, format='fasta',)):
+        kwargs = {'format': 'fasta', 'constructor': self.skbio_cls}
+        for seq_i, seq in enumerate(skbio.io.read(path, **kwargs)):
             ltag = self.get_seqname(seq)
             yield seq, ltag
 
@@ -164,7 +168,7 @@ class DNASeqIterator(AbstractSeqIterator):
         return 'ATCGN'
 
     def __init__(self, paths, verbose=False):
-        super().__init__(paths, verbose=verbose)
+        super().__init__(paths, verbose=verbose, faa=False)
 
         categories = self.ohe.categories_[0][:self.nchars]
 
@@ -191,7 +195,6 @@ class DNASeqIterator(AbstractSeqIterator):
 
 class AASeqIterator(AbstractSeqIterator):
 
-
     aa_map = np.array([0]*66 + [0,  1, 2,  3,  4,  5,  6,  7, 0, 8,
                                 9, 10, 11,  0, 12, 13, 14, 15, 16,
                                 0, 17, 18,  0, 19,], dtype=np.uint8)
@@ -201,7 +204,7 @@ class AASeqIterator(AbstractSeqIterator):
         return 'ACDEFGHIKLMNPQRSTVWY'
 
     def __init__(self, paths, verbose=False):
-        super().__init__(paths, verbose=verbose)
+        super().__init__(paths, verbose=verbose, faa=True)
 
     def pack(self, seq):
         nbits = len(seq)*5
@@ -209,12 +212,13 @@ class AASeqIterator(AbstractSeqIterator):
         nbits += start
         bits = np.zeros(nbits, dtype=np.uint8)
         s = start
-        for i, aa in enumerate(seq):
+        for i, aa in enumerate(str(seq)):
             num = self.aa_map[ord(aa)]
             e = s + 5
             bits[s:e] = np.unpackbits(num)[3:]
             s = e
         packed = np.packbits(bits)
+        return packed
 
 
 class QueueIterator(object):

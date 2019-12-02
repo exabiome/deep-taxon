@@ -44,8 +44,8 @@ class PackedDNAIndex(BitpackedIndex):
         return unpacked
 
 
-#@register_class('AAIndex', NS)
-class AAIndex(BitpackedIndex):
+@register_class('PackedAAIndex', NS)
+class PackedAAIndex(BitpackedIndex):
 
     def _get_single_item(self, i):
         start, end = self._start_end(i)
@@ -89,6 +89,13 @@ class DNATable(SequenceTable):
 
     def get_index(self, data, target):
         return PackedDNAIndex('sequence_index', data, target)
+
+
+@register_class('AATable', NS)
+class AATable(SequenceTable):
+
+    def get_index(self, data, target):
+        return PackedAAIndex('sequence_index', data, target)
 
 
 @register_class('TaxaTable', NS)

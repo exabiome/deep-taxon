@@ -6,7 +6,7 @@ import h5py
 from hdmf.common import get_hdf5io
 from hdmf.data_utils import DataChunkIterator
 
-from exabiome.sequence.convert import DNASeqIterator
+from exabiome.sequence.convert import AASeqIterator, DNASeqIterator
 from exabiome.sequence.dna_table import DNATable, TaxaTable, DeepIndexFile
 
 def get_taxa_id(path):
@@ -17,13 +17,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument('fof', type=str, help='file of Fasta files')
 parser.add_argument('emb', type=str, help='embedding file')
 parser.add_argument('out', type=str, help='output HDF5')
+parser.add_argument('-a', '--faa', action='store_true', default=False, help='input is amino acids')
 
 args = parser.parse_args()
 
 with open(args.fof, 'r') as f:
-    fnapaths = [l[:-1] for l in f.readlines()]
+    fapaths = [l[:-1] for l in f.readlines()]
 
-taxa_ids = list(map(get_taxa_id, fnapaths))
+taxa_ids = list(map(get_taxa_id, fapaths))
 taxa_id_map = {t: i for i, t in enumerate(taxa_ids)}
 print(taxa_id_map)
 
@@ -52,10 +53,13 @@ for _1, _2 in zip(taxa_ids, embeddings):
 
 h5path = args.out
 
-print("reading %d Fasta files" % len(fnapaths))
-print("Total size:", sum(os.path.getsize(f) for f in fnapaths))
+print("reading %d Fasta files" % len(fapaths))
+print("Total size:", sum(os.path.getsize(f) for f in fapaths))
 
-seqit = DNASeqIterator(fnapaths, verbose=True)
+if args.faa:
+    seqit = AASeqIterator(fapaths, verbose=True)
+else:
+    seqit = DNASeqIterator(fapaths, verbose=True)
 
 packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=2**15, dtype=np.dtype('uint8'))
 seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))

@@ -3,8 +3,14 @@ datasets:
   data_type_inc: VectorIndex
   dtype: int
   doc: A VectorIndex that indexes bitpacked DNA
+
+- data_type_def: PackedAAIndex
+  data_type_inc: VectorIndex
+  dtype: int
+  doc: A VectorIndex that indexes bitpacked amino acids
+
 groups:
-- data_type_def: DNATable
+- data_type_def: AbstractSeqTable
   data_type_inc: DynamicTable
   doc: A table for storing sequence data
   datasets:
@@ -15,13 +21,27 @@ groups:
   - name: sequence
     data_type_inc: VectorData
     dtype: uint8
-    doc: Packed DNA sequence
-  - name: sequence_index
-    data_type_inc: PackedDNAIndex
-    doc: Index for 'sequence'
+    doc: Packed sequence
   - name: taxon
     data_type_inc: DynamicTableRegion
     doc: integer ID for the taxa that each sequence belongs to
+
+- data_type_def: DNATable
+  data_type_inc: AbstractSeqTable
+  doc: A table for storing sequence data
+  datasets:
+  - name: sequence_index
+    data_type_inc: PackedDNAIndex
+    doc: Index for 'sequence'
+
+- data_type_def: AATable
+  data_type_inc: AbstractSeqTable
+  doc: A table for storing sequence data
+  datasets:
+  - name: sequence_index
+    data_type_inc: PackedAAIndex
+    doc: Index for 'sequence'
+
 - data_type_def: TaxaTable
   data_type_inc: DynamicTable
   doc: A table for storing taxa information
@@ -34,6 +54,7 @@ groups:
     data_type_inc: VectorData
     dtype: float
     doc: embedding of each taxa on n-dimensional space
+
 - data_type_def: DeepIndexFile
   data_type_inc: Container
   doc: A file that has taxonomy and sequence information for running deep index
@@ -41,6 +62,11 @@ groups:
   - name: dna_table
     data_type_inc: DNATable
     doc: DNA sequence table
+    quantity: '?'
+  - name: aa_table
+    data_type_inc: AATable
+    doc: AA sequence table
+    quantity: '?'
   - name: taxa_table
     data_type_inc: TaxaTable
     doc: Taxa table
