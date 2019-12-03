@@ -6,7 +6,7 @@ import numpy as np
 from hdmf.common import VectorIndex, VectorData, DynamicTable,\
                         DynamicTableRegion, register_class, load_namespaces
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
-from hdmf import Container
+from hdmf import Container, Data
 
 
 NS = 'deep-index'
@@ -116,18 +116,36 @@ class TaxaTable(DynamicTable):
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
 
+
+@register_class('CondensedDistanceMatrix', NS)
+class CondensedDistanceMatrix(Data):
+    pass
+
+
+@register_class('NewickString', NS)
+class NewickString(Data):
+    pass
+
+
 @register_class('DeepIndexFile', NS)
 class DeepIndexFile(Container):
 
-    __fields__ = ({'name': 'dna_table', 'child': True},
-                  {'name': 'taxa_table', 'child': True})
+    __fields__ = ({'name': 'seq_table', 'child': True},
+                  {'name': 'taxa_table', 'child': True},
+                  {'name': 'distances', 'child': True},
+                  {'name': 'tree', 'child': True})
 
-    @docval({'name': 'dna_table', 'type': DNATable, 'doc': 'the table storing DNA sequences'},
-            {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'})
+    @docval({'name': 'seq_table', 'type': (AATable, DNATable), 'doc': 'the table storing DNA sequences'},
+            {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
+            {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information'},
+            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'})
     def __init__(self, **kwargs):
-        dna_table, taxa_table = popargs('dna_table', 'taxa_table', kwargs)
+        seq_table, taxa_table, distances, tree = popargs('seq_table', 'taxa_table', 'distances', 'tree', kwargs)
         call_docval_func(super().__init__, {'name': 'root'})
-        self.dna_table, self.taxa_table = dna_table, taxa_table
+        self.seq_table = seq_table
+        self.taxa_table = taxa_table
+        self.distances = distances
+        self.tree = tree
 
     def __getitem__(self, i):
         """

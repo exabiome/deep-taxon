@@ -23,8 +23,8 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
 
     ltag_re = re.compile('>lcl|([A-Za-z0-9_.]+)')
 
-    def __init__(self, paths, verbose=False, faa=False):
-        self.verbose = verbose
+    def __init__(self, paths, logger=None, faa=False):
+        self.logger = logger
 
         # setup our characters
         chars = self.characters()
@@ -46,8 +46,7 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
         self.__total_len = 0
         self.__nseqs = 0
         self.skbio_cls = Protein if faa else DNA
-        if self.verbose:
-            print('reading %s' % self.skbio_cls.__name__)
+        self.logger.debug('reading %s' % self.skbio_cls.__name__)
 
         self.__curr_block = np.zeros((0, self.nchars), dtype=np.uint8)
         self.__curr_block_idx = 0
@@ -153,8 +152,7 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
         return seq.metadata['id']
 
     def __read(self, path):
-        if self.verbose:
-            print('reading', path)
+        self.logger.debug('reading %s', path)
         kwargs = {'format': 'fasta', 'constructor': self.skbio_cls}
         for seq_i, seq in enumerate(skbio.io.read(path, **kwargs)):
             ltag = self.get_seqname(seq)
@@ -167,8 +165,8 @@ class DNASeqIterator(AbstractSeqIterator):
     def characters(cls):
         return 'ATCGN'
 
-    def __init__(self, paths, verbose=False):
-        super().__init__(paths, verbose=verbose, faa=False)
+    def __init__(self, paths, logger=None):
+        super().__init__(paths, logger=logger, faa=False)
 
         categories = self.ohe.categories_[0][:self.nchars]
 
@@ -203,8 +201,8 @@ class AASeqIterator(AbstractSeqIterator):
     def characters(cls):
         return 'ACDEFGHIKLMNPQRSTVWY'
 
-    def __init__(self, paths, verbose=False):
-        super().__init__(paths, verbose=verbose, faa=True)
+    def __init__(self, paths, logger=None):
+        super().__init__(paths, logger=logger, faa=True)
 
     def pack(self, seq):
         nbits = len(seq)*5

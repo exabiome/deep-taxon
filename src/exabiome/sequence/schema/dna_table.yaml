@@ -9,6 +9,19 @@ datasets:
   dtype: int
   doc: A VectorIndex that indexes bitpacked amino acids
 
+- data_type_def: NewickString
+  data_type_inc: Data
+  dtype: text
+  shape: null
+  doc: A tree in Newick format
+
+- data_type_def: CondensedDistanceMatrix
+  data_type_inc: Data
+  dtype: float32
+  shape:
+    - null
+  doc: a compressed distance matrix
+
 groups:
 - data_type_def: AbstractSeqTable
   data_type_inc: DynamicTable
@@ -58,14 +71,17 @@ groups:
 - data_type_def: DeepIndexFile
   data_type_inc: Container
   doc: A file that has taxonomy and sequence information for running deep index
+  datasets:
+  - name: tree
+    data_type_inc: NewickString
+    doc: the tree for the taxa in this file
+  - name: distances
+    data_type_inc: CondensedDistanceMatrix
+    doc: distances between all pairs of taxa in this file
   groups:
-  - name: dna_table
-    data_type_inc: DNATable
-    doc: DNA sequence table
-    quantity: '?'
-  - name: aa_table
-    data_type_inc: AATable
-    doc: AA sequence table
+  - name: seq_table
+    data_type_inc: AbstractSeqTable
+    doc: the AATable or DNATable storing sequence data for each taxa in this file
     quantity: '?'
   - name: taxa_table
     data_type_inc: TaxaTable
