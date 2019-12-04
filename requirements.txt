@@ -2,4 +2,4 @@ numpy
 scipy
 scikit-learn
 ./scikit-bio.git
-hdmf
+./hdmf.git

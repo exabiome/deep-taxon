@@ -11,9 +11,17 @@ print('found these packages:', pkgs)
 
 schema_dir = 'schema'
 
-reqs_re = re.compile("[<=>]+")
-with open('requirements.txt', 'r') as fp:
-    reqs = [reqs_re.split(x.strip())[0] for x in fp.readlines()]
+# reqs_re = re.compile("[<=>]+")
+# with open('requirements.txt', 'r') as fp:
+#     reqs = [reqs_re.split(x.strip())[0] for x in fp.readlines()]
+
+reqs = [
+    'numpy',
+    'scipy',
+    'scikit-learn',
+    'scikit-bio',
+    'hdmf',
+]
 
 print(reqs)
 
