@@ -4,3 +4,6 @@
 [submodule "scikit-bio"]
 	path = scikit-bio.git
 	url = git@github.com:ajtritt/scikit-bio.git
+[submodule "hdmf.git"]
+	path = hdmf.git
+	url = git@github.com:hdmf-dev/hdmf.git
