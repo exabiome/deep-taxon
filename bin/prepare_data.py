@@ -35,7 +35,6 @@ def select_distances(ids_to_select, taxa_ids, distances):
 
 def select_embeddings(ids_to_select, taxa_ids, embeddings):
     id_map = {t[3:]: i for i, t in enumerate(taxa_ids)}
-    print(taxa_ids[0])
     indices = [id_map[tid] for tid in ids_to_select]
     return embeddings[indices]
 
@@ -51,6 +50,10 @@ parser.add_argument('dist_h5', type=str, help='the distances file')
 parser.add_argument('tree', type=str, help='the distances file')
 parser.add_argument('out', type=str, help='output HDF5')
 parser.add_argument('-a', '--faa', action='store_true', default=False, help='input is amino acids')
+
+if len(sys.argv) == 1:
+    parser.print_help()
+    sys.exit(1)
 
 args = parser.parse_args()
 
@@ -69,7 +72,7 @@ taxa_ids = list(map(get_taxa_id, fapaths))
 logger.info('reading distances from %s' % args.dist_h5)
 with h5py.File(args.dist_h5, 'r') as f:
     dist = f['distances'][:]
-    dist_taxa = f['leaf_names'][:]
+    dist_taxa = f['leaf_names'][:].astype('U')
 logger.info('selecting distances for taxa found in %s' % args.fof)
 dist = select_distances(taxa_ids, dist_taxa, dist)
 dist = CondensedDistanceMatrix('distances', data=dist)

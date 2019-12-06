@@ -193,13 +193,11 @@ class DNASeqIterator(AbstractSeqIterator):
 
 class AASeqIterator(AbstractSeqIterator):
 
-    aa_map = np.array([0]*66 + [0,  1, 2,  3,  4,  5,  6,  7, 0, 8,
-                                9, 10, 11,  0, 12, 13, 14, 15, 16,
-                                0, 17, 18,  0, 19,], dtype=np.uint8)
+    aa_map = np.array([0]*65 + list(range(26)), dtype=np.uint8)
 
     @classmethod
     def characters(cls):
-        return 'ACDEFGHIKLMNPQRSTVWY'
+        return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
     def __init__(self, paths, logger=None):
         super().__init__(paths, logger=logger, faa=True)
