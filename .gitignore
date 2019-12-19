@@ -1,0 +1,7 @@
+untracked/
+examples/
+help_desk/
+.ipynb_checkpoints/
+__pycache__/
+*.egg-info/
+
