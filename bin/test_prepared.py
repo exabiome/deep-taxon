@@ -49,9 +49,13 @@ count = 0
 try:
     fofin = open(args.fof, 'r')
     for line in fofin:
+        if len(count) == 0:
+            break
         fapath = line.strip()
         it = skbio.io.read(fapath, format='fasta', constructor=constructor)
         for seq in it:
+            if len(count) == 0:
+                break
             if count in idx:
                 row = difile[count]
                 sequence = difile.to_sequence(row['sequence'])
@@ -62,6 +66,7 @@ try:
                     print(count, 'sequence', sep='\t', file=sys.stdout)
                     print(sequence)
                     print(str(seq))
+                idx.remove(count)
 
             count += 1
 finally:
