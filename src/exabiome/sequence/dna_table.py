@@ -2,17 +2,18 @@ from abc import ABCMeta, abstractmethod
 import math
 
 import numpy as np
+import torch
 
 from hdmf.common import VectorIndex, VectorData, DynamicTable,\
-                        DynamicTableRegion, register_class, load_namespaces
+                        DynamicTableRegion, register_class
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf import Container, Data
 
 
 NS = 'deep-index'
 
-class BitpackedIndex(VectorIndex, metaclass=ABCMeta):
 
+class BitpackedIndex(VectorIndex, metaclass=ABCMeta):
 
     def _start_end(self, i):
         start = 0 if i == 0 else self.data[i-1]
@@ -28,7 +29,7 @@ class BitpackedIndex(VectorIndex, metaclass=ABCMeta):
         Slice ragged array of *packed* one-hot encoded DNA sequence
         """
         if isinstance(args, int):
-            return self.__get_single_item(args)
+            return self._get_single_item(args)
         else:
             raise ValueError("Can only index bitpacked sequence with integers")
 
@@ -49,10 +50,16 @@ class PackedAAIndex(BitpackedIndex):
 
     def _get_single_item(self, i):
         start, end = self._start_end(i)
-        shift = start % 2
-        unpacked = np.unpackbits(self.target[start:end]).reshape(-1, 8)
-        unpacked = unpacked[:, ]
-        return unpacked
+        packed = self.target[start:end]
+        bits = np.unpackbits(packed)
+        bits = bits[bits.shape[0] % 5:]
+        bits = bits.reshape(-1, 5)
+        unpacked = np.pad(bits, ((0, 0), (3, 0)), mode='constant', constant_values=((0, 0), (0, 0)))
+        ohe_pos = np.packbits(unpacked, axis=1).squeeze()
+        if ohe_pos[0] == 0:
+            ohe_pos = ohe_pos[1:]
+        ohe_pos = ohe_pos - 1
+        return ohe_pos
 
 
 class SequenceTable(DynamicTable, metaclass=ABCMeta):
@@ -61,6 +68,20 @@ class SequenceTable(DynamicTable, metaclass=ABCMeta):
     def get_index(self, data, target):
         pass
 
+    @abstractmethod
+    def get_torch_conversion(self, dtype=None, device=None):
+        pass
+
+    @abstractmethod
+    def get_numpy_conversion(self):
+        pass
+
+    def set_torch(self, use_torch, dtype=None, device=None):
+        if use_torch:
+            self.convert = self.get_torch_conversion(dtype, device)
+        else:
+            self.convert = self.get_numpy_conversion()
+
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'names', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
             {'name': 'sequence', 'type': ('array_data', 'data', VectorData), 'doc': 'bitpacked DNA sequence'},
@@ -68,7 +89,12 @@ class SequenceTable(DynamicTable, metaclass=ABCMeta):
             {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
             {'name': 'taxon_table', 'type': DynamicTable, 'doc': "target for 'taxon'", 'default': None})
     def __init__(self, **kwargs):
-        names, index, sequence, taxon, taxon_table = popargs('names', 'sequence_index', 'sequence', 'taxon', 'taxon_table', kwargs)
+        names, index, sequence, taxon, taxon_table = popargs('names',
+                                                             'sequence_index',
+                                                             'sequence',
+                                                             'taxon',
+                                                             'taxon_table',
+                                                             kwargs)
         columns = list()
         if isinstance(names, VectorData):      # data is being read -- here we assume that everything is a VectorData
             columns.append(names)
@@ -82,10 +108,26 @@ class SequenceTable(DynamicTable, metaclass=ABCMeta):
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
+        self.convert = self.get_numpy_conversion()
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return super().__getitem__(key)
+        else:
+            ret = list(super().__getitem__(key))
+            # sequence data will come from the third column
+            ret[2] = self.convert(ret[2])
+            return tuple(ret)
 
 
 @register_class('DNATable', NS)
 class DNATable(SequenceTable):
+
+    def get_torch_conversion(self, dtype=None, device=None):
+        return lambda x: torch.as_tensor(x, dtype=dtype, device=device)
+
+    def get_numpy_conversion(self):
+        return lambda x: x
 
     def get_index(self, data, target):
         return PackedDNAIndex('sequence_index', data, target)
@@ -94,8 +136,39 @@ class DNATable(SequenceTable):
 @register_class('AATable', NS)
 class AATable(SequenceTable):
 
+    charmap = np.array(['A', 'B',
+                        'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
+                        'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '', '', '',
+                        '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
+                        '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+                       dtype='<U1')
+
+    def get_numpy_conversion(self):
+        def func(x):
+            ret = np.zeros([x.shape[0], 26], dtype=float)
+            ret[np.arange(ret.shape[0]), x] = 1.0
+            return ret
+        return func
+
+    def get_torch_conversion(self, dtype=None, device=None):
+        def func(x):
+            ret = torch.zeros([x.shape[0], 26], dtype=dtype, device=device)
+            ret[np.arange(ret.shape[0]), x.tolist()] = 1.0
+            return ret
+        return func
+
     def get_index(self, data, target):
         return PackedAAIndex('sequence_index', data, target)
+
+    @classmethod
+    def to_sequence(self, data):
+        return "".join(self.charmap[i] for i in np.where(data)[1])
+
+    def get(self, idx, sequence=False):
+        ret = list(self[idx])
+        if sequence:
+            ret[2] = self.to_sequence(ret[2])
+        return ret
 
 
 @register_class('TaxaTable', NS)
@@ -151,8 +224,14 @@ class DeepIndexFile(Container):
         """
         Return a tuple containing (taxon_name, sequence_name, sequence, taxon_embedding)
         """
-        (seq_i, seq_name, sequence, (tax_i, taxon_name, taxon_emb)) = self.dna_table[i]
-        return {'taxon': taxon_name, 'seqname': seq_name, "sequence": sequence, "embedding": taxon_emb}
+        (seq_i, seq_name, sequence, (tax_i, taxon_name, taxon_emb)) = self.seq_table[i]
+        return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
 
     def __len__(self):
-        return len(self.dna_table)
+        return len(self.seq_table)
+
+    def set_torch(self, use_torch, dtype=None, device=None):
+        self.seq_table.set_torch(use_torch, dtype=dtype, device=device)
+
+    def to_sequence(self, data):
+        return self.seq_table.to_sequence(data)

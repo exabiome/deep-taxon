@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+
 class SpatialPyramidPool1d(nn.Module):
     """
     A 1D spatial-pyramidal pooling layer
@@ -11,8 +12,9 @@ class SpatialPyramidPool1d(nn.Module):
     def __init__(self, num_levels, shift=0, pool_type='max_pool'):
         super(SpatialPyramidPool1d, self).__init__()
         self.num_levels = num_levels
-        self.shift = shift            # the shift in sample length as
-                                      # a result of doing convolutions
+        # the shift in sample length as
+        # a result of doing convolutions
+        self.shift = shift
         if pool_type == 'max_pool':
             self.pool = F.max_pool1d
         else:
@@ -21,15 +23,14 @@ class SpatialPyramidPool1d(nn.Module):
     def _pool_ragged(self, x, orig_len):
         ret = torch.zeros([x.shape[0], x.shape[1]*(2**self.num_levels - 1)])
         for x_i in range(x.shape[0]):
-            sample = x[x_i,:,:orig_len[x_i]-self.shift].unsqueeze(0)
-            layers = list()
+            sample = x[x_i, :, :orig_len[x_i] - self.shift].unsqueeze(0)
             f = sample.shape[2]
             s = 0
             e = sample.shape[1]
             for i in range(self.num_levels):
-                ret[x_i,s:s+e] = self.pool(sample,
-                                           kernel_size=math.ceil(f),
-                                           stride=math.floor(f)).view(e)
+                ret[x_i, s:s + e] = self.pool(sample,
+                                              kernel_size=math.ceil(f),
+                                              stride=math.floor(f)).view(e)
                 s += e
                 e *= 2
                 f /= 2
@@ -40,6 +41,7 @@ class SpatialPyramidPool1d(nn.Module):
             orig_len = torch.ones(x.shape[0]) * x.shape[2]
         return self._pool_ragged(x, orig_len)
 
+
 class SPP_CNN(nn.Module):
     '''
     A CNN model which adds SPP layer so that we can input variable length tensors
@@ -49,7 +51,6 @@ class SPP_CNN(nn.Module):
     '''
     def __init__(self, input_nc, n_levels=2, n_tasks=2, kernel_size=21):
         super(SPP_CNN, self).__init__()
-        ndf = input_nc
         n_lin = 0
         self.conv1 = nn.Conv1d(input_nc, input_nc, kernel_size,
                                stride=1,
@@ -83,6 +84,7 @@ class SPP_CNN(nn.Module):
         xf = self.fc1(torch.cat([x1, x2], dim=1))
         return xf
 
+
 class GroupPool(nn.Module):
     """
     This might be unnecessary
@@ -115,4 +117,4 @@ class GroupPool(nn.Module):
         return ret
 
     def forward(self, x, group=None):
-        return self._pool_groups(x, orig_len)
+        return self._pool_groups(x, group)
