@@ -22,12 +22,8 @@ parser.add_argument('-i', '--index', type=int, nargs='+', default=None, help='sp
 
 args = parser.parse_args()
 
+logging.basicConfig(stream=sys.stderr, level=logging.DEBUG, format='%(asctime)s - %(message)s')
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
-logger.addHandler(logging.StreamHandler(sys.stderr))
-
-logger.info('using seed %d' % args.seed)
-random = np.random.RandomState(args.seed)
 
 logger.info('opening %s' % args.h5)
 hdmfio = get_hdf5io(args.h5, 'r')
@@ -39,6 +35,8 @@ if args.index is not None:
     idx = set(args.index)
     logger.info('checking sequences %s' % ", ".join(map(str, args.index)))
 else:
+    logger.info('using seed %d' % args.seed)
+    random = np.random.RandomState(args.seed)
     n_seqs = math.round(args.n_seqs * n_total_seqs) if args.n_seqs < 1.0 else int(args.n_seqs)
     idx = set(random.permutation(n_total_seqs)[:n_seqs])
     logger.info('sampling %d sequences' % n_seqs)
@@ -49,12 +47,12 @@ count = 0
 try:
     fofin = open(args.fof, 'r')
     for line in fofin:
-        if len(count) == 0:
+        if len(idx) == 0:
             break
         fapath = line.strip()
         it = skbio.io.read(fapath, format='fasta', constructor=constructor)
         for seq in it:
-            if len(count) == 0:
+            if len(idx) == 0:
                 break
             if count in idx:
                 row = difile[count]
