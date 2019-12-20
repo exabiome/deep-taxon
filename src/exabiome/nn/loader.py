@@ -35,15 +35,20 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, hdmfio):
+    def __init__(self, hdmfio, **kwargs):
         self.hdmfio = hdmfio
         self.difile = self.hdmfio.read()
+        self.difile.set_torch(True, dtype=torch.float)
 
     def __len__(self):
         return len(self.difile)
 
     def close(self):
         self.hdmfio.close()
+
+    def __getitem__(self, i):
+        d = self.difile[i]
+        return d['sequence'], torch.from_numpy(d['embedding'])
 
 
 class DNADataset(SeqDataset):
@@ -78,5 +83,5 @@ def get_loader(path, **kwargs):
         kwargs    : any additional arguments to pass into torch.DataLoader
     """
     hdmfio = get_hdf5io(path, 'r')
-    loader = DataLoader(DNADataset(hdmfio), collate_fn=collate, **kwargs)
+    loader = DataLoader(SeqDataset(hdmfio), collate_fn=collate, **kwargs)
     return loader

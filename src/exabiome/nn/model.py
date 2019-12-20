@@ -49,24 +49,26 @@ class SPP_CNN(nn.Module):
     Args:
         input_nc (int):  the input number of channels
     '''
-    def __init__(self, input_nc, n_levels=2, n_tasks=2, kernel_size=21):
+    def __init__(self, input_nc, output_nc=None, n_levels=2, n_tasks=2, kernel_size=21):
         super(SPP_CNN, self).__init__()
         n_lin = 0
-        self.conv1 = nn.Conv1d(input_nc, input_nc, kernel_size,
+        if output_nc is None:
+            output_nc = input_nc
+        self.conv1 = nn.Conv1d(input_nc, output_nc, kernel_size,
                                stride=1,
                                padding=0,
                                dilation=1,
                                bias=False)
-        self.bn1 = nn.BatchNorm1d(input_nc)
+        self.bn1 = nn.BatchNorm1d(output_nc)
         self.spp1 = SpatialPyramidPool1d(n_levels, kernel_size-1)
         n_lin += self.conv1.out_channels * (2**n_levels - 1)
 
-        self.conv2 = nn.Conv1d(input_nc, input_nc, kernel_size,
+        self.conv2 = nn.Conv1d(input_nc, output_nc, kernel_size,
                                stride=1,
                                padding=0,
                                dilation=2,
                                bias=False)
-        self.bn2 = nn.BatchNorm1d(input_nc)
+        self.bn2 = nn.BatchNorm1d(output_nc)
         self.spp2 = SpatialPyramidPool1d(n_levels, 2*(kernel_size-1))
         n_lin += self.conv2.out_channels * (2**n_levels - 1)
 

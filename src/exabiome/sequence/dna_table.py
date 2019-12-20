@@ -124,7 +124,7 @@ class SequenceTable(DynamicTable, metaclass=ABCMeta):
 class DNATable(SequenceTable):
 
     def get_torch_conversion(self, dtype=None, device=None):
-        return lambda x: torch.as_tensor(x, dtype=dtype, device=device)
+        return lambda x: torch.as_tensor(x, dtype=dtype, device=device).T
 
     def get_numpy_conversion(self):
         return lambda x: x
@@ -154,6 +154,7 @@ class AATable(SequenceTable):
         def func(x):
             ret = torch.zeros([x.shape[0], 26], dtype=dtype, device=device)
             ret[np.arange(ret.shape[0]), x.tolist()] = 1.0
+            ret = ret.T
             return ret
         return func
 
