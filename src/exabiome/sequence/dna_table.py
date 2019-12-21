@@ -28,7 +28,7 @@ class BitpackedIndex(VectorIndex, metaclass=ABCMeta):
         """
         Slice ragged array of *packed* one-hot encoded DNA sequence
         """
-        if isinstance(args, int):
+        if np.issubdtype(type(args), np.integer):
             return self._get_single_item(args)
         else:
             raise ValueError("Can only index bitpacked sequence with integers")

@@ -17,8 +17,10 @@ class SpatialPyramidPool1d(nn.Module):
         self.shift = shift
         if pool_type == 'max_pool':
             self.pool = F.max_pool1d
-        else:
+        elif pool_type == 'avg_pool':
             self.pool = F.avg_pool1d
+        else:
+            raise ValueError('unrecognized pool_type: %s' % pool_type)
 
     def _pool_ragged(self, x, orig_len):
         ret = torch.zeros([x.shape[0], x.shape[1]*(2**self.num_levels - 1)])
@@ -60,30 +62,36 @@ class SPP_CNN(nn.Module):
                                dilation=1,
                                bias=False)
         self.bn1 = nn.BatchNorm1d(output_nc)
+
         self.spp1 = SpatialPyramidPool1d(n_levels, kernel_size-1)
         n_lin += self.conv1.out_channels * (2**n_levels - 1)
 
         self.conv2 = nn.Conv1d(input_nc, output_nc, kernel_size,
                                stride=1,
                                padding=0,
-                               dilation=2,
+                               dilation=1,
                                bias=False)
         self.bn2 = nn.BatchNorm1d(output_nc)
-        self.spp2 = SpatialPyramidPool1d(n_levels, 2*(kernel_size-1))
+        self.spp2 = SpatialPyramidPool1d(n_levels, kernel_size-1, pool_type='avg_pool')
         n_lin += self.conv2.out_channels * (2**n_levels - 1)
 
         self.fc1 = nn.Linear(n_lin, n_tasks)
 
     def forward(self, x, orig_len=None):
-        x1 = self.conv1(x)
-        x1 = F.leaky_relu(self.bn1(x1))
+        x1 = x
+        x1 = self.conv1(x1)
+        x1 = self.bn1(x1)
+        x1 = F.leaky_relu(x1)
         x1 = self.spp1(x1, orig_len=orig_len)
 
-        x2 = self.conv1(x)
-        x2 = F.leaky_relu(self.bn1(x2))
+        x2 = x
+        x2 = self.conv2(x2)
+        x2 = self.bn2(x2)
+        x2 = F.leaky_relu(x2)
         x2 = self.spp2(x2, orig_len=orig_len)
 
         xf = self.fc1(torch.cat([x1, x2], dim=1))
+
         return xf
 
 
