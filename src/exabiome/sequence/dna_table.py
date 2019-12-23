@@ -56,6 +56,8 @@ class PackedAAIndex(BitpackedIndex):
         bits = bits.reshape(-1, 5)
         unpacked = np.pad(bits, ((0, 0), (3, 0)), mode='constant', constant_values=((0, 0), (0, 0)))
         ohe_pos = np.packbits(unpacked, axis=1).squeeze()
+        if 0 in ohe_pos:
+            breakpoint()
         if ohe_pos[0] == 0:
             ohe_pos = ohe_pos[1:]
         ohe_pos = ohe_pos - 1
