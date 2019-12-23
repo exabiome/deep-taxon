@@ -18,6 +18,7 @@ parser.add_argument('-o', '--output', type=str, help='file to save model', defau
 parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
 parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
 parser.add_argument('-p', '--protein', action='store_true', default=False, help='file contains protein sequences')
+parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
 
 if len(sys.argv) == 1:
     parser.print_help()
@@ -38,21 +39,30 @@ if args.protein:
 model = SPP_CNN(input_nc, 100, kernel_size=13)
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-if args.checkpoint:
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-criterion = nn.MSELoss()
-
-n_epochs = 1
-
-before = datetime.now()
+curr_epoch = 0
+n_epochs = args.epochs
 
 train_loss = np.zeros(n_epochs)
 test_loss = np.zeros(n_epochs)
+if args.checkpoint:
+    logger.info('picking up from checkpoint %s' % args.checkpoint)
+    checkpoint = torch.load(args.checkpoint)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    curr_epoch = checkpoint['epoch']
+    train_loss = np.append(checkpoint['train_loss'], np.zeros(n_epochs))
+    test_loss = np.append(checkpoint['test_loss'], np.zeros(n_epochs))
+    logger.info('beginning at epoch %d' % curr_epoch)
 
-epoch = 0
-for epoch in range(n_epochs):  # loop over the dataset multiple times
+last_epoch = curr_epoch + n_epochs
+
+criterion = nn.MSELoss()
+before = datetime.now()
+
+if args.debug:
+    n_epochs = 1
+
+for curr_epoch in range(curr_epoch, last_epoch):  # loop over the dataset multiple times
 
     prev_loss = 0.0
     for i, data in enumerate(train_loader, 0):
@@ -72,23 +82,27 @@ for epoch in range(n_epochs):  # loop over the dataset multiple times
         loss.backward()
         optimizer.step()
 
-        train_loss[epoch] += loss.item()
+        train_loss[curr_epoch] += loss.item()
         if i % 40 == 39:    # print every 2000 mini-batches
             logger.info('[%d, %5d] loss: %.6e' %
-                        (epoch + 1, i + 1, (train_loss[epoch]-prev_loss)/40))
-            prev_loss = train_loss[epoch]
+                        (curr_epoch + 1, i + 1, (train_loss[curr_epoch]-prev_loss)/40))
+            prev_loss = train_loss[curr_epoch]
+        if args.debug:
+            if i == 2:
+                break
 
     for i, data in enumerate(test_loader, 0):
         idx, seqs, emb, orig_lens = data
         outputs = model(seqs, orig_len=orig_lens)
-        test_loss[epoch] += criterion(outputs, emb).item()
-
+        test_loss[curr_epoch] += criterion(outputs, emb).item()
 
 if args.output is not None:
     logger.info('saving to %s' % args.output)
-    torch.save({'epoch': epoch,
+    torch.save({'epoch': last_epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': train_loss,
+                'test_loss': train_loss,
                 'loss': loss,
                 }, args.output)
 
