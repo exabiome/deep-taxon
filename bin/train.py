@@ -26,7 +26,9 @@ if len(sys.argv) == 1:
 
 args = parser.parse_args()
 
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(asctime)s - %(message)s')
+loglvl = logging.DEBUG if args.debug else logging.INFO
+
+logging.basicConfig(stream=sys.stdout, level=loglvl, format='%(asctime)s - %(message)s')
 logger = logging.getLogger()
 
 logger.info('loading data %s' % args.input)
@@ -76,10 +78,14 @@ for curr_epoch in range(curr_epoch, last_epoch):  # loop over the dataset multip
         ## Create new Optimizer object?
 
         # forward + backward + optimize
+        logger.debug('forward')
         outputs = model(seqs, orig_len=orig_lens)
 
+        logger.debug('criterion')
         loss = criterion(outputs, emb)
+        logger.debug('backward')
         loss.backward()
+        logger.debug('step')
         optimizer.step()
 
         train_loss[curr_epoch] += loss.item()
@@ -88,13 +94,16 @@ for curr_epoch in range(curr_epoch, last_epoch):  # loop over the dataset multip
                         (curr_epoch + 1, i + 1, (train_loss[curr_epoch]-prev_loss)/40))
             prev_loss = train_loss[curr_epoch]
         if args.debug:
-            if i == 2:
+            if i == 1:
                 break
 
+    logger.debug('test loss')
     for i, data in enumerate(test_loader, 0):
         idx, seqs, emb, orig_lens = data
         outputs = model(seqs, orig_len=orig_lens)
         test_loss[curr_epoch] += criterion(outputs, emb).item()
+        if args.debug:
+            break
 
 if args.output is not None:
     logger.info('saving to %s' % args.output)

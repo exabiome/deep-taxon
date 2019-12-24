@@ -5,6 +5,7 @@ from sklearn.preprocessing import OneHotEncoder
 import numpy as np
 from collections import deque
 from abc import ABCMeta, abstractmethod
+from itertools import chain
 
 
 class AbstractSeqIterator(object, metaclass=ABCMeta):
@@ -187,9 +188,17 @@ class DNASeqIterator(AbstractSeqIterator):
         return packed
 
 
+class UnrecognizedCharacter(Exception):
+
+    def __init__(self, c):
+        super().__init__('Unrecognized character: %s' % c)
+        self.character = c
+
+
 class AASeqIterator(AbstractSeqIterator):
 
-    aa_map = np.array([0]*65 + list(range(1, 27)), dtype=np.uint8)
+    aamap = dict(zip(chain(range(97, 123), range(65, 91)),
+                     chain(np.arange(1, 27, dtype=np.uint8), np.arange(1, 27, dtype=np.uint8))))
 
     @classmethod
     def characters(cls):
@@ -204,11 +213,14 @@ class AASeqIterator(AbstractSeqIterator):
         nbits += start
         bits = np.zeros(nbits, dtype=np.uint8)
         s = start
-        for i, aa in enumerate(str(seq)):
-            num = self.aa_map[ord(aa)]
-            e = s + 5
-            bits[s:e] = np.unpackbits(num)[3:]
-            s = e
+        try:
+            for i, aa in enumerate(str(seq)):
+                num = self.aa_map[ord(aa)]
+                e = s + 5
+                bits[s:e] = np.unpackbits(num)[3:]
+                s = e
+        except KeyError as e
+            raise UnrecognizedCharacter(e.args[0]) from e
         packed = np.packbits(bits)
         return packed
 

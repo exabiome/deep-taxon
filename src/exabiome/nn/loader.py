@@ -54,29 +54,6 @@ class SeqDataset(Dataset):
         return i, d['sequence'], torch.from_numpy(d['embedding'])
 
 
-class DNADataset(SeqDataset):
-    """
-    A torch Dataset to handle reading DNA samples read from a DeepIndex file
-    """
-
-    def __getitem__(self, i):
-        d = self.difile[i]
-        return torch.from_numpy(d['sequence']), torch.from_numpy(d['embedding'])
-
-
-class AADataset(SeqDataset):
-    """
-    A torch Dataset to handle reading protein samples read from a DeepIndex file
-    """
-
-    def __getitem__(self, i):
-        d = self.difile[i]
-        ohe_pos = d['sequence']
-        tensor = torch.zeros((ohe_pos.shape[0], 26))
-        tensor[np.arange(ohe_pos.shape[0]), ohe_pos] = 1
-        return tensor, torch.from_numpy(d['embedding'])
-
-
 def get_loader(path, **kwargs):
     """
     Return a DataLoader that loads data from the given DeepIndex file
