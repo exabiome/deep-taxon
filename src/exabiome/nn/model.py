@@ -23,7 +23,7 @@ class SpatialPyramidPool1d(nn.Module):
             raise ValueError('unrecognized pool_type: %s' % pool_type)
 
     def _pool_ragged(self, x, orig_len):
-        ret = torch.zeros([x.shape[0], x.shape[1]*(2**self.num_levels - 1)])
+        ret = torch.zeros([x.shape[0], x.shape[1]*(2**self.num_levels - 1)], device=x.device)
         for x_i in range(x.shape[0]):
             sample = x[x_i, :, :orig_len[x_i] - self.shift].unsqueeze(0)
             f = sample.shape[2]

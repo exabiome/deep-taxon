@@ -56,8 +56,11 @@ class PackedAAIndex(BitpackedIndex):
         bits = bits.reshape(-1, 5)
         unpacked = np.pad(bits, ((0, 0), (3, 0)), mode='constant', constant_values=((0, 0), (0, 0)))
         ohe_pos = np.packbits(unpacked, axis=1).squeeze(axis=1)
-        if ohe_pos[0] == 0:
-            ohe_pos = ohe_pos[1:]
+        # trim leading zeros that may be left from padding to
+        # ensure enough bits for pack
+        # trim trailing zeros in case a non-AA character was
+        # used to terminate the original sequence
+        ohe_pos = np.trim_zeros(ohe_pos)
         ohe_pos = ohe_pos - 1
         return ohe_pos
 
@@ -75,6 +78,9 @@ class SequenceTable(DynamicTable, metaclass=ABCMeta):
     @abstractmethod
     def get_numpy_conversion(self):
         pass
+
+    def set_raw(self):
+        self.convert = lambda x: x
 
     def set_torch(self, use_torch, dtype=None, device=None):
         if use_torch:
@@ -233,6 +239,9 @@ class DeepIndexFile(Container):
 
     def set_torch(self, use_torch, dtype=None, device=None):
         self.seq_table.set_torch(use_torch, dtype=dtype, device=device)
+
+    def set_raw(self):
+        self.seq_table.set_raw()
 
     def to_sequence(self, data):
         return self.seq_table.to_sequence(data)

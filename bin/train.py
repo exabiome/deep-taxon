@@ -19,6 +19,8 @@ parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=6
 parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
 parser.add_argument('-p', '--protein', action='store_true', default=False, help='file contains protein sequences')
 parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
+parser.add_argument('-g', '--gpu', action='store_true', default=False, help='use GPU')
+
 
 if len(sys.argv) == 1:
     parser.print_help()
@@ -26,11 +28,10 @@ if len(sys.argv) == 1:
 
 args = parser.parse_args()
 
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(asctime)s - %(message)s')
-logger = logging.getLogger()
+loglvl = logging.DEBUG if args.debug else logging.INFO
 
-logger.info('loading data %s' % args.input)
-train_loader, test_loader = train_test_loaders(args.input, test_size=0.2, batch_size=args.batch_size)
+logging.basicConfig(stream=sys.stdout, level=loglvl, format='%(asctime)s - %(message)s')
+logger = logging.getLogger()
 
 input_nc = 4
 if args.protein:
@@ -55,13 +56,21 @@ if args.checkpoint:
     logger.info('beginning at epoch %d' % curr_epoch)
 
 last_epoch = curr_epoch + n_epochs
-
 criterion = nn.MSELoss()
-before = datetime.now()
+
+device = None
+if args.gpu:
+    device = torch.device("cuda:0")
+    model.to(device)
+    optimizer.to(device)
+
+logger.info('loading data %s' % args.input)
+train_loader, test_loader = train_test_loaders(args.input, test_size=0.2, batch_size=args.batch_size, device=device)
 
 if args.debug:
     n_epochs = 1
 
+before = datetime.now()
 for curr_epoch in range(curr_epoch, last_epoch):  # loop over the dataset multiple times
 
     prev_loss = 0.0
@@ -76,10 +85,15 @@ for curr_epoch in range(curr_epoch, last_epoch):  # loop over the dataset multip
         ## Create new Optimizer object?
 
         # forward + backward + optimize
+        logger.debug('forward')
         outputs = model(seqs, orig_len=orig_lens)
 
+        logger.debug('criterion')
+        emb = emb.to(device)
         loss = criterion(outputs, emb)
+        logger.debug('backward')
         loss.backward()
+        logger.debug('step')
         optimizer.step()
 
         train_loss[curr_epoch] += loss.item()
@@ -88,13 +102,16 @@ for curr_epoch in range(curr_epoch, last_epoch):  # loop over the dataset multip
                         (curr_epoch + 1, i + 1, (train_loss[curr_epoch]-prev_loss)/40))
             prev_loss = train_loss[curr_epoch]
         if args.debug:
-            if i == 2:
+            if i == 1:
                 break
 
+    logger.debug('test loss')
     for i, data in enumerate(test_loader, 0):
         idx, seqs, emb, orig_lens = data
         outputs = model(seqs, orig_len=orig_lens)
         test_loss[curr_epoch] += criterion(outputs, emb).item()
+        if args.debug:
+            break
 
 if args.output is not None:
     logger.info('saving to %s' % args.output)

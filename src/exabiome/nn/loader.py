@@ -38,10 +38,11 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, hdmfio, **kwargs):
+    def __init__(self, hdmfio, device=None, **kwargs):
         self.hdmfio = hdmfio
         self.difile = self.hdmfio.read()
-        self.difile.set_torch(True, dtype=torch.float)
+        self.device = device
+        self.difile.set_torch(True, dtype=torch.float, device=device)
 
     def __len__(self):
         return len(self.difile)
@@ -52,29 +53,6 @@ class SeqDataset(Dataset):
     def __getitem__(self, i):
         d = self.difile[i]
         return i, d['sequence'], torch.from_numpy(d['embedding'])
-
-
-class DNADataset(SeqDataset):
-    """
-    A torch Dataset to handle reading DNA samples read from a DeepIndex file
-    """
-
-    def __getitem__(self, i):
-        d = self.difile[i]
-        return torch.from_numpy(d['sequence']), torch.from_numpy(d['embedding'])
-
-
-class AADataset(SeqDataset):
-    """
-    A torch Dataset to handle reading protein samples read from a DeepIndex file
-    """
-
-    def __getitem__(self, i):
-        d = self.difile[i]
-        ohe_pos = d['sequence']
-        tensor = torch.zeros((ohe_pos.shape[0], 26))
-        tensor[np.arange(ohe_pos.shape[0]), ohe_pos] = 1
-        return tensor, torch.from_numpy(d['embedding'])
 
 
 def get_loader(path, **kwargs):
@@ -89,7 +67,8 @@ def get_loader(path, **kwargs):
     loader = DataLoader(SeqDataset(hdmfio), collate_fn=collate, **kwargs)
     return loader
 
-def train_test_loaders(path, random_state=None, test_size=None, train_size=None, stratify=None, **kwargs):
+def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
+                       stratify=None, device=None, **kwargs):
     """
     Return DataLoaders for training and test datasets.
 
@@ -105,7 +84,7 @@ def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
                                            train_size=train_size,
                                            test_size=test_size,
                                            stratify=difile.seq_table['taxon'].data[:])
-    dataset = SeqDataset(hdmfio)
+    dataset = SeqDataset(hdmfio, device=device)
     train_sampler = SubsetRandomSampler(train_idx)
     test_sampler = SubsetRandomSampler(test_idx)
     return (DataLoader(dataset, collate_fn=collate, sampler=train_sampler, **kwargs),
