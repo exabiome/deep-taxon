@@ -55,7 +55,7 @@ class PackedAAIndex(BitpackedIndex):
         bits = bits[bits.shape[0] % 5:]
         bits = bits.reshape(-1, 5)
         unpacked = np.pad(bits, ((0, 0), (3, 0)), mode='constant', constant_values=((0, 0), (0, 0)))
-        ohe_pos = np.packbits(unpacked, axis=1).squeeze()
+        ohe_pos = np.packbits(unpacked, axis=1).squeeze(axis=1)
         # trim leading zeros that may be left from padding to
         # ensure enough bits for pack
         # trim trailing zeros in case a non-AA character was
@@ -89,28 +89,32 @@ class SequenceTable(DynamicTable, metaclass=ABCMeta):
             self.convert = self.get_numpy_conversion()
 
     @docval(*get_docval(DynamicTable.__init__),
-            {'name': 'names', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
+            {'name': 'sequence_name', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
             {'name': 'sequence', 'type': ('array_data', 'data', VectorData), 'doc': 'bitpacked DNA sequence'},
             {'name': 'sequence_index', 'type': ('array_data', 'data', BitpackedIndex), 'doc': 'index for sequence'},
+            {'name': 'length', 'type': ('array_data', 'data', VectorData), 'doc': 'lengths of sequence'},
             {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
             {'name': 'taxon_table', 'type': DynamicTable, 'doc': "target for 'taxon'", 'default': None})
     def __init__(self, **kwargs):
-        names, index, sequence, taxon, taxon_table = popargs('names',
+        sequence_name, index, sequence, taxon, taxon_table = popargs('sequence_name',
                                                              'sequence_index',
                                                              'sequence',
                                                              'taxon',
                                                              'taxon_table',
                                                              kwargs)
+        seqlens = popargs('length', kwargs)
         columns = list()
-        if isinstance(names, VectorData):      # data is being read -- here we assume that everything is a VectorData
-            columns.append(names)
+        if isinstance(sequence_name, VectorData):      # data is being read -- here we assume that everything is a VectorData
+            columns.append(sequence_name)
             columns.append(index)
             columns.append(sequence)
+            columns.append(seqlens)
             columns.append(taxon)
         else:
-            columns.append(VectorData('names', 'sequence names', data=names))
+            columns.append(VectorData('sequence_name', 'sequence names', data=sequence_name))
             columns.append(VectorData('sequence', 'bitpacked DNA sequences', data=sequence))
             columns.append(self.get_index(index, columns[-1]))
+            columns.append(VectorData('length', 'sequence lengths', data=seqlens))
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
@@ -231,7 +235,7 @@ class DeepIndexFile(Container):
         """
         Return a tuple containing (taxon_name, sequence_name, sequence, taxon_embedding)
         """
-        (seq_i, seq_name, sequence, (tax_i, taxon_name, taxon_emb)) = self.seq_table[i]
+        (seq_i, seq_name, sequence, length, (tax_i, taxon_name, taxon_emb)) = self.seq_table[i]
         return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
 
     def __len__(self):
