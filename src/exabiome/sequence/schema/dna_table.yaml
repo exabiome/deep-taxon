@@ -27,10 +27,14 @@ groups:
   data_type_inc: DynamicTable
   doc: A table for storing sequence data
   datasets:
-  - name: names
+  - name: sequence_name
     data_type_inc: VectorData
     dtype: text
     doc: Names for sequences
+  - name: length
+    data_type_inc: VectorData
+    dtype: uint32
+    doc: Lengths of sequences
   - name: sequence
     data_type_inc: VectorData
     dtype: uint8

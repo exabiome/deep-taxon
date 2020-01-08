@@ -128,6 +128,7 @@ seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), b
 names = DataChunkIterator.from_iterable(seqit.names_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('U'))
 ids = DataChunkIterator.from_iterable(seqit.id_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
 taxa = DataChunkIterator.from_iterable(seqit.taxon_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint16'))
+seqlens = DataChunkIterator.from_iterable(seqit.seqlens_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint32'))
 
 io = get_hdf5io(h5path, 'w')
 
@@ -137,6 +138,7 @@ seq_table = SeqTable('seq_table', 'a table storing sequences for computing seque
                      io.set_dataio(names,    compression='gzip', chunks=(2**15,)),
                      io.set_dataio(packed,   compression='gzip', maxshape=(None,), chunks=(2**15,)),
                      io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=(2**15,)),
+                     io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=(2**15,)),
                      io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=(2**15,)),
                      taxon_table=taxa_table,
                      id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=(2**15,)))
