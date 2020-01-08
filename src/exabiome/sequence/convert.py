@@ -21,7 +21,7 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
 
     ltag_re = re.compile('>lcl|([A-Za-z0-9_.]+)')
 
-    def __init__(self, paths, logger=None, faa=False):
+    def __init__(self, paths, logger=None, faa=False, min_seq_len=None):
         self.logger = logger
 
         # setup our characters
@@ -38,6 +38,7 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
         self.__paths = paths
         self.__path_iter = None
         self.__name_queue = None
+        self.__len_queue = None
         self.__index_queue = None
         self.__taxon_queue = None
         self.__id_queue = None
@@ -48,6 +49,13 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
 
         self.__curr_block = np.zeros((0, self.nchars), dtype=np.uint8)
         self.__curr_block_idx = 0
+
+        if min_seq_len is None:
+            if faa:
+                min_seq_len = 150
+            else:
+                min_seq_len = 50
+        self.min_seq_len = min_seq_len
 
     @property
     def names(self):
@@ -60,6 +68,10 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
     @property
     def index(self):
         return self.__index_queue
+
+    @property
+    def seqlens(self):
+        return self.__len_queue
 
     @property
     def ids(self):
@@ -78,15 +90,20 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
         return QueueIterator(self.ids, self)
 
     @property
+    def seqlens_iter(self):
+        return QueueIterator(self.seqlens, self)
+
+    @property
     def taxon_iter(self):
         return QueueIterator(self.taxon, self)
 
     def __iter__(self):
         self.__path_iter = iter(self.__paths)
         # initialize the sequence iterator
-        self.__curr_iter = self.__read(next(self.__path_iter))
+        self.__curr_iter = self._read_seq(next(self.__path_iter))
         self.__name_queue = deque()
         self.__index_queue = deque()
+        self.__len_queue = deque()
         self.__taxon_queue = deque()
         self.__id_queue = deque()
         self.__total_len = 0
@@ -112,14 +129,17 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
         while True:
             try:
                 seq, seqname = next(self.__curr_iter)
+                if len(seq) <= self.min_seq_len:
+                    continue
                 self.__name_queue.append(seqname)
+                self.__len_queue.append(len(seq))
                 self.__taxon_queue.append(np.uint16(self.__curr_file_idx))
                 self.__id_queue.append(self.__nseqs)
                 self.__nseqs += 1
                 return seq
             except StopIteration:
                 try:
-                    self.__curr_iter = self.__read(next(self.__path_iter))
+                    self.__curr_iter = self._read_seq(next(self.__path_iter))
                     self.__curr_file_idx += 1
                 except StopIteration:
                     self.__name_queue.append(None)
@@ -148,9 +168,9 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
     def get_seqname(cls, seq):
         return seq.metadata['id']
 
-    def __read(self, path):
+    def _read_seq(self, path):
         self.logger.debug('reading %s', path)
-        kwargs = {'format': 'fasta', 'constructor': self.skbio_cls}
+        kwargs = {'format': 'fasta', 'constructor': self.skbio_cls, 'validate': False}
         for seq_i, seq in enumerate(skbio.io.read(path, **kwargs)):
             ltag = self.get_seqname(seq)
             yield seq, ltag
@@ -191,7 +211,7 @@ class DNASeqIterator(AbstractSeqIterator):
 class UnrecognizedCharacter(Exception):
 
     def __init__(self, c):
-        super().__init__('Unrecognized character: %s' % c)
+        super().__init__('Unrecognized character: %s' % chr(c))
         self.character = c
 
 
@@ -204,8 +224,17 @@ class AASeqIterator(AbstractSeqIterator):
     def characters(cls):
         return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
-    def __init__(self, paths, logger=None):
+    def __init__(self, paths, logger=None, max_degenerate=0.25):
+        """
+        Args:
+            paths (list): list of sequence paths
+            logger (logging.Logger): logger object to use
+            max_degenerate (float): maximum fraction of degenerates and
+                                    gaps to allow in sequence
+        """
         super().__init__(paths, logger=logger, faa=True)
+        self.max_degenerate = max_degenerate
+        logger.info('skipping sequences with more than %0.4f %% gaps or degenerates' % (self.max_degenerate*100))
 
     def pack(self, seq):
         nbits = len(seq)*5
@@ -213,16 +242,39 @@ class AASeqIterator(AbstractSeqIterator):
         nbits += start
         bits = np.zeros(nbits, dtype=np.uint8)
         s = start
-        try:
-            for i, aa in enumerate(str(seq)):
-                num = self.aa_map[ord(aa)]
-                e = s + 5
-                bits[s:e] = np.unpackbits(num)[3:]
-                s = e
-        except KeyError as e
-            raise UnrecognizedCharacter(e.args[0]) from e
+        for i, aa in enumerate(str(seq)):
+            try:
+                num = self.aamap[ord(aa)]
+            except KeyError as e:
+                if e.args[0] == 42:
+                    continue
+                else:
+                    raise UnrecognizedCharacter(e.args[0]) from e
+            e = s + 5
+            bits[s:e] = np.unpackbits(num)[3:]
+            s = e
         packed = np.packbits(bits)
         return packed
+
+    def _read_seq(self, path):
+        gen = super()._read_seq(path)
+        for seq, ltag in gen:
+            y_seq, y_ltag = seq, ltag
+            if y_seq.has_stops():
+                stops = y_seq.stops()
+                nstops = np.sum(stops)
+                if nstops > 1:
+                    # skip sequence if it has more than one stop codon
+                    continue
+                else:
+                    # trim trailing stop codon if it exists
+                    if stops[-1]:
+                        y_seq = y_seq[:-1]
+            if y_seq.has_degenerates():
+                perc_bad = y_seq.degenerates().mean() + y_seq.gaps().mean()
+                if perc_bad > self.max_degenerate:
+                    continue
+            yield y_seq, y_ltag
 
 
 class QueueIterator(object):
