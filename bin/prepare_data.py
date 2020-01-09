@@ -52,6 +52,8 @@ parser.add_argument('tree', type=str, help='the distances file')
 parser.add_argument('metadata', type=str, help='metadata file from GTDB')
 parser.add_argument('out', type=str, help='output HDF5')
 parser.add_argument('-a', '--faa', action='store_true', default=False, help='input is amino acids')
+parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
+parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
 
 if len(sys.argv) == 1:
     parser.print_help()
@@ -135,11 +137,11 @@ logger.info("Total size: %d", sum(os.path.getsize(f) for f in fapaths))
 
 if args.faa:
     logger.info("reading and writing protein sequences")
-    seqit = AASeqIterator(fapaths, logger=logger)
+    seqit = AASeqIterator(fapaths, logger=logger, max_degenerate=args.max_deg, min_seq_len=args.min_len)
     SeqTable = AATable
 else:
     logger.info("reading and writing DNA sequences")
-    seqit = DNASeqIterator(fapaths, logger=logger)
+    seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
     SeqTable = DNATable
 
 packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=2**15, dtype=np.dtype('uint8'))
