@@ -182,8 +182,8 @@ class DNASeqIterator(AbstractSeqIterator):
     def characters(cls):
         return 'ATCGN'
 
-    def __init__(self, paths, logger=None):
-        super().__init__(paths, logger=logger, faa=False)
+    def __init__(self, paths, logger=None, min_seq_len=None):
+        super().__init__(paths, logger=logger, faa=False, min_seq_len=min_seq_len)
 
         categories = self.ohe.categories_[0][:self.nchars]
 
@@ -224,7 +224,7 @@ class AASeqIterator(AbstractSeqIterator):
     def characters(cls):
         return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
-    def __init__(self, paths, logger=None, max_degenerate=0.25):
+    def __init__(self, paths, logger=None, min_seq_len=None, max_degenerate=0.25):
         """
         Args:
             paths (list): list of sequence paths
@@ -232,7 +232,7 @@ class AASeqIterator(AbstractSeqIterator):
             max_degenerate (float): maximum fraction of degenerates and
                                     gaps to allow in sequence
         """
-        super().__init__(paths, logger=logger, faa=True)
+        super().__init__(paths, logger=logger, faa=True, min_seq_len=min_seq_len)
         self.max_degenerate = max_degenerate
         logger.info('skipping sequences with more than %0.4f %% gaps or degenerates' % (self.max_degenerate*100))
 
