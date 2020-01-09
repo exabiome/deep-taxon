@@ -187,16 +187,28 @@ class TaxaTable(DynamicTable):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
-            {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon'})
+            {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon'},
+            {'name': 'phylum', 'type': ('array_data', 'data', VectorData), 'doc': 'the phylum for each taxon'},
+            {'name': 'class', 'type': ('array_data', 'data', VectorData), 'doc': 'the class for each taxon'},
+            {'name': 'order', 'type': ('array_data', 'data', VectorData), 'doc': 'the order for each taxon'},
+            {'name': 'family', 'type': ('array_data', 'data', VectorData), 'doc': 'the family for each taxon'},
+            {'name': 'genus', 'type': ('array_data', 'data', VectorData), 'doc': 'the genus for each taxon'},
+            {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon'})
     def __init__(self, **kwargs):
         taxon_id, embedding = popargs('taxon_id', 'embedding', kwargs)
+        taxonomy_labels = ['phylum', 'class', 'order', 'family', 'genus', 'species']
+        taxonomy = popargs(*taxonomy_labels, kwargs)
+
         columns = list()
         if isinstance(taxon_id, VectorData):      # data is being read -- here we assume that everything is a VectorData
             columns.append(taxon_id)
             columns.append(embedding)
+            columns.extend(taxonomy)
         else:
             columns.append(VectorData('taxon_id', 'taxonomy IDs from NCBI', data=taxon_id))
-            columns.append(VectorData('embedding', 'an embedding for each species', data=embedding))
+            columns.append(VectorData('embedding', 'an embedding for each taxon', data=embedding))
+            for l, t in zip(taxonomy_labels, taxonomy):
+                columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
 
