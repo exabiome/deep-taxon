@@ -6,6 +6,7 @@ import logging
 import math
 import h5py
 import numpy as np
+import pandas as pd
 
 from skbio import TreeNode
 
@@ -48,6 +49,7 @@ parser.add_argument('fof', type=str, help='file of Fasta files')
 parser.add_argument('emb_h5', type=str, help='embedding file')
 parser.add_argument('dist_h5', type=str, help='the distances file')
 parser.add_argument('tree', type=str, help='the distances file')
+parser.add_argument('metadata', type=str, help='metadata file from GTDB')
 parser.add_argument('out', type=str, help='output HDF5')
 parser.add_argument('-a', '--faa', action='store_true', default=False, help='input is amino acids')
 
@@ -79,6 +81,24 @@ dist = CondensedDistanceMatrix('distances', data=dist)
 
 
 #############################
+# read and filter taxonomies
+#############################
+logger.info('reading taxonomies from %s' % args.metadata)
+taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+def func(row):
+    dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
+    dat['species'] = dat['species'].split(' ')[1]
+    dat['accession'] = row['accession'][3:]
+    return pd.Series(data=dat)
+
+logger.info('selecting GTDB taxonomy for taxa found in %s' % args.fof)
+taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy']]\
+                    .apply(func, axis=1)\
+                    .set_index('accession')\
+                    .filter(items=taxa_ids, axis=0)
+
+
+#############################
 # read and filter embeddings
 #############################
 logger.info('reading embeddings from %s' % args.emb_h5)
@@ -107,7 +127,6 @@ tree.write(bytes_io, format='newick')
 tree_str = bytes_io.getvalue()
 tree = NewickString('tree', data=tree_str)
 
-taxa_id_map = {t: i for i, t in enumerate(taxa_ids)}
 
 h5path = args.out
 
@@ -132,7 +151,11 @@ seqlens = DataChunkIterator.from_iterable(seqit.seqlens_iter, maxshape=(None,), 
 
 io = get_hdf5io(h5path, 'w')
 
-taxa_table = TaxaTable('taxa_table', 'a table for storing taxa data', taxa_ids, emb)
+tt_args = ['taxa_table', 'a table for storing taxa data', taxa_ids, emb]
+for t in taxlevels[1:]:
+    tt_args.append(taxdf[t].values)
+
+taxa_table = TaxaTable(*tt_args)
 
 seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
                      io.set_dataio(names,    compression='gzip', chunks=(2**15,)),
