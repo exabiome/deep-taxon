@@ -247,7 +247,8 @@ class DeepIndexFile(Container):
         """
         Return a tuple containing (taxon_name, sequence_name, sequence, taxon_embedding)
         """
-        (seq_i, seq_name, sequence, length, (tax_i, taxon_name, taxon_emb)) = self.seq_table[i]
+        (seq_i, seq_name, sequence, length,
+         (tax_i, taxon_name, taxon_emb, p, c, o, f, g, s)) = self.seq_table[i]
         return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
 
     def __len__(self):
