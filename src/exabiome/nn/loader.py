@@ -52,7 +52,7 @@ class SeqDataset(Dataset):
 
     def __getitem__(self, i):
         d = self.difile[i]
-        return i, d['sequence'], torch.from_numpy(d['embedding'])
+        return i, d['sequence'], d['embedding']
 
 
 def get_loader(path, **kwargs):
@@ -66,6 +66,7 @@ def get_loader(path, **kwargs):
     hdmfio = get_hdf5io(path, 'r')
     loader = DataLoader(SeqDataset(hdmfio), collate_fn=collate, **kwargs)
     return loader
+
 
 def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
                        stratify=None, device=None, **kwargs):
