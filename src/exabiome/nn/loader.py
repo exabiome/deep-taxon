@@ -69,7 +69,7 @@ def get_loader(path, **kwargs):
 
 
 def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
-                       stratify=None, device=None, **kwargs):
+                       load=False, stratify=None, device=None, **kwargs):
     """
     Return DataLoaders for training and test datasets.
 
@@ -80,6 +80,8 @@ def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
 
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
+    if load:
+        difile.load()
     train_idx, test_idx = train_test_split(np.arange(len(difile.seq_table)),
                                            random_state=random_state,
                                            train_size=train_size,
