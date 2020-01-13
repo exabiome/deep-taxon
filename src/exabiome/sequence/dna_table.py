@@ -268,3 +268,22 @@ class DeepIndexFile(Container):
 
     def to_sequence(self, data):
         return self.seq_table.to_sequence(data)
+
+    @staticmethod
+    def _to_numpy(data):
+        return data[:]
+
+    @staticmethod
+    def _to_torch(device=None, dtype=None):
+        def func(data):
+            return torch.tensor(data, device=device, dtype=dtype)
+        return func
+
+    def load(self, torch=False, device=None):
+        for c in self.seq_table.columns:
+            c.transform(self._to_numpy)
+        for c in self.taxa_table.columns:
+            c.transform(self._to_numpy)
+        if torch:
+            self.seq_table['sequence'].target.transform(self._to_torch(device))
+            self.taxa_table['embedding'].transform(self._to_torch(device))
