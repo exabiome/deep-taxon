@@ -44,8 +44,21 @@ def parse_logger(string):
     hdlr.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
     return ret
 
+def parse_cuda_index(string):
+    if string == 'all':
+        return list(range(torch.cuda.device_count()))
+    else:
+        try:
+            i = int(string)
+            if i > torch.cuda.device_count() or i < 0:
+                raise ValueError(string)
+            return i
+        except :
+            devices = str(np.arange(torch.cuda.device_count()))
+            raise argparse.ArgumentTypeError(f'{string} is not a valid CUDA index. Please choose from {devices}')
 
-def parse_args(desc, argv=None):
+
+def parse_args(desc, *addl_args, argv=None):
     """
     Parse arguments for training executable
     """
@@ -64,13 +77,17 @@ def parse_args(desc, argv=None):
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpu', action='store_true', default=False, help='use GPU')
-    parser.add_argument('--cuda_index', type=int, default=0, help='which CUDA device to use')
+    parser.add_argument('-C', '--cuda_index', type=parse_cuda_index, nargs='+', default='all', help='which CUDA device to use')
     parser.add_argument('-s', '--split_seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--test_size', type=parse_test_size, default=0.2, help='size of test split')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
     parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+    parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
+
+    for a in addl_args:
+        parser.add_argument(*a[0], **a[1])
 
     if len(argv) == 0:
         parser.print_help()
@@ -104,7 +121,7 @@ def parse_args(desc, argv=None):
         {'name': 'gpu', 'type': bool, 'default': False,
          'help': 'use GPU'},
 
-        {'name': 'cuda_index', 'type': int, 'default': 0,
+        {'name': 'cuda_index', 'type': (int, list), 'default': 0,
          'help': 'which CUDA device to use'},
 
         {'name': 'epochs', 'type': int, 'default': 1,
@@ -124,6 +141,9 @@ def parse_args(desc, argv=None):
 
         {'name': 'load', 'type': bool, 'default': False,
          'help': 'load data into memory before training loop'},
+
+        {'name': 'ohe', 'type': bool, 'default': True,
+         'help': 'One-hot encode sequence data (only applies to protein data)'},
 
         {'name': 'logger', 'type': logging.Logger, 'default': None,
          'help': 'the path to the log file to use'},
@@ -157,6 +177,7 @@ def run_serial(**kwargs):
     logger = kwargs['logger']
     debug = kwargs['debug']
     prof = kwargs['prof']
+    ohe = kwargs['ohe']
 
 
     # set up logger
@@ -167,10 +188,20 @@ def run_serial(**kwargs):
     if debug:
         logger.setLevel(logging.DEBUG)
 
+    logger.info('Optimizer:')
+    logger.info(str(optimizer).replace('\n', '\n' + (' '*25)))
+    logger.info('Model:')
+    logger.info(str(model).replace('\n', '\n' + (' '*25)))
+
     device = None
     if gpu:
-        device = torch.device(f"cuda:{cuda_index}")
-        logger.info(f'using CUDA device {str(device)}')
+        to_index = cuda_index
+        if isinstance(cuda_index, list):
+            to_index = cuda_index[0]
+            model = nn.DataParallel(model, device_ids=cuda_index)
+            logger.info(f'running on GPUs {cuda_index}')
+        device = torch.device(f"cuda:{to_index}")
+        logger.info(f'sending data to CUDA device {str(device)}')
         model.to(device)
 
     if isinstance(checkpoint, bool):
@@ -209,6 +240,7 @@ def run_serial(**kwargs):
                                                    batch_size=batch_size,
                                                    device=device,
                                                    load=load,
+                                                   ohe=ohe,
                                                    random_state=split_seed)
 
     logger.info(f'starting with epoch {curr_epoch+1}')

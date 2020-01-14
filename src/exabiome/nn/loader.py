@@ -11,24 +11,25 @@ def collate(samples):
     A function to collate variable length sequence samples
     """
     maxlen = 0
+    l_idx = -1
     for i, X, y in samples:
-        if maxlen < X.shape[1]:
-            maxlen = X.shape[1]
+        if maxlen < X.shape[l_idx]:
+            maxlen = X.shape[l_idx]
     X_ret = list()
     y_ret = list()
     idx_ret = list()
     size_ret = list()
     for i, X, y in samples:
-        dif = maxlen - X.shape[1]
+        dif = maxlen - X.shape[l_idx]
         X_ = X
         if dif > 0:
             X_ = F.pad(X, (0, dif))
         X_ret.append(X_)
         y_ret.append(y)
-        size_ret.append(X.shape[1])
+        size_ret.append(X.shape[l_idx])
         idx_ret.append(i)
-    X_ret = torch.stack(X_ret).float()
-    y_ret = torch.stack(y_ret).float()
+    X_ret = torch.stack(X_ret)
+    y_ret = torch.stack(y_ret)
     size_ret = torch.tensor(size_ret)
     return (idx_ret, X_ret, y_ret, size_ret)
 
@@ -42,7 +43,7 @@ class SeqDataset(Dataset):
         self.hdmfio = hdmfio
         self.difile = self.hdmfio.read()
         self.device = device
-        self.difile.set_torch(True, dtype=torch.float, device=device)
+        self.difile.set_torch(True, dtype=torch.float, device=device, ohe=kwargs.get('ohe', True))
 
     def __len__(self):
         return len(self.difile)
@@ -69,7 +70,7 @@ def get_loader(path, **kwargs):
 
 
 def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
-                       load=False, stratify=None, device=None, **kwargs):
+                       load=False, stratify=None, device=None, ohe=True, **kwargs):
     """
     Return DataLoaders for training and test datasets.
 
@@ -87,7 +88,7 @@ def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
                                            train_size=train_size,
                                            test_size=test_size,
                                            stratify=difile.seq_table['taxon'].data[:])
-    dataset = SeqDataset(hdmfio, device=device)
+    dataset = SeqDataset(hdmfio, device=device, ohe=ohe)
     train_sampler = SubsetRandomSampler(train_idx)
     test_sampler = SubsetRandomSampler(test_idx)
     return (DataLoader(dataset, collate_fn=collate, sampler=train_sampler, **kwargs),

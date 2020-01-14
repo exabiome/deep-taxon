@@ -51,11 +51,18 @@ class SPP_CNN(nn.Module):
     Args:
         input_nc (int):  the input number of channels
     '''
-    def __init__(self, input_nc, output_nc=None, n_levels=2, n_tasks=2, kernel_size=21):
+    def __init__(self, input_nc, output_nc=None, n_levels=2, n_tasks=2, kernel_size=21, emb_nc=0):
         super(SPP_CNN, self).__init__()
         n_lin = 0
         if output_nc is None:
             output_nc = input_nc
+
+        self.embedding = None
+        if emb_nc > 0:
+            print('setting Embedding')
+            self.embedding = nn.Embedding(input_nc, emb_nc)
+            input_nc = emb_nc
+
         self.conv1 = nn.Conv1d(input_nc, output_nc, kernel_size,
                                stride=1,
                                padding=0,
@@ -78,6 +85,10 @@ class SPP_CNN(nn.Module):
         self.fc1 = nn.Linear(n_lin, n_tasks)
 
     def forward(self, x, orig_len=None):
+
+        if self.embedding is not None:
+            x = self.embedding(x).permute(0, 2, 1)
+
         x1 = x
         x1 = self.conv1(x1)
         x1 = self.bn1(x1)

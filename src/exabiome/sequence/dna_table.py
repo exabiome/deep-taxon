@@ -67,20 +67,22 @@ class PackedAAIndex(BitpackedIndex):
 
 class TorchableMixin:
 
-    def get_torch_conversion(self, dtype=None, device=None):
+    def get_torch_conversion(self, **kwargs):
+        dtype = kwargs.get('dtype')
+        device = kwargs.get('device')
         return lambda x: torch.as_tensor(x, dtype=dtype, device=device).T
 
-    def get_numpy_conversion(self):
+    def get_numpy_conversion(self, **kwargs):
         return lambda x: x
 
     def set_raw(self):
         self.convert = lambda x: x
 
-    def set_torch(self, use_torch, dtype=None, device=None):
+    def set_torch(self, use_torch, **kwargs):
         if use_torch:
-            self.convert = self.get_torch_conversion(dtype, device)
+            self.convert = self.get_torch_conversion(**kwargs)
         else:
-            self.convert = self.get_numpy_conversion()
+            self.convert = self.get_numpy_conversion(**kwargs)
 
 
 class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
@@ -148,19 +150,26 @@ class AATable(SequenceTable):
                         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
                        dtype='<U1')
 
-    def get_numpy_conversion(self):
+    def get_numpy_conversion(self, **kwargs):
         def func(x):
             ret = np.zeros([x.shape[0], 26], dtype=float)
             ret[np.arange(ret.shape[0]), x] = 1.0
             return ret
         return func
 
-    def get_torch_conversion(self, dtype=None, device=None):
-        def func(x):
-            ret = torch.zeros([x.shape[0], 26], dtype=dtype, device=device)
-            ret[np.arange(ret.shape[0]), x.tolist()] = 1.0
-            ret = ret.T
-            return ret
+    def get_torch_conversion(self, **kwargs):
+        dtype = kwargs.get('dtype')
+        device = kwargs.get('device')
+        if kwargs.get('ohe', False):
+            def func(x):
+                ret = torch.zeros([x.shape[0], 26], dtype=dtype, device=device)
+                ret[np.arange(ret.shape[0]), x.tolist()] = 1.0
+                ret = ret.T
+                return ret
+        else:
+            def func(x):
+                ret = torch.tensor(x, device=device, dtype=torch.int64)
+                return ret
         return func
 
     def get_index(self, data, target):
@@ -259,8 +268,8 @@ class DeepIndexFile(Container):
     def __len__(self):
         return len(self.seq_table)
 
-    def set_torch(self, use_torch, dtype=None, device=None):
-        self.seq_table.set_torch(use_torch, dtype=dtype, device=device)
+    def set_torch(self, use_torch, dtype=None, device=None, ohe=True):
+        self.seq_table.set_torch(use_torch, dtype=dtype, device=device, ohe=ohe)
         self.taxa_table.set_torch(use_torch, dtype=dtype, device=device)
 
     def set_raw(self):
