@@ -65,19 +65,13 @@ class PackedAAIndex(BitpackedIndex):
         return ohe_pos
 
 
-class SequenceTable(DynamicTable, metaclass=ABCMeta):
+class TorchableMixin:
 
-    @abstractmethod
-    def get_index(self, data, target):
-        pass
-
-    @abstractmethod
     def get_torch_conversion(self, dtype=None, device=None):
-        pass
+        return lambda x: torch.as_tensor(x, dtype=dtype, device=device).T
 
-    @abstractmethod
     def get_numpy_conversion(self):
-        pass
+        return lambda x: x
 
     def set_raw(self):
         self.convert = lambda x: x
@@ -87,6 +81,13 @@ class SequenceTable(DynamicTable, metaclass=ABCMeta):
             self.convert = self.get_torch_conversion(dtype, device)
         else:
             self.convert = self.get_numpy_conversion()
+
+
+class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
+
+    @abstractmethod
+    def get_index(self, data, target):
+        pass
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'sequence_name', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
@@ -133,12 +134,6 @@ class SequenceTable(DynamicTable, metaclass=ABCMeta):
 @register_class('DNATable', NS)
 class DNATable(SequenceTable):
 
-    def get_torch_conversion(self, dtype=None, device=None):
-        return lambda x: torch.as_tensor(x, dtype=dtype, device=device).T
-
-    def get_numpy_conversion(self):
-        return lambda x: x
-
     def get_index(self, data, target):
         return PackedDNAIndex('sequence_index', data, target)
 
@@ -183,7 +178,7 @@ class AATable(SequenceTable):
 
 
 @register_class('TaxaTable', NS)
-class TaxaTable(DynamicTable):
+class TaxaTable(DynamicTable, TorchableMixin):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
@@ -211,6 +206,16 @@ class TaxaTable(DynamicTable):
                 columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
+        self.convert = self.get_numpy_conversion()
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return super().__getitem__(key)
+        else:
+            ret = list(super().__getitem__(key))
+            # sequence data will come from the third column
+            ret[2] = self.convert(ret[2])
+            return tuple(ret)
 
 
 @register_class('CondensedDistanceMatrix', NS)
@@ -247,7 +252,8 @@ class DeepIndexFile(Container):
         """
         Return a tuple containing (taxon_name, sequence_name, sequence, taxon_embedding)
         """
-        (seq_i, seq_name, sequence, length, (tax_i, taxon_name, taxon_emb)) = self.seq_table[i]
+        (seq_i, seq_name, sequence, length,
+         (tax_i, taxon_name, taxon_emb, p, c, o, f, g, s)) = self.seq_table[i]
         return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
 
     def __len__(self):
@@ -255,9 +261,29 @@ class DeepIndexFile(Container):
 
     def set_torch(self, use_torch, dtype=None, device=None):
         self.seq_table.set_torch(use_torch, dtype=dtype, device=device)
+        self.taxa_table.set_torch(use_torch, dtype=dtype, device=device)
 
     def set_raw(self):
         self.seq_table.set_raw()
 
     def to_sequence(self, data):
         return self.seq_table.to_sequence(data)
+
+    @staticmethod
+    def _to_numpy(data):
+        return data[:]
+
+    @staticmethod
+    def _to_torch(device=None, dtype=None):
+        def func(data):
+            return torch.tensor(data, device=device, dtype=dtype)
+        return func
+
+    def load(self, torch=False, device=None):
+        for c in self.seq_table.columns:
+            c.transform(self._to_numpy)
+        for c in self.taxa_table.columns:
+            c.transform(self._to_numpy)
+        if torch:
+            self.seq_table['sequence'].target.transform(self._to_torch(device))
+            self.taxa_table['embedding'].transform(self._to_torch(device))
