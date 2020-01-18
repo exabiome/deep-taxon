@@ -25,7 +25,7 @@ def parse_seed(string):
         return int(datetime.now().timestamp())
 
 
-def parse_test_size(string):
+def parse_train_size(string):
     ret = float(string)
     if ret > 1.0:
         ret = int(ret)
@@ -44,18 +44,27 @@ def parse_logger(string):
     hdlr.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
     return ret
 
+
+def _parse_cuda_index_helper(s):
+    try:
+        i = int(s)
+        if i > torch.cuda.device_count() or i < 0:
+            raise ValueError(s)
+        return i
+    except :
+        devices = str(np.arange(torch.cuda.device_count()))
+        raise argparse.ArgumentTypeError(f'{s} is not a valid CUDA index. Please choose from {devices}')
+
+
 def parse_cuda_index(string):
     if string == 'all':
         return list(range(torch.cuda.device_count()))
     else:
-        try:
-            i = int(string)
-            if i > torch.cuda.device_count() or i < 0:
-                raise ValueError(string)
-            return i
-        except :
-            devices = str(np.arange(torch.cuda.device_count()))
-            raise argparse.ArgumentTypeError(f'{string} is not a valid CUDA index. Please choose from {devices}')
+        if ',' in string:
+            return [_parse_cuda_index_helper(_) for _ in string.split(',')]
+        else:
+            return _parse_cuda_index_helper(string)
+
 
 
 def parse_args(desc, *addl_args, argv=None):
@@ -77,10 +86,11 @@ def parse_args(desc, *addl_args, argv=None):
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpu', action='store_true', default=False, help='use GPU')
-    parser.add_argument('-C', '--cuda_index', type=parse_cuda_index, nargs='+', default='all', help='which CUDA device to use')
+    parser.add_argument('-C', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
     parser.add_argument('-s', '--split_seed', type=parse_seed, default='', help='seed to use for train-test split')
-    parser.add_argument('-t', '--test_size', type=parse_test_size, default=0.2, help='size of test split')
+    parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
+    parser.add_argument('-D', '--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
     parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
@@ -130,8 +140,8 @@ def parse_args(desc, *addl_args, argv=None):
         {'name': 'batch_size', 'type': int, 'default': 64,
          'help': 'the batch size to use'},
 
-        {'name': 'test_size', 'type': (int, float), 'default': 0.2,
-         'help': 'the size of the train test split'},
+        {'name': 'train_size', 'type': (int, float), 'default': 0.8,
+         'help': 'the size of the training split'},
 
         {'name': 'output', 'type': str, 'default': None,
          'help': 'the file to save output (i.e. checkpoint) to'},
@@ -150,6 +160,9 @@ def parse_args(desc, *addl_args, argv=None):
 
         {'name': 'debug', 'type': bool, 'default': False,
          'help': 'run in debug mode (one batch per epoch)'},
+
+        {'name': 'downsample', 'type': float, 'default': None,
+         'help': 'downsample *input* before running'},
 
         {'name': 'prof', 'type': str, 'default': None,
          'help': 'profile training loop and dump results to given path'},
@@ -178,6 +191,7 @@ def run_serial(**kwargs):
     debug = kwargs['debug']
     prof = kwargs['prof']
     ohe = kwargs['ohe']
+    downsample = kwargs['downsample']
 
 
     # set up logger
@@ -187,11 +201,6 @@ def run_serial(**kwargs):
 
     if debug:
         logger.setLevel(logging.DEBUG)
-
-    logger.info('Optimizer:')
-    logger.info(str(optimizer).replace('\n', '\n' + (' '*25)))
-    logger.info('Model:')
-    logger.info(str(model).replace('\n', '\n' + (' '*25)))
 
     device = None
     if gpu:
@@ -228,20 +237,33 @@ def run_serial(**kwargs):
         best_epoch = checkpoint['best_epoch']
         best_state = checkpoint['best_state']
 
+    logger.info('Optimizer:')
+    logger.info(str(optimizer).replace('\n', '\n' + (' '*25)))
+    logger.info('Model:')
+    logger.info(str(model).replace('\n', '\n' + (' '*25)))
+
+
     last_epoch = curr_epoch + epochs
     criterion = nn.MSELoss()
 
+    if downsample is not None:
+        logger.info(f'downsampling dataset by a factor of {downsample}')
+
     logger.info('loading data from %s' % input)
     logger.info(f'- using {split_seed} as seed for train-test split')
-    logger.info(f'- test size: {test_size}')
     logger.info(f'- batch size: {batch_size}')
-    train_loader, test_loader = train_test_loaders(input,
-                                                   test_size=test_size,
-                                                   batch_size=batch_size,
-                                                   device=device,
-                                                   load=load,
-                                                   ohe=ohe,
-                                                   random_state=split_seed)
+    train_loader, test_loader, validate_loader = train_test_loaders(input,
+                                                                    test_size=test_size,
+                                                                    batch_size=batch_size,
+                                                                    device=device,
+                                                                    load=load,
+                                                                    ohe=ohe,
+                                                                    downsample=downsample,
+                                                                    random_state=split_seed)
+
+    logger.info(f'- train size:    {len(train_loader.dataset.indices)}')
+    logger.info(f'- test size:     {len(train_loader.dataset.indices)}')
+    logger.info(f'- validate size: {len(train_loader.dataset.indices)}')
 
     logger.info(f'starting with epoch {curr_epoch+1}')
     logger.info(f'saving results to {output}')
@@ -303,6 +325,13 @@ def run_serial(**kwargs):
             logger.info(f'- current loss:       {test_loss[curr_epoch]}')
             best_epoch = curr_epoch
             best_state = model.state_dict()
+        else:
+            # lower learning rate if we don't get any better for 5 epochs
+            if curr_epoch - best_epoch > 5:
+                logger.info('Reducing learning rate:')
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = param_groups['lr'] * 0.1
+                logger.info(str(optimizer).replace('\n', '\n' + (' '*25)))
 
         logger.debug('checkpointing')
         torch.save({'epoch': curr_epoch,
