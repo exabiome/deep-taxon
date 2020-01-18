@@ -59,7 +59,6 @@ class SPP_CNN(nn.Module):
 
         self.embedding = None
         if emb_nc > 0:
-            print('setting Embedding')
             self.embedding = nn.Embedding(input_nc, emb_nc)
             input_nc = emb_nc
 
