@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 from sklearn.model_selection import train_test_split
+from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
 
@@ -69,8 +70,56 @@ def get_loader(path, **kwargs):
     return loader
 
 
-def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
-                       load=False, stratify=None, device=None, ohe=True, **kwargs):
+def train_test_validate_split(data, stratify=None, random_state=None,
+                              test_size=0.1, train_size=0.8, validation_size=0.1):
+    """
+    Return train test validation split of given data
+
+
+    test_size, train_size, validation_size will all be normalized before subsequent
+    calls to train_test_split
+
+    Args:
+        data (str): the path to the DeepIndex file
+        kwargs    : any additional arguments to pass into torch.DataLoader
+    """
+    orig_indices = indices
+    indices = np.arange(len(orig_indices))
+
+    tot = train_size + test_size + validation_size
+    train_size /= tot
+    test_size /= tot
+    validation_size /= tot
+
+    random_state = check_random_state(random_state)
+
+    train_idx, tmp_idx = train_test_split(indices,
+                                          train_size=train_size,
+                                          stratify=stratify,
+                                          random_state=random_state)
+
+    if stratify is not None:
+        stratify = stratify[tmp_idx]
+
+    tot = test_size + validation_size
+    test_size /= tot
+    validation_size /= tot
+
+    test_idx, val_idx = train_test_split(tmp_idx,
+                                         train_size=test_size,
+                                         stratify=stratify,
+                                         random_state=random_state)
+
+    train_idx = orig_indices[train_idx]
+    test_idx = orig_indices[test_idx]
+    val_idx = orig_indices[val_idx]
+
+    return train_idx, test_idx, val_idx
+
+
+def train_test_loaders(path, random_state=None, downsample=None,
+                       load=False, device=None, ohe=True,
+                       **kwargs):
     """
     Return DataLoaders for training and test datasets.
 
@@ -83,13 +132,19 @@ def train_test_loaders(path, random_state=None, test_size=None, train_size=None,
     difile = hdmfio.read()
     if load:
         difile.load()
-    train_idx, test_idx = train_test_split(np.arange(len(difile.seq_table)),
-                                           random_state=random_state,
-                                           train_size=train_size,
-                                           test_size=test_size,
-                                           stratify=difile.seq_table['taxon'].data[:])
+
+    index = np.arange(len(difile.seq_table))
+    stratify = difile.seq_table['taxon'].data[:]
+    if downsample is not None:
+        index, _, stratify, _ = train_test_split(index, stratify, train_size=downsample)
+
+    train_idx, test_idx, validate_idx = train_test_validate_split(index,
+                                                                  stratify=stratify,
+                                                                  random_state=random_state)
     dataset = SeqDataset(hdmfio, device=device, ohe=ohe)
     train_sampler = SubsetRandomSampler(train_idx)
     test_sampler = SubsetRandomSampler(test_idx)
+    validate_sampler = SubsetRandomSampler(validate_idx)
     return (DataLoader(dataset, collate_fn=collate, sampler=train_sampler, **kwargs),
-            DataLoader(dataset, collate_fn=collate, sampler=test_sampler, **kwargs))
+            DataLoader(dataset, collate_fn=collate, sampler=test_sampler, **kwargs),
+            DataLoader(dataset, collate_fn=collate, sampler=validate_sampler, **kwargs))
