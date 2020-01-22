@@ -23,7 +23,7 @@ def get_dmat(embedding, leaf_names, metric='euclidean', logger=None):
     """
     if logger:
         logger.info("computing %s distances" % metric)
-    dist = squareform(pdist(embedding, metric=args.metric))
+    dist = squareform(pdist(embedding, metric=metric))
     dmat = DistanceMatrix(dist, leaf_names)
     return dmat
 
@@ -33,14 +33,19 @@ def nj_tree(dmat):
     return tree
 
 
-def read_tree(nwk_path):
+def read_tree(nwk_path, leaf_names=None):
     """
     Read a tree in Newick format
 
     Returns:
         TreeNode object for the root of the tree
     """
-    return TreeNode.read(nwk_path, format='newick')
+    tree = TreeNode.read(nwk_path, format='newick')
+    for n in tree.tips():
+        n.name = n.name.replace(' ', '_')
+    if leaf_names is not None:
+        tree = tree.shear(leaf_names)
+    return tree
 
 
 def compare_tree(tree, target_nwk_path):
