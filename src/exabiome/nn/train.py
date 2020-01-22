@@ -164,6 +164,9 @@ def parse_args(desc, *addl_args, argv=None):
         {'name': 'downsample', 'type': float, 'default': None,
          'help': 'downsample *input* before running'},
 
+        {'name': 'pad', 'type': bool, 'default': False,
+         'help': 'pad the sequences to be the maximum sequence length'},
+
         {'name': 'prof', 'type': str, 'default': None,
          'help': 'profile training loop and dump results to given path'},
 
@@ -183,7 +186,7 @@ def run_serial(**kwargs):
     output = kwargs['output']
     split_seed = kwargs['split_seed']
     batch_size = kwargs['batch_size']
-    test_size = kwargs['test_size']
+    train_size = kwargs['train_size']
     cuda_index = kwargs['cuda_index']
     load = kwargs['load']
 
@@ -191,6 +194,7 @@ def run_serial(**kwargs):
     debug = kwargs['debug']
     prof = kwargs['prof']
     ohe = kwargs['ohe']
+    pad = kwargs['pad']
     downsample = kwargs['downsample']
 
 
@@ -231,7 +235,6 @@ def run_serial(**kwargs):
         curr_epoch = checkpoint['epoch'] + 1
         train_loss = np.append(checkpoint['train_loss'], np.zeros(epochs))
         test_loss = np.append(checkpoint['test_loss'], np.zeros(epochs))
-        test_size = checkpoint['test_size']
         split_seed = checkpoint['split_seed']
         batch_size = checkpoint['batch_size']
         best_epoch = checkpoint['best_epoch']
@@ -253,17 +256,17 @@ def run_serial(**kwargs):
     logger.info(f'- using {split_seed} as seed for train-test split')
     logger.info(f'- batch size: {batch_size}')
     train_loader, test_loader, validate_loader = train_test_loaders(input,
-                                                                    test_size=test_size,
                                                                     batch_size=batch_size,
                                                                     device=device,
                                                                     load=load,
                                                                     ohe=ohe,
+                                                                    pad=pad,
                                                                     downsample=downsample,
                                                                     random_state=split_seed)
 
-    logger.info(f'- train size:    {len(train_loader.dataset.indices)}')
-    logger.info(f'- test size:     {len(train_loader.dataset.indices)}')
-    logger.info(f'- validate size: {len(train_loader.dataset.indices)}')
+    logger.info(f'- train size:    {len(train_loader.sampler.indices)}')
+    logger.info(f'- test size:     {len(test_loader.sampler.indices)}')
+    logger.info(f'- validate size: {len(validate_loader.sampler.indices)}')
 
     logger.info(f'starting with epoch {curr_epoch+1}')
     logger.info(f'saving results to {output}')
@@ -330,7 +333,7 @@ def run_serial(**kwargs):
             if curr_epoch - best_epoch > 5:
                 logger.info('Reducing learning rate:')
                 for param_group in optimizer.param_groups:
-                    param_group['lr'] = param_groups['lr'] * 0.1
+                    param_group['lr'] = param_group['lr'] * 0.1
                 logger.info(str(optimizer).replace('\n', '\n' + (' '*25)))
 
         logger.debug('checkpointing')
@@ -342,7 +345,6 @@ def run_serial(**kwargs):
                     'best_epoch': best_epoch,
                     'best_state': best_state,
                     'split_seed': split_seed,
-                    'test_size': test_size,
                     'batch_size': batch_size,
                     }, output)
 

@@ -70,15 +70,42 @@ class TorchableMixin:
     def get_torch_conversion(self, **kwargs):
         dtype = kwargs.get('dtype')
         device = kwargs.get('device')
-        return lambda x: torch.as_tensor(x, dtype=dtype, device=device).T
+        maxlen = kwargs.get('maxlen')
+        if np.issubdtype(type(maxlen), np.integer):
+            def func(x):
+                ret = torch.zeros((maxlen, x.shape[1]))
+                ret[0:x.shape[0]] = x
+                return ret
+        else:
+            def func(x):
+                return torch.as_tensor(x, dtype=dtype, device=device).T
+        return func
 
     def get_numpy_conversion(self, **kwargs):
-        return lambda x: x
+        """
+        Args:
+            maxlen (int):        the maximum sequence length to pad to
+        """
+        maxlen = kwargs.get('maxlen')
+        if np.issubdtype(type(maxlen), np.integer):
+            def func(x):
+                ret = np.zeros((maxlen, x.shape[1]))
+                ret[0:x.shape[0]] = x
+                return ret
+        else:
+            def func(x):
+                return x
+        return func
 
     def set_raw(self):
         self.convert = lambda x: x
 
     def set_torch(self, use_torch, **kwargs):
+        """
+        Args:
+            use_torch :          convert data to torch.Tensors
+            maxlen (int):        the maximum sequence length to pad to
+        """
         if use_torch:
             self.convert = self.get_torch_conversion(**kwargs)
         else:
@@ -97,7 +124,8 @@ class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
             {'name': 'sequence_index', 'type': ('array_data', 'data', BitpackedIndex), 'doc': 'index for sequence'},
             {'name': 'length', 'type': ('array_data', 'data', VectorData), 'doc': 'lengths of sequence'},
             {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
-            {'name': 'taxon_table', 'type': DynamicTable, 'doc': "target for 'taxon'", 'default': None})
+            {'name': 'taxon_table', 'type': DynamicTable, 'doc': "target for 'taxon'", 'default': None},
+            {'name': 'pad', 'type': bool, 'doc': 'pad sequences to the maximum length sequence', 'default': False})
     def __init__(self, **kwargs):
         sequence_name, index, sequence, taxon, taxon_table = popargs('sequence_name',
                                                              'sequence_index',
@@ -105,14 +133,18 @@ class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
                                                              'taxon',
                                                              'taxon_table',
                                                              kwargs)
+        self.pad = popargs('pad', kwargs)
         seqlens = popargs('length', kwargs)
         columns = list()
+        self.maxlen = None
         if isinstance(sequence_name, VectorData):      # data is being read -- here we assume that everything is a VectorData
             columns.append(sequence_name)
             columns.append(index)
             columns.append(sequence)
             columns.append(seqlens)
             columns.append(taxon)
+            if self.pad:   # if we need to pad, compute the maxlen
+                self.maxlen = np.max(seqlens.data[:])
         else:
             columns.append(VectorData('sequence_name', 'sequence names', data=sequence_name))
             columns.append(VectorData('sequence', 'bitpacked DNA sequences', data=sequence))
@@ -121,7 +153,7 @@ class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
-        self.convert = self.get_numpy_conversion()
+        self.convert = self.get_numpy_conversion(maxlen=self.maxlen)
 
     def __getitem__(self, key):
         if isinstance(key, str):
@@ -151,25 +183,56 @@ class AATable(SequenceTable):
                        dtype='<U1')
 
     def get_numpy_conversion(self, **kwargs):
-        def func(x):
-            ret = np.zeros([x.shape[0], 26], dtype=float)
-            ret[np.arange(ret.shape[0]), x] = 1.0
-            return ret
-        return func
-
-    def get_torch_conversion(self, **kwargs):
-        dtype = kwargs.get('dtype')
-        device = kwargs.get('device')
-        if kwargs.get('ohe', False):
+        """
+        Args:
+            maxlen (int):        the maximum sequence length to pad to
+        """
+        maxlen = kwargs.get('maxlen', None)
+        if np.issubdtype(type(maxlen), np.integer):
             def func(x):
-                ret = torch.zeros([x.shape[0], 26], dtype=dtype, device=device)
-                ret[np.arange(ret.shape[0]), x.tolist()] = 1.0
-                ret = ret.T
+                ret = np.zeros([maxlen, 26], dtype=float)
+                ret[np.arange(x.shape[0]), x] = 1.0
                 return ret
         else:
             def func(x):
-                ret = torch.tensor(x, device=device, dtype=torch.int64)
+                ret = np.zeros([x.shape[0], 26], dtype=float)
+                ret[np.arange(x.shape[0]), x] = 1.0
                 return ret
+        return func
+
+    def get_torch_conversion(self, **kwargs):
+        """
+        Args:
+            dtype:               the dtype to return data as
+            device:              the device to send data to
+            maxlen (int):        the maximum sequence length to pad to
+        """
+        dtype = kwargs.get('dtype')
+        device = kwargs.get('device')
+        maxlen = kwargs.get('maxlen')
+        if kwargs.get('ohe', False):
+            if np.issubdtype(type(maxlen), np.integer):
+                def func(x):
+                    ret = torch.zeros([maxlen, 26], dtype=dtype, device=device)
+                    ret[np.arange(x.shape[0]), x.tolist()] = 1.0
+                    ret = ret.T
+                    return ret
+            else:
+                def func(x):
+                    ret = torch.zeros([x.shape[0], 26], dtype=dtype, device=device)
+                    ret[np.arange(x.shape[0]), x.tolist()] = 1.0
+                    ret = ret.T
+                    return ret
+        else:
+            if np.issubdtype(type(maxlen), np.integer):
+                def func(x):
+                    ret = torch.tensor(x, device=device, dtype=torch.int64)
+                    return ret
+            else:
+                def func(x):
+                    ret = torch.zeros(maxlen, device=device, dtype=torch.int64)
+                    ret[0:x.shape[0]] = x
+                    return ret
         return func
 
     def get_index(self, data, target):
@@ -268,8 +331,11 @@ class DeepIndexFile(Container):
     def __len__(self):
         return len(self.seq_table)
 
-    def set_torch(self, use_torch, dtype=None, device=None, ohe=True):
-        self.seq_table.set_torch(use_torch, dtype=dtype, device=device, ohe=ohe)
+    def set_torch(self, use_torch, dtype=None, device=None, ohe=True, pad=False):
+        maxlen = None
+        if pad:
+            maxlen = np.max(self.seq_table['length'][:])
+        self.seq_table.set_torch(use_torch, dtype=dtype, device=device, ohe=ohe, maxlen=maxlen)
         self.taxa_table.set_torch(use_torch, dtype=dtype, device=device)
 
     def set_raw(self):

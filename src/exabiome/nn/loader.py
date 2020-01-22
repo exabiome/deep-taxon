@@ -44,7 +44,9 @@ class SeqDataset(Dataset):
         self.hdmfio = hdmfio
         self.difile = self.hdmfio.read()
         self.device = device
-        self.difile.set_torch(True, dtype=torch.float, device=device, ohe=kwargs.get('ohe', True))
+        self.difile.set_torch(True, dtype=torch.float, device=device,
+                              ohe=kwargs.get('ohe', True),
+                              pad=kwargs.get('pad', False))
 
     def __len__(self):
         return len(self.difile)
@@ -83,8 +85,7 @@ def train_test_validate_split(data, stratify=None, random_state=None,
         data (str): the path to the DeepIndex file
         kwargs    : any additional arguments to pass into torch.DataLoader
     """
-    orig_indices = indices
-    indices = np.arange(len(orig_indices))
+    indices = np.arange(len(data))
 
     tot = train_size + test_size + validation_size
     train_size /= tot
@@ -110,15 +111,15 @@ def train_test_validate_split(data, stratify=None, random_state=None,
                                          stratify=stratify,
                                          random_state=random_state)
 
-    train_idx = orig_indices[train_idx]
-    test_idx = orig_indices[test_idx]
-    val_idx = orig_indices[val_idx]
+    train_idx = indices[train_idx]
+    test_idx = indices[test_idx]
+    val_idx = indices[val_idx]
 
     return train_idx, test_idx, val_idx
 
 
 def train_test_loaders(path, random_state=None, downsample=None,
-                       load=False, device=None, ohe=True,
+                       load=False, device=None, ohe=True, pad=False,
                        **kwargs):
     """
     Return DataLoaders for training and test datasets.
@@ -141,7 +142,7 @@ def train_test_loaders(path, random_state=None, downsample=None,
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
-    dataset = SeqDataset(hdmfio, device=device, ohe=ohe)
+    dataset = SeqDataset(hdmfio, device=device, ohe=ohe, pad=pad)
     train_sampler = SubsetRandomSampler(train_idx)
     test_sampler = SubsetRandomSampler(test_idx)
     validate_sampler = SubsetRandomSampler(validate_idx)
