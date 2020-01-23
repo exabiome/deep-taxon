@@ -93,6 +93,7 @@ def parse_args(desc, *addl_args, argv=None):
     parser.add_argument('-D', '--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
+    parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
     parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
 
@@ -114,6 +115,38 @@ def parse_args(desc, *addl_args, argv=None):
     ret.pop('resume')
     return ret
 
+
+def train_epoch(epoch, model, data_loader, optimizer, criterion, logger):
+    model.train()
+    running_loss = 0.0
+    prev_loss = 0.0
+    n = 0
+    n_total = 0
+    log_interval = 100
+    for batch_idx, (idx, seqs, emb, orig_lens) in enumerate(data_loader):
+        optimizer.zero_grad()
+        output = model(seqs)
+        loss = criterion(output, emb)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item() * seqs.size(0)
+        n += seqs.size(0)
+        if batch_idx % log_interval == 0:
+            avg_loss = (running_loss - prev_loss) / n
+            logger.info('[{:2d}, {:5d}] loss: {:.6f}'.format(epoch, batch_idx, avg_loss))
+            prev_loss = running_loss
+            n = 0
+    return running_loss / len(data_loader.sampler)
+
+
+def test_epoch(model, data_loader, criterion):
+    model.eval()
+    running_loss = 0.0
+    with torch.no_grad():
+        for idx, seqs, emb, orig_lens in data_loader:
+            output = model(seqs)
+            running_loss += criterion(output, emb).item() * seqs.size(0)
+    return running_loss / len(data_loader.sampler)
 
 
 @docval({'name': 'input', 'type': str,
@@ -170,6 +203,9 @@ def parse_args(desc, *addl_args, argv=None):
         {'name': 'prof', 'type': str, 'default': None,
          'help': 'profile training loop and dump results to given path'},
 
+        {'name': 'sanity', 'type': bool, 'default': False,
+         'help': 'sanity check by copying response data into inputs'},
+
         {'name': '', 'type': None, 'help': '', 'default': None},
         is_method=False, allow_extra=True)
 def run_serial(**kwargs):
@@ -195,6 +231,7 @@ def run_serial(**kwargs):
     prof = kwargs['prof']
     ohe = kwargs['ohe']
     pad = kwargs['pad']
+    sanity = kwargs['sanity']
     downsample = kwargs['downsample']
 
 
@@ -255,12 +292,15 @@ def run_serial(**kwargs):
     logger.info('loading data from %s' % input)
     logger.info(f'- using {split_seed} as seed for train-test split')
     logger.info(f'- batch size: {batch_size}')
+    if sanity:
+        logger.info('running sanity check. i.e. copying response data into inputs')
     train_loader, test_loader, validate_loader = train_test_loaders(input,
                                                                     batch_size=batch_size,
                                                                     device=device,
                                                                     load=load,
                                                                     ohe=ohe,
                                                                     pad=pad,
+                                                                    sanity=sanity,
                                                                     downsample=downsample,
                                                                     random_state=split_seed)
 
@@ -282,59 +322,27 @@ def run_serial(**kwargs):
     for curr_epoch in range(curr_epoch, last_epoch):  # loop over the dataset multiple times
         logger.info(f'begin epoch {curr_epoch+1}')
 
-        prev_loss = 0.0
-        for i, data in enumerate(train_loader, 0):
-            # get the inputs; data is a list of [inputs, labels]
-            idx, seqs, emb, orig_lens = data
 
-            # zero the parameter gradients
-            optimizer.zero_grad()
+        train_loss[curr_epoch] = train_epoch(curr_epoch, model, train_loader, optimizer, criterion, logger)
+        test_loss[curr_epoch] = test_epoch(model, test_loader, criterion)
 
-            ## Modify here to adjust learning rate
-            ## Create new Optimizer object?
+        logger.info(f'epoch {curr_epoch+1} complete')
+        logger.info(f'- training loss: {train_loss[curr_epoch]}; test loss: {test_loss[curr_epoch]}')
 
-            # forward + backward + optimize
-            logger.debug('forward')
-            outputs = model(seqs, orig_len=orig_lens)
-
-            logger.debug('criterion')
-            loss = criterion(outputs, emb)
-            logger.debug('backward')
-            loss.backward()
-            logger.debug('step')
-            optimizer.step()
-
-            train_loss[curr_epoch] += loss.item()
-            if i % nprint == nprint - 1:    # print every 10th of training set
-                logger.info('[%d, %5d] loss: %.6e' %
-                            (curr_epoch + 1, i + 1, (train_loss[curr_epoch]-prev_loss)/nprint))
-                prev_loss = train_loss[curr_epoch]
-            if debug:
-                if i == 1:
-                    break
-
-        logger.debug('test loss')
-        for i, data in enumerate(test_loader, 0):
-            idx, seqs, emb, orig_lens = data
-            outputs = model(seqs, orig_len=orig_lens)
-            crit = criterion(outputs, emb).item()
-            test_loss[curr_epoch] += crit
-            if debug:
-                break
-
-        if test_loss[curr_epoch] <= test_loss[best_epoch]:
+        if curr_epoch > 0 and test_loss[curr_epoch] <= test_loss[best_epoch]:
             logger.info(f'updating best state')
             logger.info(f'- previous best loss: {test_loss[best_epoch]} (epoch {best_epoch+1})')
-            logger.info(f'- current loss:       {test_loss[curr_epoch]}')
             best_epoch = curr_epoch
             best_state = model.state_dict()
         else:
             # lower learning rate if we don't get any better for 5 epochs
             if curr_epoch - best_epoch > 5:
-                logger.info('Reducing learning rate:')
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = param_group['lr'] * 0.1
-                logger.info(str(optimizer).replace('\n', '\n' + (' '*25)))
+                pass
+                # # disable this for now
+                # logger.info('Reducing learning rate:')
+                # for param_group in optimizer.param_groups:
+                #     param_group['lr'] = param_group['lr'] * 0.1
+                # logger.info(str(optimizer).replace('\n', '\n' + (' '*25)))
 
         logger.debug('checkpointing')
         torch.save({'epoch': curr_epoch,
@@ -348,7 +356,6 @@ def run_serial(**kwargs):
                     'batch_size': batch_size,
                     }, output)
 
-        logger.info(f'epoch {curr_epoch+1} complete')
 
     if prof:
         pr.disable()
