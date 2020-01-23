@@ -319,6 +319,10 @@ class DeepIndexFile(Container):
         self.taxa_table = taxa_table
         self.distances = distances
         self.tree = tree
+        self._sanity = False
+
+    def set_sanity(self, sanity):
+        self._sanity = sanity
 
     def __getitem__(self, i):
         """
@@ -326,6 +330,13 @@ class DeepIndexFile(Container):
         """
         (seq_i, seq_name, sequence, length,
          (tax_i, taxon_name, taxon_emb, p, c, o, f, g, s)) = self.seq_table[i]
+        #breakpoint()
+        if self._sanity:
+            s = [0 for i in range(len(sequence.shape))]
+            s[-1] = np.s_[0:len(taxon_emb)]
+            sequence[s] = taxon_emb
+            sequence = sequence[0:5, 0:100]
+
         return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
 
     def __len__(self):
