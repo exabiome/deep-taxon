@@ -28,8 +28,14 @@ def get_dmat(embedding, leaf_names, metric='euclidean', logger=None):
     return dmat
 
 
+def swap_space(tree):
+    for n in tree.tips():
+        n.name = n.name.replace(' ', '_')
+
+
 def nj_tree(dmat):
     tree = nj(dmat)
+    swap_space(tree)
     return tree
 
 
@@ -41,8 +47,7 @@ def read_tree(nwk_path, leaf_names=None):
         TreeNode object for the root of the tree
     """
     tree = TreeNode.read(nwk_path, format='newick')
-    for n in tree.tips():
-        n.name = n.name.replace(' ', '_')
+    swap_space(tree)
     if leaf_names is not None:
         tree = tree.shear(leaf_names)
     return tree

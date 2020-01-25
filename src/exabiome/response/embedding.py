@@ -20,14 +20,22 @@ def read_distances(dist_h5, squareform=False):
     return dist, names
 
 
-def save_embedding(out_h5, embedding, names):
+def save_embedding(out_h5, embedding, names, **kwargs):
     """
     Save an embedding file
+
+    Args:
+        out_h5:            the output HDF5 file
+        embedding:         the embedding data
+        names:             the name or accession for each sample
+        kwargs:            any metadata to add to the file
     """
     with h5py.File(out_h5, 'w') as f:
         dset = f.create_dataset('embedding', data=embedding)
         dset = f.create_dataset('leaf_names', shape=names.shape, dtype=h5py.special_dtype(vlen=str))
         dset[:] = names
+        for k, v in kwargs.items():
+            f.attrs[k] = v
 
 
 def read_embedding(emb_h5):
@@ -67,40 +75,3 @@ def mds(dist, n_components=2, metric=False, logger=None):
     mds = MDS(dissimilarity='precomputed', metric=metric, n_components=n_components)
     emb = mds.fit_transform(dist)
     return emb
-
-
-if __name__ == '__main__':
-
-    import sys
-    import argparse
-    import logging
-    import numpy as np
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('dist_h5', type=str, help='the HDF5 file with distance data (output by tree2dmat)')
-    parser.add_argument('out_h5', type=str, help='the HDF5 file to save the embedding to')
-    parser.add_argument('-p', '--n_components', type=int, default=2, help='the number of components to use')
-    parser.add_argument('-m', '--metric', action='store_true', default=False, help='perform metric MDS')
-    parser.add_argument('-s', '--sqrt', action='store_true', default=False, help='square-root the distances before MDS')
-    parser.add_argument('-n', '--normalize', action='store_true', default=False,
-                        help='normalize samples after computing distances')
-    args = parser.parse_args()
-
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
-    logger = logging.getLogger()
-
-    logger.info('reading %s' % args.dist_h5)
-    dist, names = read_distances(args.dist_h5)
-
-    if args.sqrt:
-        logger.info('taking square root of distances')
-        dist = np.sqrt(dist)
-
-    emb = mds(dist, n_components=args.n_components, metric=args.metric, logger=logger)
-
-    if args.normalize:
-        logger.info("normalizing samples")
-        emb = normalize(emb, norm='l2', axis=1)
-
-    logger.info('saving embedding to %s' % args.out_h5)
-    save_embedding(args.out_h5, emb, names)

@@ -5,24 +5,12 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import exabiome.sequence
-from exabiome.nn import train_test_loaders
+from . import train_test_loaders
+from ..utils import parse_seed
 from hdmf.utils import docval
 
 import argparse
 import logging
-
-
-def parse_seed(string):
-    if string:
-        try:
-            i = int(string)
-            if i > 2**32 - 1:
-                raise ValueError(string)
-            return i
-        except :
-            raise argparse.ArgumentTypeError(f'{string} is not a valid seed')
-    else:
-        return int(datetime.now().timestamp())
 
 
 def parse_train_size(string):
