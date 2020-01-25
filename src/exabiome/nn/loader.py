@@ -47,6 +47,7 @@ class SeqDataset(Dataset):
         self.difile.set_torch(True, dtype=torch.float, device=device,
                               ohe=kwargs.get('ohe', True),
                               pad=kwargs.get('pad', False))
+        self.difile.set_sanity(kwargs.get('sanity', False))
 
     def __len__(self):
         return len(self.difile)
@@ -120,6 +121,7 @@ def train_test_validate_split(data, stratify=None, random_state=None,
 
 def train_test_loaders(path, random_state=None, downsample=None,
                        load=False, device=None, ohe=True, pad=False,
+                       sanity=False,
                        **kwargs):
     """
     Return DataLoaders for training and test datasets.
@@ -142,7 +144,7 @@ def train_test_loaders(path, random_state=None, downsample=None,
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
-    dataset = SeqDataset(hdmfio, device=device, ohe=ohe, pad=pad)
+    dataset = SeqDataset(hdmfio, device=device, ohe=ohe, pad=pad, sanity=sanity)
     train_sampler = SubsetRandomSampler(train_idx)
     test_sampler = SubsetRandomSampler(test_idx)
     validate_sampler = SubsetRandomSampler(validate_idx)
