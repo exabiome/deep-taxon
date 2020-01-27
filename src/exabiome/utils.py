@@ -1,5 +1,7 @@
 from datetime import datetime
 import argparse
+import glob
+import os
 
 
 def parse_seed(string):
@@ -20,7 +22,12 @@ def _get_path_helper(acc, directory, sfx):
         acc = acc[3:]
     l = [directory, 'all', acc[:3], acc[4:7], acc[7:10], acc[10:13], "%s*"%acc, "%s*%s" % (acc, sfx)]
     glob_str = os.path.join(*l)
-    return glob_str
+    result = glob.glob(glob_str)
+    if len(result) > 1:
+        raise ValueError(f'more than one file matching {glob_str}')
+    if len(result) == 0:
+        raise ValueError(f'no file matching {glob_str}')
+    return result[0]
 
 
 def get_faa_path(acc, directory):
