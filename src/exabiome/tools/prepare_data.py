@@ -54,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('out', type=str, help='output HDF5')
-    parser.add_argument('-a', '--faa', action='store_true', default=False, help='input is amino acids')
+    parser.add_argument('-p', '--protein', action='store_true', default=False, help='input is amino acids')
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
 
@@ -138,7 +138,7 @@ if __name__ == '__main__':
     logger.info("reading %d Fasta files" % len(fapaths))
     logger.info("Total size: %d", sum(os.path.getsize(f) for f in fapaths))
 
-    if args.faa:
+    if args.protein:
         logger.info("reading and writing protein sequences")
         seqit = AASeqIterator(fapaths, logger=logger, max_degenerate=args.max_deg, min_seq_len=args.min_len)
         SeqTable = AATable
