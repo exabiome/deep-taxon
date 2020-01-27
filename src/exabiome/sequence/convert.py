@@ -224,7 +224,7 @@ class AASeqIterator(AbstractSeqIterator):
     def characters(cls):
         return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
-    def __init__(self, paths, logger=None, min_seq_len=None, max_degenerate=0.25):
+    def __init__(self, paths, logger=None, min_seq_len=None, max_degenerate=None):
         """
         Args:
             paths (list): list of sequence paths
@@ -233,7 +233,7 @@ class AASeqIterator(AbstractSeqIterator):
                                     gaps to allow in sequence
         """
         super().__init__(paths, logger=logger, faa=True, min_seq_len=min_seq_len)
-        self.max_degenerate = max_degenerate
+        self.max_degenerate = 0.25 if max_degenerate is None else max_degenerate
         logger.info('skipping sequences with more than %0.4f %% gaps or degenerates' % (self.max_degenerate*100))
 
     def pack(self, seq):
