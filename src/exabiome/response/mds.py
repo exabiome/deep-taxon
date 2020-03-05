@@ -4,7 +4,7 @@ from scipy.spatial.distance import squareform as _squareform
 from sklearn.manifold import MDS
 from sklearn.preprocessing import normalize
 
-from .embedding import read_distances, save_emgedding,
+from .embedding import read_distances, save_embedding
 
 
 def mds(dist, n_components=2, metric=False, logger=None):
