@@ -4,9 +4,9 @@ import argparse
 import logging
 
 from scipy.spatial.distance import squareform, pdist
-from skbio.tree import nj
+from scipy.cluster.hierarchy import linkage, to_tree
+from skbio.tree import nj, TreeNode
 from skbio.stats.distance import DistanceMatrix
-from skbio import TreeNode
 
 from sklearn.preprocessing import normalize as _normalize
 
@@ -37,6 +37,19 @@ def nj_tree(dmat):
     tree = nj(dmat)
     swap_space(tree)
     return tree
+
+
+def _cn2tn(cn, names):
+    if cn.is_leaf():
+        return TreeNode(name=names[cn.id], length=cn.dist)
+    left = _cn2tn(cn.left, names)
+    right = _cn2tn(cn.right, names)
+    return TreeNode(name=cn.id, length=cn.dist, children=[left, right])
+
+
+def upgma_tree(dmat):
+    Z = linkage(squareform(dmat.data), method='average')
+    return _cn2tn(to_tree(Z), dmat.ids)
 
 
 def read_tree(nwk_path, leaf_names=None):
@@ -93,6 +106,8 @@ if __name__ == '__main__':
                         help='normalize samples before computing distances')
     parser.add_argument('-m', '--metric', choices=['euclidean', 'mahalanobis', 'cosine'], default='euclidean',
                         help='the metric to use for computing distances from embeddings')
+    parser.add_argument('-o', '--output', type=str, default=None,
+                        help='save the tree to OUTPUT')
     args = parser.parse_args()
     logger = logging.getLogger()
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -102,3 +117,7 @@ if __name__ == '__main__':
     logger.info("comparing trees")
     top_sim, blen_sim = compare_tree(tree, args.target_tree)
     logger.info(f"done. topology similarity: {top_sim} branch length similarity: {blen_sim}")
+    if args.output:
+        logger.info(f"saving tree to {args.output}")
+        with open(args.output, 'w') as f:
+            tree.write(f)
