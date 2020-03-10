@@ -4,6 +4,10 @@ import glob
 import os
 
 
+def get_seed():
+    return int(datetime.now().timestamp())
+
+
 def parse_seed(string):
     if string:
         try:
@@ -14,7 +18,7 @@ def parse_seed(string):
         except :
             raise argparse.ArgumentTypeError(f'{string} is not a valid seed')
     else:
-        return int(datetime.now().timestamp())
+        return get_seed()
 
 
 def _get_path_helper(acc, directory, sfx):
@@ -36,3 +40,24 @@ def get_faa_path(acc, directory):
 
 def get_fna_path(acc, directory):
     return _get_path_helper(acc, directory, '_cds_from_genomic.fna.gz')
+
+
+def _num_list(string, t):
+    if isinstance(string, (list, tuple)):
+        return string
+    elif isinstance(string, str):
+        if ':' in string:
+            ar = [t(a) for a in string.split(":")]
+            return list(range(ar[0], ar[1]+1))
+        else:
+            return list(map(t, string.split(",")))
+    else:
+        raise argparse.ArgumentTypeError(f'cannot parse {string} as list of {t}')
+
+
+def int_list(string):
+    return _num_list(string, int)
+
+
+def float_list(string):
+    return _num_list(string, int)
