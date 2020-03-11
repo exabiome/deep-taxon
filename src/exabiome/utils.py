@@ -5,7 +5,7 @@ import os
 
 
 def get_seed():
-    return int(datetime.now().timestamp())
+    return int(datetime.now().timestamp()*1000000) % (2**32 -1)
 
 
 def parse_seed(string):
@@ -60,4 +60,4 @@ def int_list(string):
 
 
 def float_list(string):
-    return _num_list(string, int)
+    return _num_list(string, float)
