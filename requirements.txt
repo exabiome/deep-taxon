@@ -1,6 +1,6 @@
 numpy
 scipy
 scikit-learn
-umap
+umap_learn
 ./scikit-bio.git
 ./hdmf.git
