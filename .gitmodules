@@ -8,5 +8,5 @@
 	path = hdmf.git
 	url = git@github.com:hdmf-dev/hdmf.git
 [submodule "umap"]
-	path = umap
+	path = umap.git
 	url = git@github.com:ajtritt/umap.git
