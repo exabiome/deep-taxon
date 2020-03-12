@@ -51,7 +51,7 @@ if __name__ == '__main__':
     from .tree import read_tree, get_dmat
     from .embedding import read_distances, read_embedding
     from .gtdb import read_taxonomy
-    from ..utils import int_list, float_list, get_seed
+    from ..utils import int_list, float_list, parse_seed
     from sklearn.model_selection import ParameterGrid
     from sklearn.preprocessing import LabelEncoder
     from umap import UMAP
@@ -67,14 +67,15 @@ if __name__ == '__main__':
     parser.add_argument('target_tree', type=str)
     parser.add_argument('metadata', type=str)
     parser.add_argument('output', type=str)
-    parser.add_argument('--n_components', type=int_list, default=[2])
-    parser.add_argument('--n_neighbors', type=int_list, default=[50])
-    parser.add_argument('--min_dist', type=float_list, default=[1.0])
-    parser.add_argument('--target_weight', type=float_list, default=[0.01])
+    parser.add_argument('-s', '--seed', type=parse_seed, default='')
+    parser.add_argument('-p', '--n_components', type=int_list, default=[2])
+    parser.add_argument('-n', '--n_neighbors', type=int_list, default=[50])
+    parser.add_argument('-d', '--min_dist', type=float_list, default=[1.0])
+    parser.add_argument('-w', '--target_weight', type=float_list, default=[0.01])
     parser.add_argument('-U', '--unsupervised', action='store_true', default=False)
     parser.add_argument('-r', '--tax_rank', choices=['phylum', 'class', 'order', 'family', 'genus'], default='phylum')
     parser.add_argument('-i', '--n_iters', default=1, type=int)
-    parser.add_argument('-p', '--n_procs', default=1, type=int)
+    parser.add_argument('-P', '--n_procs', default=1, type=int)
 
     args = parser.parse_args()
 
@@ -115,8 +116,8 @@ if __name__ == '__main__':
     def func(fargs):
         p_id, p = fargs
         row = OrderedDict()
-        logger.info(p)
         row['param_id'] = p_id
+        print(datetime.now().isoformat(), p_id, p)
         emb = UMAP(**p)
         row.update(emb.get_params())
         row.update(emb_tree(emb, dist, leaf_names, tree, mdf, **emb_kwargs))
@@ -125,14 +126,28 @@ if __name__ == '__main__':
     args_list = list()
     for p_id, p in enumerate(grid):
         for n in range(args.n_iters):
-            p['random_state'] = get_seed()
-            args_list.append((p_id, p))
+            p_copy = p.copy()
+            p_copy['random_state'] = args.seed + p_id + n
+            args_list.append((p_id, p_copy))
 
     map_func = map
     if args.n_procs > 1:
         pool = mp.Pool(args.n_procs)
         map_func = pool.imap
 
-    data = list(map_func(func, args_list))
+    def nstr(s):
+        if s is None:
+            return ''
+        return str(s)
 
-    pd.DataFrame(data=data).to_csv(args.output)
+    it = map_func(func, args_list)
+    out = open(args.output, 'w')
+    count = 0
+    try:
+        line = next(it)
+        print(',' + ','.join(line.keys()), file=out)
+        print('0,' + ','.join(map(nstr, line.values())), file=out)
+        for count, line in enumerate(it, 1):
+            print(str(count) + ',' + ','.join(map(nstr, line.values())), file=out)
+    finally:
+        out.close()
