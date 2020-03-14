@@ -4,25 +4,8 @@ from skbio.stats.distance import DistanceMatrix
 from datetime import datetime
 from scipy.stats import spearmanr, pearsonr
 import numpy as np
+from .tree import get_phylo_stats
 
-
-
-levels = ('phylum', 'class', 'order', 'family', 'genus')
-def get_phylo_stats(tree, metadata):
-    n_taxa = tree.count(True)
-    ret = dict()
-    for tl in levels:
-        total = 0
-        for p in np.unique(metadata[tl]):
-            p_members = [tree.find(_) for _ in metadata[metadata[tl] == p].index]
-            lca = tree.lowest_common_ancestor(p_members)
-            if lca.count(True) == 0 and lca.count(False):
-                c = 1
-            else:
-                c = lca.count(True)
-            total += c
-        ret[tl] = total/n_taxa
-    return ret
 
 
 def plot_species_embedding(embedding, metadata, **kwargs):

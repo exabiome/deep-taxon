@@ -54,6 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--n_components', type=int, default=2, help='the number of components to compute')
     parser.add_argument('-n', '--n_neighbors', type=int, default=100, help='the n_neighbors parameter of UMAP')
     parser.add_argument('-d', '--min_dist', type=float, default=0.1, help='the min_dist parameter of UMAP')
+    parser.add_argument('-l', '--learning_rate', type=float, default=1.0, help='the learning rate for UMAP SGD')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='the seed to use for UMAP')
     parser.add_argument('-S', '--supervised', type=str, default=None, help='do supervised embedding')
     parser.add_argument('-r', '--taxonomic_rank', type=str, default='phylum', help='the taxonomic rank to use for supervised embedding',
@@ -70,25 +71,29 @@ if __name__ == '__main__':
     labels = None
     target_metric = 'categorical'
     if args.supervised is not None:
+        rank = args.taxonomic_rank
         mdf = read_taxonomy(args.supervised, leaf_names=names)
         labels = LabelEncoder().fit_transform(mdf[args.taxonomic_rank])
 
-        phyla = np.unique(mdf['phylum'])
+        phyla = np.unique(mdf[rank])
 
         p_dist = np.zeros((phyla.shape[0], phyla.shape[0]))
 
         for i, phyla_i in enumerate(phyla):
-            mask_i = mdf['phylum'] == phyla_i
+            mask_i = mdf[rank] == phyla_i
             dist_i = dist[mask_i]
             for j, phyla_j in enumerate(phyla[i+1:], i+1):
-                mask_j = mdf['phylum'] == phyla_j
+                mask_j = mdf[rank] == phyla_j
                 p_dist[i,j] = dist[mask_i][:,mask_j].mean()
                 p_dist[j,i] = p_dist[i,j]
 
         p_emb = UMAP(n_components=5, metric='precomputed', min_dist=1, n_neighbors=15, learning_rate=0.001).fit_transform(p_dist)
+        ## for taxonomic rank class supervision
+        # p_emb = UMAP(n_components=10, metric='precomputed', min_dist=1, n_neighbors=15, learning_rate=0.001, verbose=True, n_epochs=1000).fit_transform(p_dist)
+
         labels = np.zeros((mdf.shape[0], p_emb.shape[1]))
         for i, phyla_i in enumerate(phyla):
-            mask = mdf['phylum'] == phyla_i
+            mask = mdf[rank] == phyla_i
             labels[mask] = p_emb[i]
 
         target_metric = 'l2'
@@ -104,6 +109,7 @@ if __name__ == '__main__':
                    target_metric=target_metric,
                    random_state=args.seed,
                    n_components=args.n_components,
+                   learning_rate=args.learning_rate,
                    min_dist=args.min_dist,
                    n_neighbors=args.n_neighbors)
 

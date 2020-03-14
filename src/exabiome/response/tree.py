@@ -1,4 +1,5 @@
 import h5py
+import numpy as np
 import sys
 import argparse
 import logging
@@ -31,6 +32,24 @@ def get_dmat(embedding, leaf_names, metric='euclidean', logger=None):
 def swap_space(tree):
     for n in tree.tips():
         n.name = n.name.replace(' ', '_')
+
+
+levels = ('phylum', 'class', 'order', 'family', 'genus')
+def get_phylo_stats(tree, metadata):
+    n_taxa = tree.count(True)
+    ret = dict()
+    for tl in levels:
+        total = 0
+        for p in np.unique(metadata[tl]):
+            p_members = [tree.find(_) for _ in metadata[metadata[tl] == p].index]
+            lca = tree.lowest_common_ancestor(p_members)
+            if lca.count(True) == 0 and lca.count(False):
+                c = 1
+            else:
+                c = lca.count(True)
+            total += c
+        ret[tl] = total/n_taxa
+    return ret
 
 
 def nj_tree(dmat):
@@ -79,7 +98,7 @@ def compare_tree(tree, target_nwk_path):
     return top_sim, blen_sim
 
 
-def get_tree(emb_h5, normalize=False, metric='euclidean', logger=None):
+def get_tree(emb_h5, nj=False, normalize=False, metric='euclidean', logger=None):
     if logger:
         logger.info("reading data from %s" % args.emb_h5)
     emb, leaf_names = read_embedding(emb_h5)
@@ -91,7 +110,10 @@ def get_tree(emb_h5, normalize=False, metric='euclidean', logger=None):
     dmat = get_dmat(emb, leaf_names, metric=metric, logger=logger)
     if logger:
         logger.info("computing neighbor-joining tree")
-    tree = nj_tree(dmat)
+    if nj:
+        tree = nj_tree(dmat)
+    else:
+        tree = upgma_tree(dmat)
     if logger:
         logger.info("done")
     return tree
