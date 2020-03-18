@@ -12,6 +12,7 @@ from skbio.stats.distance import DistanceMatrix
 from sklearn.preprocessing import normalize as _normalize
 
 from .embedding import read_embedding
+from .gtdb import check_accession
 
 
 def get_dmat(embedding, leaf_names, metric='euclidean', logger=None):
@@ -71,7 +72,7 @@ def upgma_tree(dmat):
     return _cn2tn(to_tree(Z), dmat.ids)
 
 
-def read_tree(nwk_path, leaf_names=None):
+def read_tree(nwk_path, leaf_names=None, trim_src_tag=False):
     """
     Read a tree in Newick format
 
@@ -82,6 +83,12 @@ def read_tree(nwk_path, leaf_names=None):
     swap_space(tree)
     if leaf_names is not None:
         tree = tree.shear(leaf_names)
+    tree = tree.unrooted_copy()
+    tree.assign_ids()
+
+    if trim_src_tag:
+        for n in tree.tips():
+            n.name = check_accession(n.name)
     return tree
 
 
