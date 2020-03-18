@@ -1,4 +1,5 @@
 import h5py
+import pandas as pd
 from scipy.spatial.distance import squareform as _squareform
 
 from sklearn.manifold import MDS
@@ -38,9 +39,13 @@ def save_embedding(out_h5, embedding, names, **kwargs):
             f.attrs[k] = v
 
 
-def read_embedding(emb_h5):
+def read_embedding(emb_h5, df=False):
     """
     Read embeddings
+
+    Args:
+        emb_h5:         path to HDF5 file
+        df:             return as a DataFrame. default is False
 
     Returns:
         tuple of embedding and leaf names
@@ -48,7 +53,13 @@ def read_embedding(emb_h5):
     with h5py.File(emb_h5, 'r') as f:
         emb = f['embedding'][:]
         taxa = f['leaf_names'][:].astype('U').tolist()
-    return emb, taxa
+
+    if df:
+        colnames = ["dim%02g" % i for i in range(emb.shape[1])]
+        df = pd.DataFrame(data=emb, columns=colnames, index=taxa)
+        return df
+    else:
+        return emb, taxa
 
 
 def mds(dist, n_components=2, metric=False, logger=None):
