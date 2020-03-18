@@ -42,6 +42,18 @@ def get_fna_path(acc, directory):
     return _get_path_helper(acc, directory, '_cds_from_genomic.fna.gz')
 
 
+def get_accession(path):
+    """
+    Return the genome accession from a given path
+
+    Example:
+    given GCA_000309865.1_MMad_1.0/GCA_000309865.1_MMad_1.0_cds_from_genomic.fna.gz,
+    return  GCA_000309865.1
+    """
+    basename = os.path.basename(path)
+    return basename[:15]
+
+
 def _num_list(string, t):
     if isinstance(string, (list, tuple)):
         return string
