@@ -19,10 +19,17 @@ def ckmer(s):
         return rc
 
 
-def get_tetramers(path, **kwargs):
+def get_windows(path, wlen, step, **kwargs):
+    for seqobj in skbio.io.read(path, 'fasta', **kwargs):
+        for start in range(0, len(seqobj), step):
+            subseq = seqobj[start:start+step]
+            subseq.metadata['id'] += "|%d-%d" % (start, start+step)
+            yield subseq
+
+def get_tetramers(seq_it):
     tnf = list()
     seqnames = list()
-    for seq_i, seqobj in enumerate(skbio.io.read(path, 'fasta', **kwargs)):
+    for seq_i, seqobj in enumerate(seq_it):
         seq = str(seqobj)
         seqnames.append(seqobj.metadata['id'])
         tnf.append(Counter(str(seq[i:i+4]) for i in range(len(seq)-3)))
@@ -49,19 +56,19 @@ def write_tnf_dataset(group, tnf_table, label_df):
     strtype = h5py.special_dtype(vlen=str)
     group.create_dataset('tetramers', data=tnf_table.columns.values, dtype=strtype)
     group.create_dataset('sequence_ids', data=tnf_table.index.values, dtype=strtype)
-    group.create_dataset('embeddings_idx', data=species, dtype=int)
-    group.create_dataset('embeddings', data=label_df.values, dtype=float)
+    group.create_dataset('embedding_idx', data=species, dtype=int)
+    group.create_dataset('embedding', data=label_df.values, dtype=float)
+    group.create_dataset('leaf_names', data=label_df.index.values, dtype=strtype)
 
 
 def read_tnf_dataset(path, group=None):
-
     with h5py.File(path, 'r') as f:
         g = f
         if group is not None:
             g = f[group]
         X = g['tnf'][:]
-        emb = g['embeddings'][:]
-        labels = g['embeddings_idx'][:]
+        emb = g['embedding'][:]
+        labels = g['embedding_idx'][:]
         y = emb[labels]
 
     return X, y, labels
@@ -73,10 +80,16 @@ if __name__ == '__main__':
     from ..response.embedding import read_embedding
     from ..response.gtdb import check_accessions
 
+    from functools import partial
+    import logging
+
     parser = argparse.ArgumentParser()
     parser.add_argument('fof', type=str, help='file of files containing sequences to count tetramers for')
     parser.add_argument('embedding_h5', type=str, help='file that contains embeddings')
     parser.add_argument('output_h5', type=str, help='file to write kmer counts to')
+    parser.add_argument('-C', '--chunk', action='store_true', default=False, help='chunk sequences by sliding window')
+    parser.add_argument('-w', '--winlen', type=int, default=1000, help='window length to chunk sequences into')
+    parser.add_argument('-s', '--step', type=int, default=100, help='the step size to take windows')
 
     args = parser.parse_args()
 
@@ -84,11 +97,21 @@ if __name__ == '__main__':
     tnf_tables = list()
     species = list()
 
+    logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.DEBUG, stream=sys.stderr)
+    logger = logging.getLogger()
+
+
+    if args.chunk:
+        load_func = partial(get_windows, wlen=args.winlen, step=args.step)
+    else:
+        load_func = partial(skbio.io.read, format='fasta')
+
     fof = open(args.fof, 'r')
     for i, path in enumerate(fof):
         path = path[:-1]
+        logger.info(f'reading {path}')
         accessions.append(get_accession(path))
-        tnf = get_tetramers(path)
+        tnf = get_tetramers(load_func(path))
         species.extend([i]*tnf.shape[0])
         tnf_tables.append(tnf)
 
