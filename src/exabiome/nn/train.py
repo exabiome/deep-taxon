@@ -123,7 +123,7 @@ def train_epoch(epoch, model, data_loader, optimizer, criterion, logger):
             logger.info('[{:2d}, {:5d}] loss: {:.6f}'.format(epoch, batch_idx, avg_loss))
             prev_loss = running_loss
             n = 0
-    return running_loss / len(data_loader.dataset)
+    return running_loss / len(data_loader.sampler)
 
 
 def test_epoch(model, data_loader, criterion):
@@ -133,7 +133,7 @@ def test_epoch(model, data_loader, criterion):
         for idx, seqs, emb, orig_lens in data_loader:
             output = model(seqs)
             running_loss += criterion(output, emb).item() * seqs.size(0)
-    return running_loss / len(data_loader.dataset)
+    return running_loss / len(data_loader.sampler)
 
 
 @docval({'name': 'input', 'type': str,
@@ -312,48 +312,6 @@ def run_serial(**kwargs):
 
         train_loss[curr_epoch] = train_epoch(curr_epoch, model, train_loader, optimizer, criterion, logger)
         test_loss[curr_epoch] = test_epoch(model, test_loader, criterion)
-#        model.train()
-#        prev_loss = 0.0
-#        for i, data in enumerate(train_loader, 0):
-#            # get the inputs; data is a list of [inputs, labels]
-#            idx, seqs, emb, orig_lens = data
-#
-#            # zero the parameter gradients
-#            optimizer.zero_grad()
-#
-#            ## Modify here to adjust learning rate
-#            ## Create new Optimizer object?
-#
-#            # forward + backward + optimize
-#            logger.debug('forward')
-#            outputs = model(seqs, orig_len=orig_lens)
-#
-#            logger.debug('criterion')
-#            loss = criterion(outputs, emb)
-#            logger.debug('backward')
-#            loss.backward()
-#            logger.debug('step')
-#            optimizer.step()
-#
-#            train_loss[curr_epoch] += loss.item()
-#            if i % nprint == nprint - 1:    # print every 10th of training set
-#                logger.info('[%d, %5d] loss: %.6e' %
-#                            (curr_epoch + 1, i + 1, (train_loss[curr_epoch]-prev_loss)/nprint))
-#                prev_loss = train_loss[curr_epoch]
-#            if debug:
-#                if i == 1:
-#                    break
-#
-#        model.eval()
-#        logger.debug('test loss')
-#        for i, data in enumerate(test_loader, 0):
-#            idx, seqs, emb, orig_lens = data
-#            outputs = model(seqs, orig_len=orig_lens)
-#            crit = criterion(outputs, emb).item()
-#            test_loss[curr_epoch] += crit
-#            if debug:
-#                break
-#
         logger.info(f'epoch {curr_epoch+1} complete')
         logger.info(f'- training loss: {train_loss[curr_epoch]}; test loss: {test_loss[curr_epoch]}')
 
