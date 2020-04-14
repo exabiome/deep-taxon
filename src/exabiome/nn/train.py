@@ -5,24 +5,12 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import exabiome.sequence
-from exabiome.nn import train_test_loaders
+from . import train_test_loaders
+from ..utils import parse_seed
 from hdmf.utils import docval
 
 import argparse
 import logging
-
-
-def parse_seed(string):
-    if string:
-        try:
-            i = int(string)
-            if i > 2**32 - 1:
-                raise ValueError(string)
-            return i
-        except :
-            raise argparse.ArgumentTypeError(f'{string} is not a valid seed')
-    else:
-        return int(datetime.now().timestamp())
 
 
 def parse_train_size(string):
@@ -121,7 +109,6 @@ def train_epoch(epoch, model, data_loader, optimizer, criterion, logger):
     running_loss = 0.0
     prev_loss = 0.0
     n = 0
-    n_total = 0
     log_interval = 100
     for batch_idx, (idx, seqs, emb, orig_lens) in enumerate(data_loader):
         optimizer.zero_grad()
@@ -325,7 +312,6 @@ def run_serial(**kwargs):
 
         train_loss[curr_epoch] = train_epoch(curr_epoch, model, train_loader, optimizer, criterion, logger)
         test_loss[curr_epoch] = test_epoch(model, test_loader, criterion)
-
         logger.info(f'epoch {curr_epoch+1} complete')
         logger.info(f'- training loss: {train_loss[curr_epoch]}; test loss: {test_loss[curr_epoch]}')
 

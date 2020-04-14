@@ -3,3 +3,4 @@ scipy
 scikit-learn
 ./scikit-bio.git
 ./hdmf.git
+./umap.git
