@@ -374,3 +374,41 @@ class DeepIndexFile(Container):
         if torch:
             self.seq_table['sequence'].target.transform(self._to_torch(device))
             self.taxa_table['embedding'].transform(self._to_torch(device))
+
+
+class ChunkedDIFile(object):
+
+    def __init__(self, di_file, wlen, step):
+        self.di_file = di_file
+        self.wlen = wlen
+        self.step = step
+
+        seq_idx = list()
+        chunk_start = list()
+        chunk_end = list()
+
+        lengths = self.difile.seqtable['length'][:]
+        for i in range(len(self.di_file)):
+            for start in range(0, lengths[i], step):
+                seq_idx.append(i)
+                chunk_start.append(start)
+                chunk_end.append(start+step)
+
+        self.seq_idx = seq_idx
+        self.start = chunk_start
+        self.end = chunk_end
+
+    def __len__(self):
+        return len(self.seq_idx)
+
+    def __getitem__(self, i):
+        if not isinstance(i, (int, np.integer)):
+            raise ValueError("ChunkedDIFile only supportsd indexing with an integer")
+
+        seq_i = self.seq_idx[i]
+        ret = self.di_file[seq_i]
+        s = self.start[i]
+        e = self.end[i]
+        ret['sequence'] = ret['sequence'][s:e]
+        ret['seq_name'] += "|%d-%d" % (s, e)
+        return ret
