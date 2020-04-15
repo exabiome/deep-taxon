@@ -376,27 +376,16 @@ class DeepIndexFile(Container):
             self.taxa_table['embedding'].transform(self._to_torch(device))
 
 
-class ChunkedDIFile(object):
+class AbstractChunkedDIFile(object):
+    """
+    An abstract class for chunking sequences from a DIFile
+    """
 
-    def __init__(self, di_file, wlen, step):
+    def __init__(self, di_file, seq_idx, start, end)
         self.di_file = di_file
-        self.wlen = wlen
-        self.step = step
-
-        seq_idx = list()
-        chunk_start = list()
-        chunk_end = list()
-
-        lengths = self.difile.seqtable['length'][:]
-        for i in range(len(self.di_file)):
-            for start in range(0, lengths[i], step):
-                seq_idx.append(i)
-                chunk_start.append(start)
-                chunk_end.append(start+step)
-
         self.seq_idx = seq_idx
-        self.start = chunk_start
-        self.end = chunk_end
+        self.start = start
+        self.end = end
 
     def __len__(self):
         return len(self.seq_idx)
@@ -412,3 +401,30 @@ class ChunkedDIFile(object):
         ret['sequence'] = ret['sequence'][s:e]
         ret['seq_name'] += "|%d-%d" % (s, e)
         return ret
+
+
+class WindowChunkedDIFile(AbstractChunkedDIFile):
+    """
+    A class for chunking sequences with a sliding window
+
+    By default windows are not overlapping
+    """
+
+    def __init__(self, di_file, wlen, step=None):
+        if step is None:
+            step = wlen
+        self.wlen = wlen
+        self.step = step
+
+        seq_idx = list()
+        chunk_start = list()
+        chunk_end = list()
+
+        lengths = self.difile.seqtable['length'][:]
+        for i in range(len(self.di_file)):
+            for start in range(0, lengths[i], step):
+                seq_idx.append(i)
+                chunk_start.append(start)
+                chunk_end.append(start+step)
+
+    super().__init__(di_file, seq_idx, chunk_start, chunk_end)
