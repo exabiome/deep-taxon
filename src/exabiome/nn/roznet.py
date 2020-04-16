@@ -53,7 +53,7 @@ class RozNet(nn.Module):
 
 
 if __name__ == '__main__':
-    from .train import parse_args, run_serial
+    from .train import parse_args, run_serial, check_model, load_dataset
     import torch.optim as optim
 
     args = parse_args("Train CNN with Spatial Pyramidal Pooling")
@@ -66,9 +66,14 @@ if __name__ == '__main__':
     if args['sanity']:
         input_nc = 5
 
-    model = RozNet(input_nc)
+
+    dataset, io = load_dataset(path=args['input'], **args)
+
+    model = check_model(RozNet(input_nc), **args)
     optimizer = optim.Adam(model.parameters(), lr=args['lr'])
+
 
     args['pad'] = True
 
-    run_serial(model=model, optimizer=optimizer, **args)
+    run_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
+    io.close()
