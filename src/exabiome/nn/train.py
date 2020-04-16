@@ -4,10 +4,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-import exabiome.sequence
-from . import train_test_loaders
+from exabiome.sequence import AbstractChunkedDIFile, WindowChunkedDIFile
+from . import SeqDataset, train_test_loaders
 from ..utils import parse_seed
 from hdmf.utils import docval
+from hdmf.common import get_hdf5io
 
 import argparse
 import logging
@@ -84,6 +85,8 @@ def parse_args(desc, *addl_args, argv=None):
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
     parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
+    parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
+    parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -94,6 +97,16 @@ def parse_args(desc, *addl_args, argv=None):
 
     args = parser.parse_args(argv)
     ret = vars(args)
+
+    logger = ret['logger']
+    # set up logger
+    if logger is None:
+        logger = logging.getLogger()
+        logger.setLevel(logging.INFO)
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+    ret['logger'] = logger
+
     if args.checkpoint is None:
         ret['checkpoint'] = False
     if args.resume:
@@ -101,7 +114,53 @@ def parse_args(desc, *addl_args, argv=None):
             # don't overwrite a given path
             ret['checkpoint'] = True
     ret.pop('resume')
+
+    if ret.pop('gpu'):
+        cuda_index = ret['cuda_index']
+        to_index = cuda_index
+        if isinstance(cuda_index, list):
+            to_index = cuda_index[0]
+        ret['device'] = torch.device(f"cuda:{to_index}")
+
+
     return ret
+
+
+def check_window(window, step):
+    if window is None:
+        return None, None
+    else:
+        if step is None:
+            step = window
+        return window, step
+
+
+def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=False,
+                 protein=False, window=None, step=None, **kwargs):
+    hdmfio = get_hdf5io(path, 'r')
+    difile = hdmfio.read()
+    if load:
+        difile.load()
+
+    window, step = check_window(window, step)
+    if window is not None:
+        difile = WindowChunkedDIFile(difile, window, step)
+
+    dataset = SeqDataset(difile, device=device, ohe=ohe, pad=pad, sanity=sanity)
+    return dataset, hdmfio
+
+
+def check_model(model, logger=None, device=None, cuda_index=0, **kwargs):
+    if device is not None:
+        to_index = cuda_index
+        if isinstance(cuda_index, list):
+            model = nn.DataParallel(model, device_ids=cuda_index)
+            if logger:
+                logger.info(f'running on GPUs {cuda_index}')
+        if logger:
+            logger.info(f'sending data to CUDA device {str(device)}')
+        model.to(device)
+    return model
 
 
 def train_epoch(epoch, model, data_loader, optimizer, criterion, logger):
@@ -136,7 +195,7 @@ def test_epoch(model, data_loader, criterion):
     return running_loss / len(data_loader.sampler)
 
 
-@docval({'name': 'input', 'type': str,
+@docval({'name': 'dataset', 'type': (SeqDataset, AbstractChunkedDIFile),
          'help': 'the input dataset'},
 
         {'name': 'model', 'type': nn.Module,
@@ -147,12 +206,6 @@ def test_epoch(model, data_loader, criterion):
 
         {'name': 'split_seed', 'type': int, 'default': None,
          'help': 'the seed to use for train-test split'},
-
-        {'name': 'gpu', 'type': bool, 'default': False,
-         'help': 'use GPU'},
-
-        {'name': 'cuda_index', 'type': (int, list), 'default': 0,
-         'help': 'which CUDA device to use'},
 
         {'name': 'epochs', 'type': int, 'default': 1,
          'help': 'the number of epochs to run'},
@@ -178,14 +231,8 @@ def test_epoch(model, data_loader, criterion):
         {'name': 'logger', 'type': logging.Logger, 'default': None,
          'help': 'the path to the log file to use'},
 
-        {'name': 'debug', 'type': bool, 'default': False,
-         'help': 'run in debug mode (one batch per epoch)'},
-
         {'name': 'downsample', 'type': float, 'default': None,
-         'help': 'downsample *input* before running'},
-
-        {'name': 'pad', 'type': bool, 'default': False,
-         'help': 'pad the sequences to be the maximum sequence length'},
+         'help': 'downsample *dataset* before running'},
 
         {'name': 'prof', 'type': str, 'default': None,
          'help': 'profile training loop and dump results to given path'},
@@ -201,45 +248,22 @@ def run_serial(**kwargs):
     """
 
     model = kwargs['model']
-    input = kwargs['input']
+    dataset = kwargs['dataset']
     optimizer = kwargs['optimizer']
-    gpu = kwargs['gpu']
     epochs = kwargs['epochs']
     checkpoint = kwargs['checkpoint']
     output = kwargs['output']
     split_seed = kwargs['split_seed']
     batch_size = kwargs['batch_size']
     train_size = kwargs['train_size']
-    cuda_index = kwargs['cuda_index']
     load = kwargs['load']
 
     logger = kwargs['logger']
-    debug = kwargs['debug']
     prof = kwargs['prof']
     ohe = kwargs['ohe']
-    pad = kwargs['pad']
     sanity = kwargs['sanity']
     downsample = kwargs['downsample']
 
-
-    # set up logger
-    if logger is None:
-        logger = logging.getLogger()
-        logger.setLevel(logging.INFO)
-
-    if debug:
-        logger.setLevel(logging.DEBUG)
-
-    device = None
-    if gpu:
-        to_index = cuda_index
-        if isinstance(cuda_index, list):
-            to_index = cuda_index[0]
-            model = nn.DataParallel(model, device_ids=cuda_index)
-            logger.info(f'running on GPUs {cuda_index}')
-        device = torch.device(f"cuda:{to_index}")
-        logger.info(f'sending data to CUDA device {str(device)}')
-        model.to(device)
 
     if isinstance(checkpoint, bool):
         if checkpoint:
@@ -281,13 +305,7 @@ def run_serial(**kwargs):
     logger.info(f'- batch size: {batch_size}')
     if sanity:
         logger.info('running sanity check. i.e. copying response data into inputs')
-    train_loader, test_loader, validate_loader = train_test_loaders(input,
-                                                                    batch_size=batch_size,
-                                                                    device=device,
-                                                                    load=load,
-                                                                    ohe=ohe,
-                                                                    pad=pad,
-                                                                    sanity=sanity,
+    train_loader, test_loader, validate_loader = train_test_loaders(dataset,
                                                                     downsample=downsample,
                                                                     random_state=split_seed)
 

@@ -10,6 +10,8 @@ from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf import Container, Data
 
 
+__all__ = ['DeepIndexFile', 'AbstractChunkedDIFile', 'WindowChunkedDIFile']
+
 NS = 'deep-index'
 
 
@@ -321,10 +323,17 @@ class DeepIndexFile(Container):
         self.tree = tree
         self._sanity = False
         self._sanity_features = 5
+        self.__labels = None
 
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
         self._sanity_features = n_features
+
+    @property
+    def labels(self):
+        if self.__labels is None:
+            self.__labels = self.seq_table['taxon'].data[:]
+        return self.__labels
 
     def __getitem__(self, i):
         """
@@ -378,14 +387,15 @@ class DeepIndexFile(Container):
 
 class AbstractChunkedDIFile(object):
     """
-    An abstract class for chunking sequences from a DIFile
+    An abstract class for chunking sequences from a DeepIndexFile
     """
 
-    def __init__(self, di_file, seq_idx, start, end)
-        self.di_file = di_file
-        self.seq_idx = seq_idx
-        self.start = start
-        self.end = end
+    def __init__(self, difile, seq_idx, start, end, labels):
+        self.difile = difile
+        self.seq_idx = np.asarray(seq_idx)
+        self.start = np.asarray(start)
+        self.end = np.asarray(end)
+        self.labels = np.asarray(labels)
 
     def __len__(self):
         return len(self.seq_idx)
@@ -395,12 +405,18 @@ class AbstractChunkedDIFile(object):
             raise ValueError("ChunkedDIFile only supportsd indexing with an integer")
 
         seq_i = self.seq_idx[i]
-        ret = self.di_file[seq_i]
+        ret = self.difile[seq_i]
         s = self.start[i]
         e = self.end[i]
         ret['sequence'] = ret['sequence'][s:e]
-        ret['seq_name'] += "|%d-%d" % (s, e)
+        ret['name'] += "|%d-%d" % (s, e)
         return ret
+
+    def set_torch(self, *args, **kwargs):
+        self.difile.set_torch(*args, **kwargs)
+
+    def set_sanity(self, *args, **kwargs):
+        self.difile.set_sanity(*args, **kwargs)
 
 
 class WindowChunkedDIFile(AbstractChunkedDIFile):
@@ -410,7 +426,7 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
     By default windows are not overlapping
     """
 
-    def __init__(self, di_file, wlen, step=None):
+    def __init__(self, difile, wlen, step=None):
         if step is None:
             step = wlen
         self.wlen = wlen
@@ -419,12 +435,16 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
         seq_idx = list()
         chunk_start = list()
         chunk_end = list()
+        labels = list()
 
-        lengths = self.difile.seqtable['length'][:]
-        for i in range(len(self.di_file)):
+        lengths = difile.seq_table['length'][:]
+        seqlabels = difile.labels
+        for i in range(len(difile)):
+            label = seqlabels[i]
             for start in range(0, lengths[i], step):
+                labels.append(label)
                 seq_idx.append(i)
                 chunk_start.append(start)
                 chunk_end.append(start+step)
 
-    super().__init__(di_file, seq_idx, chunk_start, chunk_end)
+        super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)

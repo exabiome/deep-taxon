@@ -7,3 +7,4 @@ load_namespaces(join(resource_filename(__name__, 'schema'), 'deep_index.namespac
 
 
 from . import dna_table
+from .dna_table import *
