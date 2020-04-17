@@ -80,7 +80,7 @@ class TorchableMixin:
                 return ret
         else:
             def func(x):
-                return torch.as_tensor(x, dtype=dtype, device=device).T
+                return torch.as_tensor(x, dtype=dtype, device=device)
         return func
 
     def get_numpy_conversion(self, **kwargs):
@@ -324,6 +324,7 @@ class DeepIndexFile(Container):
         self._sanity = False
         self._sanity_features = 5
         self.__labels = None
+        self.__n_emb_components = self.taxa_table['embedding'].data.shape[1]
 
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
@@ -334,6 +335,10 @@ class DeepIndexFile(Container):
         if self.__labels is None:
             self.__labels = self.seq_table['taxon'].data[:]
         return self.__labels
+
+    @property
+    def n_emb_components(self):
+        return self.__n_emb_components
 
     def __getitem__(self, i):
         """
@@ -347,6 +352,7 @@ class DeepIndexFile(Container):
             sequence[s] = taxon_emb
             # sequence = sequence[0:5, 0:100]     # use this if sanity checking RozNet
             sequence = sequence[0:5, 0:self._sanity_features]
+        # protein: (channels, length), DNA: (length, channels)
         return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
 
     def __len__(self):
@@ -408,15 +414,19 @@ class AbstractChunkedDIFile(object):
         ret = self.difile[seq_i]
         s = self.start[i]
         e = self.end[i]
-        ret['sequence'] = ret['sequence'][s:e]
+        ret['sequence'] = ret['sequence'][:,s:e]
         ret['name'] += "|%d-%d" % (s, e)
         return ret
 
-    def set_torch(self, *args, **kwargs):
-        self.difile.set_torch(*args, **kwargs)
-
-    def set_sanity(self, *args, **kwargs):
-        self.difile.set_sanity(*args, **kwargs)
+    def __getattr__(self, attr):
+        """Delegate retrival of attributes to the data in self.data"""
+        return getattr(self.difile, attr)
+#
+#    def set_torch(self, *args, **kwargs):
+#        self.difile.set_torch(*args, **kwargs)
+#
+#    def set_sanity(self, *args, **kwargs):
+#        self.difile.set_sanity(*args, **kwargs)
 
 
 class WindowChunkedDIFile(AbstractChunkedDIFile):

@@ -12,7 +12,7 @@ class RozNet(nn.Module):
         input_nc (int):  the input number of channels
     '''
 
-    def __init__(self, input_nc, first_kernel_size=7, maxpool=False):
+    def __init__(self, input_nc, n_outputs=2, first_kernel_size=7, maxpool=False):
         super(RozNet, self).__init__()
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=4, padding=2),
@@ -40,7 +40,7 @@ class RozNet(nn.Module):
             nn.Dropout(),
             nn.Linear(1024, 1024),
             nn.ReLU(inplace=True),
-            nn.Linear(1024, 2),
+            nn.Linear(1024, n_outputs),
         )
 
     def forward(self, x, **kwargs):
@@ -68,8 +68,9 @@ if __name__ == '__main__':
 
 
     dataset, io = load_dataset(path=args['input'], **args)
+    breakpoint()
 
-    model = check_model(RozNet(input_nc), **args)
+    model = check_model(RozNet(input_nc, n_outputs=dataset.difile.n_emb_components), **args)
     optimizer = optim.Adam(model.parameters(), lr=args['lr'])
 
 

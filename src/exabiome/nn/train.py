@@ -204,6 +204,9 @@ def test_epoch(model, data_loader, criterion):
         {'name': 'optimizer', 'type': optim.Optimizer,
          'help': 'the optimizer to use'},
 
+        {'name': 'criterion', 'type': nn.Module, 'default': None,
+         'help': 'the loss function to use'},
+
         {'name': 'split_seed', 'type': int, 'default': None,
          'help': 'the seed to use for train-test split'},
 
@@ -264,6 +267,7 @@ def run_serial(**kwargs):
     sanity = kwargs['sanity']
     downsample = kwargs['downsample']
 
+    criterion = kwargs['criterion'] or nn.MSELoss()
 
     if isinstance(checkpoint, bool):
         if checkpoint:
@@ -295,7 +299,6 @@ def run_serial(**kwargs):
 
 
     last_epoch = curr_epoch + epochs
-    criterion = nn.MSELoss()
 
     if downsample is not None:
         logger.info(f'downsampling dataset by a factor of {downsample}')
@@ -306,6 +309,7 @@ def run_serial(**kwargs):
     if sanity:
         logger.info('running sanity check. i.e. copying response data into inputs')
     train_loader, test_loader, validate_loader = train_test_loaders(dataset,
+                                                                    batch_size=batch_size,
                                                                     downsample=downsample,
                                                                     random_state=split_seed)
 
