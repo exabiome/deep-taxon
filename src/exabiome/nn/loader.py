@@ -40,9 +40,8 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, hdmfio, device=None, **kwargs):
-        self.hdmfio = hdmfio
-        self.difile = self.hdmfio.read()
+    def __init__(self, difile, device=None, **kwargs):
+        self.difile = difile
         self.device = device
         self.difile.set_torch(True, dtype=torch.float, device=device,
                               ohe=kwargs.get('ohe', True),
@@ -51,9 +50,6 @@ class SeqDataset(Dataset):
 
     def __len__(self):
         return len(self.difile)
-
-    def close(self):
-        self.hdmfio.close()
 
     def __getitem__(self, i):
         d = self.difile[i]
@@ -119,9 +115,7 @@ def train_test_validate_split(data, stratify=None, random_state=None,
     return train_idx, test_idx, val_idx
 
 
-def train_test_loaders(path, random_state=None, downsample=None,
-                       load=False, device=None, ohe=True, pad=False,
-                       sanity=False,
+def train_test_loaders(dataset, random_state=None, downsample=None,
                        **kwargs):
     """
     Return DataLoaders for training and test datasets.
@@ -130,21 +124,14 @@ def train_test_loaders(path, random_state=None, downsample=None,
         path (str): the path to the DeepIndex file
         kwargs    : any additional arguments to pass into torch.DataLoader
     """
-
-    hdmfio = get_hdf5io(path, 'r')
-    difile = hdmfio.read()
-    if load:
-        difile.load()
-
-    index = np.arange(len(difile.seq_table))
-    stratify = difile.seq_table['taxon'].data[:]
+    index = np.arange(len(dataset))
+    stratify = dataset.difile.labels
     if downsample is not None:
         index, _, stratify, _ = train_test_split(index, stratify, train_size=downsample)
 
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
-    dataset = SeqDataset(hdmfio, device=device, ohe=ohe, pad=pad, sanity=sanity)
     train_sampler = SubsetRandomSampler(train_idx)
     test_sampler = SubsetRandomSampler(test_idx)
     validate_sampler = SubsetRandomSampler(validate_idx)

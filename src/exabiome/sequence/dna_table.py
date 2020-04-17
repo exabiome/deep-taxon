@@ -10,6 +10,8 @@ from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf import Container, Data
 
 
+__all__ = ['DeepIndexFile', 'AbstractChunkedDIFile', 'WindowChunkedDIFile']
+
 NS = 'deep-index'
 
 
@@ -78,7 +80,7 @@ class TorchableMixin:
                 return ret
         else:
             def func(x):
-                return torch.as_tensor(x, dtype=dtype, device=device).T
+                return torch.as_tensor(x, dtype=dtype, device=device)
         return func
 
     def get_numpy_conversion(self, **kwargs):
@@ -321,10 +323,22 @@ class DeepIndexFile(Container):
         self.tree = tree
         self._sanity = False
         self._sanity_features = 5
+        self.__labels = None
+        self.__n_emb_components = self.taxa_table['embedding'].data.shape[1]
 
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
         self._sanity_features = n_features
+
+    @property
+    def labels(self):
+        if self.__labels is None:
+            self.__labels = self.seq_table['taxon'].data[:]
+        return self.__labels
+
+    @property
+    def n_emb_components(self):
+        return self.__n_emb_components
 
     def __getitem__(self, i):
         """
@@ -338,6 +352,7 @@ class DeepIndexFile(Container):
             sequence[s] = taxon_emb
             # sequence = sequence[0:5, 0:100]     # use this if sanity checking RozNet
             sequence = sequence[0:5, 0:self._sanity_features]
+        # protein: (channels, length), DNA: (length, channels)
         return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
 
     def __len__(self):
@@ -374,3 +389,72 @@ class DeepIndexFile(Container):
         if torch:
             self.seq_table['sequence'].target.transform(self._to_torch(device))
             self.taxa_table['embedding'].transform(self._to_torch(device))
+
+
+class AbstractChunkedDIFile(object):
+    """
+    An abstract class for chunking sequences from a DeepIndexFile
+    """
+
+    def __init__(self, difile, seq_idx, start, end, labels):
+        self.difile = difile
+        self.seq_idx = np.asarray(seq_idx)
+        self.start = np.asarray(start)
+        self.end = np.asarray(end)
+        self.labels = np.asarray(labels)
+
+    def __len__(self):
+        return len(self.seq_idx)
+
+    def __getitem__(self, i):
+        if not isinstance(i, (int, np.integer)):
+            raise ValueError("ChunkedDIFile only supportsd indexing with an integer")
+
+        seq_i = self.seq_idx[i]
+        ret = self.difile[seq_i]
+        s = self.start[i]
+        e = self.end[i]
+        ret['sequence'] = ret['sequence'][:,s:e]
+        ret['name'] += "|%d-%d" % (s, e)
+        return ret
+
+    def __getattr__(self, attr):
+        """Delegate retrival of attributes to the data in self.data"""
+        return getattr(self.difile, attr)
+#
+#    def set_torch(self, *args, **kwargs):
+#        self.difile.set_torch(*args, **kwargs)
+#
+#    def set_sanity(self, *args, **kwargs):
+#        self.difile.set_sanity(*args, **kwargs)
+
+
+class WindowChunkedDIFile(AbstractChunkedDIFile):
+    """
+    A class for chunking sequences with a sliding window
+
+    By default windows are not overlapping
+    """
+
+    def __init__(self, difile, wlen, step=None):
+        if step is None:
+            step = wlen
+        self.wlen = wlen
+        self.step = step
+
+        seq_idx = list()
+        chunk_start = list()
+        chunk_end = list()
+        labels = list()
+
+        lengths = difile.seq_table['length'][:]
+        seqlabels = difile.labels
+        for i in range(len(difile)):
+            label = seqlabels[i]
+            for start in range(0, lengths[i], step):
+                labels.append(label)
+                seq_idx.append(i)
+                chunk_start.append(start)
+                chunk_end.append(start+step)
+
+        super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
