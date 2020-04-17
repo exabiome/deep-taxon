@@ -16,16 +16,21 @@ class RozNet(nn.Module):
         super(RozNet, self).__init__()
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=4, padding=2),
+            nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=2),
             nn.Conv1d(64, 192, kernel_size=5, padding=2),
+            nn.BatchNorm1d(192),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=2),
             nn.Conv1d(192, 384, kernel_size=3, padding=1),
+            nn.BatchNorm1d(384),
             nn.ReLU(inplace=True),
             nn.Conv1d(384, 256, kernel_size=3, padding=1),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.Conv1d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=2),
         )
@@ -36,11 +41,14 @@ class RozNet(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(),
             nn.Linear(256*24, 1024),
+            nn.BatchNorm1d(1024),
             nn.ReLU(inplace=True),
             nn.Dropout(),
             nn.Linear(1024, 1024),
+            nn.BatchNorm1d(1024),
             nn.ReLU(inplace=True),
             nn.Linear(1024, n_outputs),
+            nn.BatchNorm1d(n_outputs)
         )
 
     def forward(self, x, **kwargs):
@@ -68,7 +76,6 @@ if __name__ == '__main__':
 
 
     dataset, io = load_dataset(path=args['input'], **args)
-    breakpoint()
 
     model = check_model(RozNet(input_nc, n_outputs=dataset.difile.n_emb_components), **args)
     optimizer = optim.Adam(model.parameters(), lr=args['lr'])
