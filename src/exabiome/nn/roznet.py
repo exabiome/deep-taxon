@@ -12,7 +12,7 @@ class RozNet(nn.Module):
         input_nc (int):  the input number of channels
     '''
 
-    def __init__(self, input_nc, n_outputs=2, first_kernel_size=7, maxpool=False):
+    def __init__(self, input_nc, n_outputs=2, first_kernel_size=7, maxpool=True):
         super(RozNet, self).__init__()
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=4, padding=2),
@@ -48,7 +48,7 @@ class RozNet(nn.Module):
             nn.BatchNorm1d(1024),
             nn.ReLU(inplace=True),
             nn.Linear(1024, n_outputs),
-            nn.BatchNorm1d(n_outputs)
+            #nn.BatchNorm1d(n_outputs)
         )
 
     def forward(self, x, **kwargs):
@@ -61,8 +61,7 @@ class RozNet(nn.Module):
 
 
 if __name__ == '__main__':
-    from .train import parse_args, run_serial, check_model, load_dataset
-    import torch.optim as optim
+    from .train import parse_args, run, check_model, load_dataset
 
     args = parse_args("Train CNN with Spatial Pyramidal Pooling")
                       #[['-E', '--emb_nc'], dict(type=int, default=0, help='the number of embedding channels. default is no embedding')])
@@ -74,14 +73,11 @@ if __name__ == '__main__':
     if args['sanity']:
         input_nc = 5
 
-
     dataset, io = load_dataset(path=args['input'], **args)
-
     model = check_model(RozNet(input_nc, n_outputs=dataset.difile.n_emb_components), **args)
-    optimizer = optim.Adam(model.parameters(), lr=args['lr'])
-
 
     args['pad'] = True
 
-    run_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
+    run(dataset, model, **args)
+
     io.close()

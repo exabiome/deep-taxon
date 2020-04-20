@@ -71,6 +71,7 @@ def parse_args(desc, *addl_args, argv=None):
     parser.add_argument('output', type=str, help='file to save model', default=None)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-r', '--resume', action='store_true', help='resume training from checkpoint stored in output', default=False)
+    parser.add_argument('-V', '--validate', action='store_true', help='run validation data through model', default=False)
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
@@ -190,9 +191,33 @@ def test_epoch(model, data_loader, criterion):
     running_loss = 0.0
     with torch.no_grad():
         for idx, seqs, emb, orig_lens in data_loader:
-            output = model(seqs)
+            try:
+                output = model(seqs)
+            except Exception as e:
+                print(idx)
+                print(orig_lens)
+                raise e
             running_loss += criterion(output, emb).item() * seqs.size(0)
     return running_loss / len(data_loader.sampler)
+
+
+def validate_epoch(model, data_loader, criterion):
+    model.eval()
+    running_loss = 0.0
+
+    outputs = list()
+    with torch.no_grad():
+        for idx, seqs, emb, orig_lens in data_loader:
+            try:
+                outputs.append(model(seqs))
+                breakpoint()
+            except Exception as e:
+                print(idx)
+                print(orig_lens)
+                raise e
+            running_loss += criterion(outputs[-1], emb).item() * seqs.size(0)
+    outputs = torch.cat(outputs)
+    return running_loss / len(data_loader.sampler), outputs
 
 
 @docval({'name': 'dataset', 'type': (SeqDataset, AbstractChunkedDIFile),
@@ -245,7 +270,7 @@ def test_epoch(model, data_loader, criterion):
 
         {'name': '', 'type': None, 'help': '', 'default': None},
         is_method=False, allow_extra=True)
-def run_serial(**kwargs):
+def train_serial(**kwargs):
     """
     Run training on a single process
     """
@@ -371,5 +396,71 @@ def run_serial(**kwargs):
 
     after = datetime.now()
     logger.info('Finished Training. Took %s seconds' % (after-before).total_seconds())
+
+
+@docval({'name': 'checkpoint', 'type': str,
+         'help': 'the path to the checkpoint file'},
+
+        {'name': 'dataset', 'type': (SeqDataset, AbstractChunkedDIFile), 'default': None,
+         'help': 'the input dataset'},
+
+        {'name': 'model', 'type': nn.Module, 'default': None,
+         'help': 'the model to load best state into'},
+
+        {'name': 'current_state', 'type': bool, 'default': False,
+         'help': 'load current state into model. load best state by default'},
+
+        {'name': 'downsample', 'type': float, 'default': None,
+         'help': 'downsample *dataset* before running'},
+
+        is_method=False, allow_extra=True)
+def load_checkpoint(**kwargs):
+    checkpoint = kwargs['checkpoint']
+    dataset = kwargs['dataset']
+    model = kwargs['model']
+    current_state = kwargs['current_state']
+    downsample = kwargs['downsample']
+
+    checkpoint = torch.load(checkpoint)
+    ret = checkpoint
+    downsample = checkpoint.get('downsample', downsample)
+
+    if model is not None:
+        if current_state:
+            model.load_state_dict(checkpoint['model_state'])
+        else:
+            model.load_state_dict(checkpoint['best_state'])
+
+    if dataset is not None:
+        train, test, validate = train_test_loaders(dataset,
+                                                   batch_size=checkpoint['batch_size'],
+                                                   downsample=downsample,
+                                                   random_state=checkpoint['split_seed'])
+        ret['train'] = train
+        ret['test'] = test
+        ret['validate'] = validate
+
+
+    ret['n_epochs'] = checkpoint['epoch']
+    ret['model'] = model
+
+    return ret
+
+
+def run(dataset, model, **args):
+
+    if args['validate']:
+        output = args['output']
+        cp = load_checkpoint(output, model=model, dataset=dataset, downsample=args['downsample'])
+        loader = cp['validate']
+        criterion = args.get('criterion', nn.MSELoss())
+        loss, outputs = validate_epoch(model, loader, criterion)
+        return loss, outputs
+    else:
+        optimizer = args.get('optimizer')
+        if optimizer is None:
+            optimizer = optim.Adam(model.parameters(), lr=args['lr'])
+        train_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
+
 
 
