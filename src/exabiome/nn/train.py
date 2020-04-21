@@ -161,6 +161,8 @@ def check_model(model, logger=None, device=None, cuda_index=0, **kwargs):
         if logger:
             logger.info(f'sending data to CUDA device {str(device)}')
         model.to(device)
+    elif isinstance(cuda_index, list):
+        model = nn.DataParallel(model)
     return model
 
 
@@ -210,7 +212,6 @@ def validate_epoch(model, data_loader, criterion):
         for idx, seqs, emb, orig_lens in data_loader:
             try:
                 outputs.append(model(seqs))
-                breakpoint()
             except Exception as e:
                 print(idx)
                 print(orig_lens)
@@ -421,7 +422,10 @@ def load_checkpoint(**kwargs):
     current_state = kwargs['current_state']
     downsample = kwargs['downsample']
 
-    checkpoint = torch.load(checkpoint)
+    map_location=None
+    if not torch.cuda.is_available():
+        map_location = torch.device('cpu')
+    checkpoint = torch.load(checkpoint, map_location=map_location)
     ret = checkpoint
     downsample = checkpoint.get('downsample', downsample)
 
@@ -450,12 +454,13 @@ def load_checkpoint(**kwargs):
 def run(dataset, model, **args):
 
     if args['validate']:
-        output = args['output']
-        cp = load_checkpoint(output, model=model, dataset=dataset, downsample=args['downsample'])
+        output = args.pop('output')
+        model = check_model(model, **args)
+        cp = load_checkpoint(output, model=model, dataset=dataset, downsample=args.get('downsample'))
         loader = cp['validate']
         criterion = args.get('criterion', nn.MSELoss())
         loss, outputs = validate_epoch(model, loader, criterion)
-        return loss, outputs
+        return loss, outputs, cp
     else:
         optimizer = args.get('optimizer')
         if optimizer is None:
