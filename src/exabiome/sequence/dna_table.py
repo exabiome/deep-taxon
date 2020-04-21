@@ -353,7 +353,7 @@ class DeepIndexFile(Container):
             # sequence = sequence[0:5, 0:100]     # use this if sanity checking RozNet
             sequence = sequence[0:5, 0:self._sanity_features]
         # protein: (channels, length), DNA: (length, channels)
-        return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
+        return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb, "class_label": tax_i}
 
     def __len__(self):
         return len(self.seq_table)
