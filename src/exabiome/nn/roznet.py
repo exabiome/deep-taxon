@@ -73,7 +73,12 @@ if __name__ == '__main__':
     if args['sanity']:
         input_nc = 5
 
+
     dataset, io = load_dataset(path=args['input'], **args)
+
+    if args['classify']:
+        n_outputs = len(dataset.difile.taxa_table)
+
     model = check_model(RozNet(input_nc, n_outputs=dataset.difile.n_emb_components), **args)
 
     args['pad'] = True

@@ -69,6 +69,7 @@ def parse_args(desc, *addl_args, argv=None):
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
+    parser.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-r', '--resume', action='store_true', help='resume training from checkpoint stored in output', default=False)
     parser.add_argument('-V', '--validate', action='store_true', help='run validation data through model', default=False)
@@ -76,7 +77,7 @@ def parse_args(desc, *addl_args, argv=None):
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpu', action='store_true', default=False, help='use GPU')
-    parser.add_argument('-C', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
+    parser.add_argument('-i', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
     parser.add_argument('-s', '--split_seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
@@ -137,7 +138,7 @@ def check_window(window, step):
 
 
 def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=False,
-                 protein=False, window=None, step=None, **kwargs):
+                 protein=False, window=None, step=None, classify=False, **kwargs):
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
     if load:
@@ -147,7 +148,7 @@ def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=Fals
     if window is not None:
         difile = WindowChunkedDIFile(difile, window, step)
 
-    dataset = SeqDataset(difile, device=device, ohe=ohe, pad=pad, sanity=sanity)
+    dataset = SeqDataset(difile, device=device, ohe=ohe, pad=pad, sanity=sanity, classify=classify)
     return dataset, hdmfio
 
 
@@ -268,6 +269,9 @@ def validate_epoch(model, data_loader, criterion):
         {'name': 'sanity', 'type': bool, 'default': False,
          'help': 'sanity check by copying response data into inputs'},
 
+        {'name': 'classify', 'type': bool, 'default': False,
+         'help': 'run a classification problem'},
+
         {'name': '', 'type': None, 'help': '', 'default': None},
         is_method=False, allow_extra=True)
 def train_serial(**kwargs):
@@ -292,7 +296,7 @@ def train_serial(**kwargs):
     sanity = kwargs['sanity']
     downsample = kwargs['downsample']
 
-    criterion = kwargs['criterion'] or nn.MSELoss()
+    criterion = kwargs['criterion'] or (nn.CrossEntropyLoss() if kwargs['classify'] else nn.MSELoss())
 
     if isinstance(checkpoint, bool):
         if checkpoint:
