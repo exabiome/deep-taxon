@@ -15,14 +15,14 @@ class RozNet(nn.Module):
     def __init__(self, input_nc, n_outputs=2, first_kernel_size=7, maxpool=True):
         super(RozNet, self).__init__()
         self.features = nn.Sequential(
-            nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=4, padding=2),
+            nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=3, stride=2),
+            nn.MaxPool1d(kernel_size=3, stride=1),
             nn.Conv1d(64, 192, kernel_size=5, padding=2),
             nn.BatchNorm1d(192),
             nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=3, stride=2),
+            nn.MaxPool1d(kernel_size=3, stride=1),
             nn.Conv1d(192, 384, kernel_size=3, padding=1),
             nn.BatchNorm1d(384),
             nn.ReLU(inplace=True),
@@ -32,7 +32,7 @@ class RozNet(nn.Module):
             nn.Conv1d(256, 256, kernel_size=3, padding=1),
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=3, stride=2),
+            nn.MaxPool1d(kernel_size=3, stride=1),
         )
         if maxpool:
             self.pool = nn.AdaptiveMaxPool1d(24)
@@ -78,8 +78,10 @@ if __name__ == '__main__':
 
     if args['classify']:
         n_outputs = len(dataset.difile.taxa_table)
+    else:
+        n_outputs = dataset.difile.n_emb_components
 
-    model = check_model(RozNet(input_nc, n_outputs=dataset.difile.n_emb_components), **args)
+    model = check_model(RozNet(input_nc, n_outputs=n_outputs), **args)
 
     args['pad'] = True
 
