@@ -47,14 +47,14 @@ class SeqDataset(Dataset):
                               ohe=kwargs.get('ohe', True),
                               pad=kwargs.get('pad', False))
         self.difile.set_sanity(kwargs.get('sanity', False))
-        self.__target_key = 'class_id' if classify else 'embedding'
+        self._target_key = 'class_label' if classify else 'embedding'
 
     def __len__(self):
         return len(self.difile)
 
     def __getitem__(self, i):
         d = self.difile[i]
-        return i, d['sequence'], d[self.__target_key]
+        return i, d['sequence'], d[self._target_key]
 
 
 def get_loader(path, **kwargs):
