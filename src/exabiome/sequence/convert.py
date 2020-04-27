@@ -207,6 +207,38 @@ class DNASeqIterator(AbstractSeqIterator):
         packed = np.packbits(np.concatenate((tfm[0::2], tfm[1::2]), axis=1))
         return packed
 
+    @classmethod
+    def pack_dna(cls, seq, ohe=None):
+        if ohe is None:
+            ohe = OneHotEncoder(sparse=False)
+            ohe.fit(np.array(list('atcgnATCGN')).reshape(-1, 1))
+            nchars = 5
+        categories = ohe.categories_[0][:nchars]
+        col2drop = categories == 'N'
+        row_mask = np.zeros(len(categories), dtype=bool)
+        row_mask[np.logical_not(col2drop)] = True
+
+        if isinstance(seq, DNA):
+            seq = seq.values.astype('U')
+        elif isinstance(seq, str):
+            seq = np.array(list(seq))
+        seq = seq.reshape(-1, 1)
+
+        tfm = ohe.transform(seq).T
+        # the first half will be uppercase and the second half will be lowercase
+        # - combine upper and lower
+        tfm[:nchars] += tfm[nchars:]
+        tfm = tfm[:nchars]
+
+        col_mask = tfm[col2drop].squeeze() == 1
+        tfm = (tfm[row_mask]).astype(np.uint8)
+        tfm[:, col_mask] = 1
+        tfm = tfm.T
+        if tfm.shape[0] % 2 == 1:
+            tfm = np.append(tfm, [[0, 0, 0, 0]], axis=0)
+        packed = np.packbits(np.concatenate((tfm[0::2], tfm[1::2]), axis=1))
+        return packed
+
 
 class UnrecognizedCharacter(Exception):
 
