@@ -10,7 +10,12 @@ from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf import Container, Data
 
 
-__all__ = ['DeepIndexFile', 'AbstractChunkedDIFile', 'WindowChunkedDIFile']
+__all__ = ['DeepIndexFile',
+           'AbstractChunkedDIFile',
+           'WindowChunkedDIFile',
+           'SequenceTable',
+           'VocabData',
+           'TaxaTable']
 
 NS = 'deep-index'
 
@@ -67,6 +72,34 @@ class PackedAAIndex(BitpackedIndex):
         return ohe_pos
 
 
+@register_class('VocabData', NS)
+class VocabData(VectorData):
+
+    __fields__ = ('vocabulary',)
+
+    @docval({'name': 'name', 'type': str, 'doc': 'the name of this VectorData'},
+            {'name': 'description', 'type': str, 'doc': 'a description for this column'},
+            {'name': 'vocabulary', 'type': ('array_data', 'data'), 'doc': 'the items in this vocabulary'},
+            {'name': 'data', 'type': ('array_data', 'data'),
+             'doc': 'a dataset where the first dimension is a concatenation of multiple vectors', 'default': list()})
+    def __init__(self, **kwargs):
+        vocab = popargs('vocabulary', kwargs)
+        super().__init__(**kwargs)
+        self.vocabulary = np.asarray(vocab)
+
+    def __getitem__(self, arg):
+        return self.get(arg, indices=False)
+
+    def get(self, arg, indices=False, join=True):
+        idx = self.data[arg]
+        if indices:
+            return idx
+        ret = self.vocabulary[idx]
+        if join:
+            ret = ''.join(ret)
+        return ret
+
+
 class TorchableMixin:
 
     def get_torch_conversion(self, **kwargs):
@@ -114,20 +147,26 @@ class TorchableMixin:
             self.convert = self.get_numpy_conversion(**kwargs)
 
 
-class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
+class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
 
     @abstractmethod
-    def get_index(self, data, target):
+    def get_sequence_index(self, data, target):
+        pass
+
+    @abstractmethod
+    def get_sequence_data(self, data):
         pass
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'sequence_name', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
             {'name': 'sequence', 'type': ('array_data', 'data', VectorData), 'doc': 'bitpacked DNA sequence'},
-            {'name': 'sequence_index', 'type': ('array_data', 'data', BitpackedIndex), 'doc': 'index for sequence'},
+            {'name': 'sequence_index', 'type': ('array_data', 'data', VectorIndex), 'doc': 'index for sequence'},
             {'name': 'length', 'type': ('array_data', 'data', VectorData), 'doc': 'lengths of sequence'},
             {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
             {'name': 'taxon_table', 'type': DynamicTable, 'doc': "target for 'taxon'", 'default': None},
-            {'name': 'pad', 'type': bool, 'doc': 'pad sequences to the maximum length sequence', 'default': False})
+            {'name': 'pad', 'type': bool, 'doc': 'pad sequences to the maximum length sequence', 'default': False},
+            {'name': 'bitpacked', 'type': bool, 'doc': 'sequence data are packed', 'default': True},
+            {'name': 'vocab', 'type': 'array_data', 'doc': 'the characters in the sequence vocabulary.', 'default': None})
     def __init__(self, **kwargs):
         sequence_name, index, sequence, taxon, taxon_table = popargs('sequence_name',
                                                              'sequence_index',
@@ -135,6 +174,9 @@ class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
                                                              'taxon',
                                                              'taxon_table',
                                                              kwargs)
+        self._bitpacked = popargs('bitpacked', kwargs)
+        vocab = popargs('vocab', kwargs)
+
         self.pad = popargs('pad', kwargs)
         seqlens = popargs('length', kwargs)
         columns = list()
@@ -149,8 +191,11 @@ class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
                 self.maxlen = np.max(seqlens.data[:])
         else:
             columns.append(VectorData('sequence_name', 'sequence names', data=sequence_name))
-            columns.append(VectorData('sequence', 'bitpacked DNA sequences', data=sequence))
-            columns.append(self.get_index(index, columns[-1]))
+            columns.append(self.get_sequence_data(sequence))
+            columns.append(self.get_sequence_index(index, columns[-1]))
+            #columns.append(VectorData('sequence', 'bitpacked DNA sequences', data=sequence))
+            #columns.append(VectorData('sequence', 'character sequence data', data=data))
+            #columns.append(VectorIndex('sequence_index', "index for 'sequence'", data=index, target=columns[-1]))
             columns.append(VectorData('length', 'sequence lengths', data=seqlens))
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
@@ -167,15 +212,54 @@ class SequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
             return tuple(ret)
 
 
-@register_class('DNATable', NS)
-class DNATable(SequenceTable):
+@register_class('SequenceTable', NS)
+class SequenceTable(AbstractSequenceTable):
 
-    def get_index(self, data, target):
+    def get_sequence_index(self, index, data):
+        return VectorIndex('sequence_index', "index for 'sequence'", data=index, target=data)
+
+    def get_sequence_data(self, data):
+        return VocabData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=self.vocab)
+
+    dna = ['A', 'C', 'G', 'T', 'N']
+
+    protein = ['A', 'B', 'C', 'D', 'E', 'F', 'G',
+               'H', 'I', 'J', 'K', 'L', 'M', 'N',
+               'O', 'P', 'Q', 'R', 'S', 'T', 'U',
+               'V', 'W', 'X', 'Y', 'Z']
+
+    @docval(*get_docval(DynamicTable.__init__),
+            {'name': 'sequence_name', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
+            {'name': 'sequence', 'type': ('array_data', 'data', VectorData), 'doc': 'bitpacked DNA sequence'},
+            {'name': 'sequence_index', 'type': ('array_data', 'data', VectorIndex), 'doc': 'index for sequence'},
+            {'name': 'length', 'type': ('array_data', 'data', VectorData), 'doc': 'lengths of sequence'},
+            {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
+            {'name': 'taxon_table', 'type': DynamicTable, 'doc': "target for 'taxon'", 'default': None},
+            {'name': 'pad', 'type': bool, 'doc': 'pad sequences to the maximum length sequence', 'default': False},
+            {'name': 'vocab', 'type': ('array_data', str), 'doc': 'the characters in the sequence vocabulary. '\
+                                                                  '*dna* for nucleic acids, *protein* for default amino acids',
+             'default': 'dna'}, )
+    def __init__(self, **kwargs):
+        vocab = popargs('vocab', kwargs)
+        if vocab is not None:
+            if isinstance(vocab, str):
+                if vocab == 'dna':
+                    vocab = self.dna
+                elif vocab == 'protein':
+                    vocab = self.protein
+        self.vocab = vocab
+        super().__init__(**kwargs)
+
+
+@register_class('DNATable', NS)
+class DNATable(AbstractSequenceTable):
+
+    def get_sequence_index(self, data, target):
         return PackedDNAIndex('sequence_index', data, target)
 
 
 @register_class('AATable', NS)
-class AATable(SequenceTable):
+class AATable(AbstractSequenceTable):
 
     charmap = np.array(['A', 'B',
                         'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
@@ -237,7 +321,7 @@ class AATable(SequenceTable):
                     return ret
         return func
 
-    def get_index(self, data, target):
+    def get_sequence_index(self, data, target):
         return PackedAAIndex('sequence_index', data, target)
 
     @classmethod
