@@ -31,6 +31,8 @@ datasets:
   attributes:
   - name: vocabulary
     dtype: text
+    shape:
+      - null
     doc: the available items in this vocabulary
 
 groups:
