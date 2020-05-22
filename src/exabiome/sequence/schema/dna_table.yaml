@@ -22,19 +22,6 @@ datasets:
     - null
   doc: a compressed distance matrix
 
-- data_type_def: VocabData
-  data_type_inc: VectorData
-  dtype: int8
-  shape:
-    - null
-  doc: controlled vocabulary data
-  attributes:
-  - name: vocabulary
-    dtype: text
-    shape:
-      - null
-    doc: the available items in this vocabulary
-
 groups:
 - data_type_def: AbstractSeqTable
   data_type_inc: DynamicTable
