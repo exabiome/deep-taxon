@@ -43,7 +43,7 @@ class SeqDataset(Dataset):
     def __init__(self, difile, device=None, **kwargs):
         self.difile = difile
         self.device = device
-        self.difile.set_torch(True, dtype=torch.float, device=device,
+        self.difile.set_torch(True, dtype=torch.long, device=device,
                               ohe=kwargs.get('ohe', True),
                               pad=kwargs.get('pad', False))
         self.difile.set_sanity(kwargs.get('sanity', False))
@@ -53,7 +53,7 @@ class SeqDataset(Dataset):
 
     def __getitem__(self, i):
         d = self.difile[i]
-        return i, d['sequence'], d['embedding']
+        return d
 
 
 def get_loader(path, **kwargs):

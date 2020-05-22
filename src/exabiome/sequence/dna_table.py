@@ -3,10 +3,12 @@ import math
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from hdmf.common import VectorIndex, VectorData, DynamicTable,\
-                        DynamicTableRegion, register_class
+                        DynamicTableRegion, register_class, VocabData
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
+from hdmf.data_utils import DataIO
 from hdmf import Container, Data
 
 
@@ -14,7 +16,6 @@ __all__ = ['DeepIndexFile',
            'AbstractChunkedDIFile',
            'WindowChunkedDIFile',
            'SequenceTable',
-           'VocabData',
            'TaxaTable']
 
 NS = 'deep-index'
@@ -70,34 +71,6 @@ class PackedAAIndex(BitpackedIndex):
         ohe_pos = np.trim_zeros(ohe_pos)
         ohe_pos = ohe_pos - 1
         return ohe_pos
-
-
-@register_class('VocabData', NS)
-class VocabData(VectorData):
-
-    __fields__ = ('vocabulary',)
-
-    @docval({'name': 'name', 'type': str, 'doc': 'the name of this VectorData'},
-            {'name': 'description', 'type': str, 'doc': 'a description for this column'},
-            {'name': 'vocabulary', 'type': ('array_data', 'data'), 'doc': 'the items in this vocabulary'},
-            {'name': 'data', 'type': ('array_data', 'data'),
-             'doc': 'a dataset where the first dimension is a concatenation of multiple vectors', 'default': list()})
-    def __init__(self, **kwargs):
-        vocab = popargs('vocabulary', kwargs)
-        super().__init__(**kwargs)
-        self.vocabulary = np.asarray(vocab)
-
-    def __getitem__(self, arg):
-        return self.get(arg, indices=False)
-
-    def get(self, arg, indices=False, join=True):
-        idx = self.data[arg]
-        if indices:
-            return idx
-        ret = self.vocabulary[idx]
-        if join:
-            ret = ''.join(ret)
-        return ret
 
 
 class TorchableMixin:
@@ -193,9 +166,6 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
             columns.append(VectorData('sequence_name', 'sequence names', data=sequence_name))
             columns.append(self.get_sequence_data(sequence))
             columns.append(self.get_sequence_index(index, columns[-1]))
-            #columns.append(VectorData('sequence', 'bitpacked DNA sequences', data=sequence))
-            #columns.append(VectorData('sequence', 'character sequence data', data=data))
-            #columns.append(VectorIndex('sequence_index', "index for 'sequence'", data=index, target=columns[-1]))
             columns.append(VectorData('length', 'sequence lengths', data=seqlens))
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
@@ -208,7 +178,6 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
         else:
             ret = list(super().__getitem__(key))
             # sequence data will come from the third column
-            ret[2] = self.convert(ret[2])
             return tuple(ret)
 
 
@@ -216,10 +185,14 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
 class SequenceTable(AbstractSequenceTable):
 
     def get_sequence_index(self, index, data):
-        return VectorIndex('sequence_index', "index for 'sequence'", data=index, target=data)
+        return VectorIndex('sequence_index', index, data)
 
     def get_sequence_data(self, data):
-        return VocabData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=self.vocab)
+        if isinstance(data, DataIO):
+            vocab = data.data.data.encoded_vocab
+        else:
+            vocab = self.vocab
+        return VocabData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=vocab)
 
     dna = ['A', 'C', 'G', 'T', 'N']
 
@@ -252,14 +225,14 @@ class SequenceTable(AbstractSequenceTable):
 
 
 @register_class('DNATable', NS)
-class DNATable(AbstractSequenceTable):
+class DNATable(SequenceTable):
 
     def get_sequence_index(self, data, target):
         return PackedDNAIndex('sequence_index', data, target)
 
 
 @register_class('AATable', NS)
-class AATable(AbstractSequenceTable):
+class AATable(SequenceTable):
 
     charmap = np.array(['A', 'B',
                         'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
@@ -371,8 +344,6 @@ class TaxaTable(DynamicTable, TorchableMixin):
             return super().__getitem__(key)
         else:
             ret = list(super().__getitem__(key))
-            # sequence data will come from the third column
-            ret[2] = self.convert(ret[2])
             return tuple(ret)
 
 
@@ -394,7 +365,7 @@ class DeepIndexFile(Container):
                   {'name': 'distances', 'child': True},
                   {'name': 'tree', 'child': True})
 
-    @docval({'name': 'seq_table', 'type': (AATable, DNATable), 'doc': 'the table storing DNA sequences'},
+    @docval({'name': 'seq_table', 'type': (AATable, DNATable, SequenceTable), 'doc': 'the table storing DNA sequences'},
             {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
             {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information'},
             {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'})
@@ -409,6 +380,7 @@ class DeepIndexFile(Container):
         self._sanity_features = 5
         self.__labels = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1]
+        self.label_key = 'id'
 
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
@@ -428,16 +400,17 @@ class DeepIndexFile(Container):
         """
         Return a tuple containing (taxon_name, sequence_name, sequence, taxon_embedding)
         """
-        (seq_i, seq_name, sequence, length,
-         (tax_i, taxon_name, taxon_emb, p, c, o, f, g, s)) = self.seq_table[i]
-        if self._sanity:
-            s = [0 for i in range(len(sequence.shape))]
-            s[-1] = np.s_[0:len(taxon_emb)]
-            sequence[s] = taxon_emb
-            # sequence = sequence[0:5, 0:100]     # use this if sanity checking RozNet
-            sequence = sequence[0:5, 0:self._sanity_features]
-        # protein: (channels, length), DNA: (length, channels)
-        return {'taxon': taxon_name, 'name': seq_name, "sequence": sequence, "embedding": taxon_emb}
+        return self.get(i)
+
+    def get(self, arg):
+        idx = self.seq_table.id[arg]
+        seq = self.seq_table['sequence'].get(arg, index=True).astype(np.int)
+        seq = self.seq_table.convert(seq)
+        seq = F.one_hot(seq).T.float()
+        label = self.seq_table['taxon'].get(arg, index=True)
+        label = self.taxa_table[self.label_key][arg]
+        label = self.taxa_table.convert(label)
+        return (idx, seq, label)
 
     def __len__(self):
         return len(self.seq_table)
