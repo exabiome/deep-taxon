@@ -75,6 +75,11 @@ class PackedAAIndex(BitpackedIndex):
 
 class TorchableMixin:
 
+
+    def __init__(self, *args, **kwargs):
+        self.use_torch = False
+        self.classify = False
+
     def get_torch_conversion(self, **kwargs):
         dtype = kwargs.get('dtype')
         device = kwargs.get('device')
@@ -118,6 +123,9 @@ class TorchableMixin:
             self.convert = self.get_torch_conversion(**kwargs)
         else:
             self.convert = self.get_numpy_conversion(**kwargs)
+
+    def set_classify(self, classify):
+        self.classify = classify
 
 
 class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
@@ -339,12 +347,35 @@ class TaxaTable(DynamicTable, TorchableMixin):
         call_docval_func(super().__init__, kwargs)
         self.convert = self.get_numpy_conversion()
 
+
+    def taxid_torch_conversion(self, num_classes, device=None):
+        def func(x):
+            ret = torch.zeros(num_classes, dtype=torch.long, device=device)
+            ret[x] = 1
+            return ret
+        return func
+
+    def taxid_numpy_conversion(self, num_classes):
+        def func(x):
+            ret = np.zeros(num_classes, dtype=np.uint8)
+            ret[x] = 1
+            return ret
+        return func
+
     def __getitem__(self, key):
         if isinstance(key, str):
             return super().__getitem__(key)
         else:
             ret = list(super().__getitem__(key))
             return tuple(ret)
+
+    def set_torch(self, use_torch, device=None, **kwargs):
+        super().set_torch(use_torch, device=device, **kwargs)
+        if use_torch:
+            self.convert_taxa = self.get_torch_conversion(device=device, dtype=torch.long)
+        else:
+            self.convert_taxa = self.get_numpy_conversion(len(self))
+
 
 
 @register_class('CondensedDistanceMatrix', NS)

@@ -40,13 +40,14 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, difile, device=None, **kwargs):
+    def __init__(self, difile, device=None, classify=False, **kwargs):
         self.difile = difile
         self.device = device
         self.difile.set_torch(True, dtype=torch.long, device=device,
                               ohe=kwargs.get('ohe', True),
                               pad=kwargs.get('pad', False))
         self.difile.set_sanity(kwargs.get('sanity', False))
+        self._target_key = 'class_label' if classify else 'embedding'
 
     def __len__(self):
         return len(self.difile)
