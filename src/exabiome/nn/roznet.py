@@ -66,7 +66,7 @@ if __name__ == '__main__':
     args = parse_args("Train CNN with Spatial Pyramidal Pooling")
                       #[['-E', '--emb_nc'], dict(type=int, default=0, help='the number of embedding channels. default is no embedding')])
 
-    input_nc = 4
+    input_nc = 5
     if args['protein']:
         input_nc = 26
 

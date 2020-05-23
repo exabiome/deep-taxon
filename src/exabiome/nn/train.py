@@ -149,6 +149,8 @@ def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=Fals
         difile = WindowChunkedDIFile(difile, window, step)
 
     dataset = SeqDataset(difile, device=device, ohe=ohe, pad=pad, sanity=sanity, classify=classify)
+    #if not classify:
+    #    dataset.difile.label_key = 'embedding'
     return dataset, hdmfio
 
 
@@ -209,17 +211,20 @@ def validate_epoch(model, data_loader, criterion):
     running_loss = 0.0
 
     outputs = list()
+    labels = list()
     with torch.no_grad():
         for idx, seqs, emb, orig_lens in data_loader:
             try:
                 outputs.append(model(seqs))
+                labels.append(emb)
             except Exception as e:
                 print(idx)
                 print(orig_lens)
                 raise e
             running_loss += criterion(outputs[-1], emb).item() * seqs.size(0)
     outputs = torch.cat(outputs)
-    return running_loss / len(data_loader.sampler), outputs
+    labels = torch.cat(labels)
+    return running_loss / len(data_loader.sampler), outputs, labels
 
 
 @docval({'name': 'dataset', 'type': (SeqDataset, AbstractChunkedDIFile),
@@ -394,12 +399,12 @@ def train_serial(**kwargs):
                     'batch_size': batch_size,
                     }, output)
 
-
     if prof:
         pr.disable()
         pr.dump_stats(prof)
 
     after = datetime.now()
+    logger.info(f'best loss: {test_loss[best_epoch]} (epoch {best_epoch+1})')
     logger.info('Finished Training. Took %s seconds' % (after-before).total_seconds())
 
 
@@ -430,6 +435,11 @@ def load_checkpoint(**kwargs):
     if not torch.cuda.is_available():
         map_location = torch.device('cpu')
     checkpoint = torch.load(checkpoint, map_location=map_location)
+
+    # remove keys left from saving in DataParallel
+    checkpoint['model_state'] = clean_state_dict(checkpoint['model_state'])
+    checkpoint['best_state'] = clean_state_dict(checkpoint['best_state'])
+
     ret = checkpoint
     downsample = checkpoint.get('downsample', downsample)
 
@@ -448,10 +458,17 @@ def load_checkpoint(**kwargs):
         ret['test'] = test
         ret['validate'] = validate
 
-
     ret['n_epochs'] = checkpoint['epoch']
     ret['model'] = model
+    return ret
 
+
+def clean_state_dict(sd):
+    ret = dict()
+    for k,v in sd.items():
+        if k.startswith('module'):
+            k = k[7:]
+        ret[k] = v
     return ret
 
 
@@ -459,17 +476,35 @@ def run(dataset, model, **args):
 
     if args['validate']:
         output = args.pop('output')
-        model = check_model(model, **args)
+        logger = args['logger']
         cp = load_checkpoint(output, model=model, dataset=dataset, downsample=args.get('downsample'))
         loader = cp['validate']
-        criterion = args.get('criterion', nn.MSELoss())
-        loss, outputs = validate_epoch(model, loader, criterion)
-        return loss, outputs, cp
+        criterion = nn.CrossEntropyLoss() if args['classify'] else nn.MSELoss()
+        loss, outputs, labels = validate_epoch(model, loader, criterion)
+        if args['classify']:
+            _, pred = torch.max(outputs.data, 1)
+            n_correct = (pred == labels).sum().item()
+        else:
+            knn = loader.dataset.difile.get_knn_classifier()
+            loader.dataset.set_classify(True)
+            labels = torch.cat([_[2] for _ in loader])
+            dat = outputs.data
+            if dat.device.type == 'cuda':
+                dat = dat.cpu()
+            if labels.device.type == 'cuda':
+                labels = labels.cpu()
+            labels = labels.numpy()
+            pred = knn.predict(dat)
+            n_correct = (pred == labels).sum()
+        acc = n_correct/outputs.shape[0]
+        best_test_loss = cp['test_loss'][cp['best_epoch']]
+
+        logger.info(f'Test loss: {best_test_loss}')
+        logger.info(f'Validation loss: {loss}')
+        logger.info(f'Validation accuracy: {acc}')
+        return loss, outputs, cp, acc
     else:
         optimizer = args.get('optimizer')
         if optimizer is None:
             optimizer = optim.Adam(model.parameters(), lr=args['lr'])
         train_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
-
-
-

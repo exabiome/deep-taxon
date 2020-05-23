@@ -4,6 +4,7 @@ import math
 import numpy as np
 import torch
 import torch.nn.functional as F
+import sklearn.neighbors as skn
 
 from hdmf.common import VectorIndex, VectorData, DynamicTable,\
                         DynamicTableRegion, register_class, VocabData
@@ -439,7 +440,7 @@ class DeepIndexFile(Container):
         seq = self.seq_table.convert(seq)
         seq = F.one_hot(seq).T.float()
         label = self.seq_table['taxon'].get(arg, index=True)
-        label = self.taxa_table[self.label_key][arg]
+        label = self.taxa_table[self.label_key][label]
         label = self.taxa_table.convert(label)
         return (idx, seq, label)
 
@@ -459,6 +460,23 @@ class DeepIndexFile(Container):
     def to_sequence(self, data):
         return self.seq_table.to_sequence(data)
 
+    def get_knn_classifier(self, **kwargs):
+        """
+        Build a KNeighborsClassifier from taxonomic embeddings
+
+        By default, use only a single neighbor
+
+        Args:
+            kwargs  : arguments to sklearn.neighbors.KNeighborsClassifier constructor
+
+
+        """
+        kwargs.setdefault('n_neighbors', 1)
+        ret = skn.KNeighborsClassifier(**kwargs)
+        emb = self.taxa_table['embedding'][:]
+        ret.fit(emb, np.arange(emb.shape[0]))
+        return ret
+
     @staticmethod
     def _to_numpy(data):
         return data[:]
@@ -477,6 +495,7 @@ class DeepIndexFile(Container):
         if torch:
             self.seq_table['sequence'].target.transform(self._to_torch(device))
             self.taxa_table['embedding'].transform(self._to_torch(device))
+
 
 
 class AbstractChunkedDIFile(object):
