@@ -40,20 +40,32 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, difile, device=None, **kwargs):
+    def __init__(self, difile, device=None, classify=False, **kwargs):
         self.difile = difile
         self.device = device
-        self.difile.set_torch(True, dtype=torch.float, device=device,
-                              ohe=kwargs.get('ohe', True),
-                              pad=kwargs.get('pad', False))
+        #self.difile.set_torch(True, dtype=torch.long, device=device,
+        #                      ohe=kwargs.get('ohe', True),
+        #                      pad=kwargs.get('pad', False))
+
+        self.set_classify(classify)
+        self.difile.seq_table.set_torch(True, dtype=torch.long, device=self.device)
         self.difile.set_sanity(kwargs.get('sanity', False))
+        self._target_key = 'class_label' if classify else 'embedding'
+
+    def set_classify(self, classify):
+        if classify:
+            self.difile.label_key = 'id'
+            self.difile.taxa_table.set_torch(True, dtype=torch.long, device=self.device)
+        else:
+            self.difile.label_key = 'embedding'
+            self.difile.taxa_table.set_torch(True, dtype=torch.float, device=self.device)
 
     def __len__(self):
         return len(self.difile)
 
     def __getitem__(self, i):
         d = self.difile[i]
-        return i, d['sequence'], d['embedding']
+        return d
 
 
 def get_loader(path, **kwargs):

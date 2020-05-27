@@ -69,13 +69,15 @@ def parse_args(desc, *addl_args, argv=None):
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
+    parser.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-r', '--resume', action='store_true', help='resume training from checkpoint stored in output', default=False)
+    parser.add_argument('-V', '--validate', action='store_true', help='run validation data through model', default=False)
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpu', action='store_true', default=False, help='use GPU')
-    parser.add_argument('-C', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
+    parser.add_argument('-i', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
     parser.add_argument('-s', '--split_seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
@@ -136,7 +138,7 @@ def check_window(window, step):
 
 
 def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=False,
-                 protein=False, window=None, step=None, **kwargs):
+                 protein=False, window=None, step=None, classify=False, **kwargs):
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
     if load:
@@ -146,7 +148,9 @@ def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=Fals
     if window is not None:
         difile = WindowChunkedDIFile(difile, window, step)
 
-    dataset = SeqDataset(difile, device=device, ohe=ohe, pad=pad, sanity=sanity)
+    dataset = SeqDataset(difile, device=device, ohe=ohe, pad=pad, sanity=sanity, classify=classify)
+    #if not classify:
+    #    dataset.difile.label_key = 'embedding'
     return dataset, hdmfio
 
 
@@ -160,6 +164,8 @@ def check_model(model, logger=None, device=None, cuda_index=0, **kwargs):
         if logger:
             logger.info(f'sending data to CUDA device {str(device)}')
         model.to(device)
+    elif isinstance(cuda_index, list):
+        model = nn.DataParallel(model)
     return model
 
 
@@ -190,9 +196,35 @@ def test_epoch(model, data_loader, criterion):
     running_loss = 0.0
     with torch.no_grad():
         for idx, seqs, emb, orig_lens in data_loader:
-            output = model(seqs)
+            try:
+                output = model(seqs)
+            except Exception as e:
+                print(idx)
+                print(orig_lens)
+                raise e
             running_loss += criterion(output, emb).item() * seqs.size(0)
     return running_loss / len(data_loader.sampler)
+
+
+def validate_epoch(model, data_loader, criterion):
+    model.eval()
+    running_loss = 0.0
+
+    outputs = list()
+    labels = list()
+    with torch.no_grad():
+        for idx, seqs, emb, orig_lens in data_loader:
+            try:
+                outputs.append(model(seqs))
+                labels.append(emb)
+            except Exception as e:
+                print(idx)
+                print(orig_lens)
+                raise e
+            running_loss += criterion(outputs[-1], emb).item() * seqs.size(0)
+    outputs = torch.cat(outputs)
+    labels = torch.cat(labels)
+    return running_loss / len(data_loader.sampler), outputs, labels
 
 
 @docval({'name': 'dataset', 'type': (SeqDataset, AbstractChunkedDIFile),
@@ -243,9 +275,12 @@ def test_epoch(model, data_loader, criterion):
         {'name': 'sanity', 'type': bool, 'default': False,
          'help': 'sanity check by copying response data into inputs'},
 
+        {'name': 'classify', 'type': bool, 'default': False,
+         'help': 'run a classification problem'},
+
         {'name': '', 'type': None, 'help': '', 'default': None},
         is_method=False, allow_extra=True)
-def run_serial(**kwargs):
+def train_serial(**kwargs):
     """
     Run training on a single process
     """
@@ -267,7 +302,7 @@ def run_serial(**kwargs):
     sanity = kwargs['sanity']
     downsample = kwargs['downsample']
 
-    criterion = kwargs['criterion'] or nn.MSELoss()
+    criterion = kwargs['criterion'] or (nn.CrossEntropyLoss() if kwargs['classify'] else nn.MSELoss())
 
     if isinstance(checkpoint, bool):
         if checkpoint:
@@ -364,12 +399,112 @@ def run_serial(**kwargs):
                     'batch_size': batch_size,
                     }, output)
 
-
     if prof:
         pr.disable()
         pr.dump_stats(prof)
 
     after = datetime.now()
+    logger.info(f'best loss: {test_loss[best_epoch]} (epoch {best_epoch+1})')
     logger.info('Finished Training. Took %s seconds' % (after-before).total_seconds())
 
 
+@docval({'name': 'checkpoint', 'type': str,
+         'help': 'the path to the checkpoint file'},
+
+        {'name': 'dataset', 'type': (SeqDataset, AbstractChunkedDIFile), 'default': None,
+         'help': 'the input dataset'},
+
+        {'name': 'model', 'type': nn.Module, 'default': None,
+         'help': 'the model to load best state into'},
+
+        {'name': 'current_state', 'type': bool, 'default': False,
+         'help': 'load current state into model. load best state by default'},
+
+        {'name': 'downsample', 'type': float, 'default': None,
+         'help': 'downsample *dataset* before running'},
+
+        is_method=False, allow_extra=True)
+def load_checkpoint(**kwargs):
+    checkpoint = kwargs['checkpoint']
+    dataset = kwargs['dataset']
+    model = kwargs['model']
+    current_state = kwargs['current_state']
+    downsample = kwargs['downsample']
+
+    map_location=None
+    if not torch.cuda.is_available():
+        map_location = torch.device('cpu')
+    checkpoint = torch.load(checkpoint, map_location=map_location)
+
+    # remove keys left from saving in DataParallel
+    checkpoint['model_state'] = clean_state_dict(checkpoint['model_state'])
+    checkpoint['best_state'] = clean_state_dict(checkpoint['best_state'])
+
+    ret = checkpoint
+    downsample = checkpoint.get('downsample', downsample)
+
+    if model is not None:
+        if current_state:
+            model.load_state_dict(checkpoint['model_state'])
+        else:
+            model.load_state_dict(checkpoint['best_state'])
+
+    if dataset is not None:
+        train, test, validate = train_test_loaders(dataset,
+                                                   batch_size=checkpoint['batch_size'],
+                                                   downsample=downsample,
+                                                   random_state=checkpoint['split_seed'])
+        ret['train'] = train
+        ret['test'] = test
+        ret['validate'] = validate
+
+    ret['n_epochs'] = checkpoint['epoch']
+    ret['model'] = model
+    return ret
+
+
+def clean_state_dict(sd):
+    ret = dict()
+    for k,v in sd.items():
+        if k.startswith('module'):
+            k = k[7:]
+        ret[k] = v
+    return ret
+
+
+def run(dataset, model, **args):
+
+    if args['validate']:
+        output = args.pop('output')
+        logger = args['logger']
+        cp = load_checkpoint(output, model=model, dataset=dataset, downsample=args.get('downsample'))
+        loader = cp['validate']
+        criterion = nn.CrossEntropyLoss() if args['classify'] else nn.MSELoss()
+        loss, outputs, labels = validate_epoch(model, loader, criterion)
+        if args['classify']:
+            _, pred = torch.max(outputs.data, 1)
+            n_correct = (pred == labels).sum().item()
+        else:
+            knn = loader.dataset.difile.get_knn_classifier()
+            loader.dataset.set_classify(True)
+            labels = torch.cat([_[2] for _ in loader])
+            dat = outputs.data
+            if dat.device.type == 'cuda':
+                dat = dat.cpu()
+            if labels.device.type == 'cuda':
+                labels = labels.cpu()
+            labels = labels.numpy()
+            pred = knn.predict(dat)
+            n_correct = (pred == labels).sum()
+        acc = n_correct/outputs.shape[0]
+        best_test_loss = cp['test_loss'][cp['best_epoch']]
+
+        logger.info(f'Test loss: {best_test_loss}')
+        logger.info(f'Validation loss: {loss}')
+        logger.info(f'Validation accuracy: {acc}')
+        return loss, outputs, cp, acc
+    else:
+        optimizer = args.get('optimizer')
+        if optimizer is None:
+            optimizer = optim.Adam(model.parameters(), lr=args['lr'])
+        train_serial(dataset=dataset, model=model, optimizer=optimizer, **args)

@@ -44,8 +44,8 @@ if __name__ == '__main__':
     from hdmf.common import get_hdf5io
     from hdmf.data_utils import DataChunkIterator
 
-    from exabiome.sequence.convert import AASeqIterator, DNASeqIterator
-    from exabiome.sequence.dna_table import AATable, DNATable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
+    from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator
+    from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
 
     parser = argparse.ArgumentParser()
     parser.add_argument('fof', type=str, help='file of Fasta files')
@@ -57,6 +57,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input is amino acids')
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
+    parser.add_argument('-V', '--vocab', action='store_true', default=False, help='store sequences as vocabulary data')
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -64,7 +65,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(asctime)s - %(message)s')
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
 
     logger.info('reading Fasta paths from %s' % args.tree)
@@ -138,14 +139,21 @@ if __name__ == '__main__':
     logger.info("reading %d Fasta files" % len(fapaths))
     logger.info("Total size: %d", sum(os.path.getsize(f) for f in fapaths))
 
-    if args.protein:
-        logger.info("reading and writing protein sequences")
-        seqit = AASeqIterator(fapaths, logger=logger, max_degenerate=args.max_deg, min_seq_len=args.min_len)
-        SeqTable = AATable
+    if args.vocab:
+        if args.protein:
+            seqit = AAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+        else:
+            seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+        SeqTable = SequenceTable
     else:
-        logger.info("reading and writing DNA sequences")
-        seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
-        SeqTable = DNATable
+        if args.protein:
+            logger.info("reading and writing protein sequences")
+            seqit = AASeqIterator(fapaths, logger=logger, max_degenerate=args.max_deg, min_seq_len=args.min_len)
+            SeqTable = AATable
+        else:
+            logger.info("reading and writing DNA sequences")
+            seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+            SeqTable = DNATable
 
     seqit_bsize = 2**15 if args.protein else 2**18
     packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=seqit_bsize, dtype=np.dtype('uint8'))

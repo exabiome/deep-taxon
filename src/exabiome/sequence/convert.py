@@ -1,7 +1,7 @@
 import skbio.io
 from skbio.sequence import DNA, Protein
 import re
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 import numpy as np
 from collections import deque
 from abc import ABCMeta, abstractmethod
@@ -45,7 +45,7 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
         self.__total_len = 0
         self.__nseqs = 0
         self.skbio_cls = Protein if faa else DNA
-        self.logger.debug('reading %s' % self.skbio_cls.__name__)
+        self.logger.info('reading %s' % self.skbio_cls.__name__)
 
         self.__curr_block = np.zeros((0, self.nchars), dtype=np.uint8)
         self.__curr_block_idx = 0
@@ -169,7 +169,7 @@ class AbstractSeqIterator(object, metaclass=ABCMeta):
         return seq.metadata['id']
 
     def _read_seq(self, path):
-        self.logger.debug('reading %s', path)
+        self.logger.info('reading %s', path)
         kwargs = {'format': 'fasta', 'constructor': self.skbio_cls, 'validate': False}
         for seq_i, seq in enumerate(skbio.io.read(path, **kwargs)):
             ltag = self.get_seqname(seq)
@@ -207,12 +207,46 @@ class DNASeqIterator(AbstractSeqIterator):
         packed = np.packbits(np.concatenate((tfm[0::2], tfm[1::2]), axis=1))
         return packed
 
+    @classmethod
+    def pack_dna(cls, seq, ohe=None):
+        if ohe is None:
+            ohe = OneHotEncoder(sparse=False)
+            ohe.fit(np.array(list('atcgnATCGN')).reshape(-1, 1))
+            nchars = 5
+        categories = ohe.categories_[0][:nchars]
+        col2drop = categories == 'N'
+        row_mask = np.zeros(len(categories), dtype=bool)
+        row_mask[np.logical_not(col2drop)] = True
+
+        if isinstance(seq, DNA):
+            seq = seq.values.astype('U')
+        elif isinstance(seq, str):
+            seq = np.array(list(seq))
+        seq = seq.reshape(-1, 1)
+
+        tfm = ohe.transform(seq).T
+        # the first half will be uppercase and the second half will be lowercase
+        # - combine upper and lower
+        tfm[:nchars] += tfm[nchars:]
+        tfm = tfm[:nchars]
+
+        col_mask = tfm[col2drop].squeeze() == 1
+        tfm = (tfm[row_mask]).astype(np.uint8)
+        tfm[:, col_mask] = 1
+        tfm = tfm.T
+        if tfm.shape[0] % 2 == 1:
+            tfm = np.append(tfm, [[0, 0, 0, 0]], axis=0)
+        packed = np.packbits(np.concatenate((tfm[0::2], tfm[1::2]), axis=1))
+        return packed
+
 
 class UnrecognizedCharacter(Exception):
 
     def __init__(self, c):
         super().__init__('Unrecognized character: %s' % chr(c))
         self.character = c
+
+
 
 
 class AASeqIterator(AbstractSeqIterator):
@@ -275,6 +309,37 @@ class AASeqIterator(AbstractSeqIterator):
                 if perc_bad > self.max_degenerate:
                     continue
             yield y_seq, y_ltag
+
+
+
+class VocabIterator(AbstractSeqIterator):
+
+    def __init__(self, paths, logger=None, min_seq_len=None):
+        super().__init__(paths, logger=logger, min_seq_len=min_seq_len)
+        self.lenc = LabelEncoder()
+        self.lenc.fit(list(self.characters() + self.characters().lower()))
+
+    def pack(self, seq):
+        tfm = self.lenc.transform(seq.values.astype('U')).astype(np.uint8) % len(self.characters())
+        return tfm
+
+    @property
+    def encoded_vocab(self):
+        return self.lenc.classes_[0:len(self.lenc.classes_)//2]
+
+
+class DNAVocabIterator(VocabIterator):
+
+    @classmethod
+    def characters(cls):
+        return 'ATCGN'
+
+
+class AAVocabIterator(VocabIterator):
+
+    @classmethod
+    def characters(cls):
+        return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 
 class QueueIterator(object):
