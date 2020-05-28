@@ -13,6 +13,7 @@ from hdmf.common import get_hdf5io
 import argparse
 import logging
 
+from . import models
 
 def parse_train_size(string):
     ret = float(string)
@@ -55,8 +56,11 @@ def parse_cuda_index(string):
             return _parse_cuda_index_helper(string)
 
 
+def parse_model(string):
+    return models[string]
 
-def parse_args(desc, *addl_args, argv=None):
+
+def parse_args(*addl_args, argv=None):
     """
     Parse arguments for training executable
     """
@@ -66,7 +70,9 @@ def parse_args(desc, *addl_args, argv=None):
     epi = """
     output can be used as a checkpoint
     """
+    desc = "Run network training"
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
+    parser.add_argument('model', type=str, help='the model to run', choices=list(models._models.keys()))
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
     parser.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
@@ -78,7 +84,7 @@ def parse_args(desc, *addl_args, argv=None):
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpu', action='store_true', default=False, help='use GPU')
     parser.add_argument('-i', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
-    parser.add_argument('-s', '--split_seed', type=parse_seed, default='', help='seed to use for train-test split')
+    parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('-D', '--downsample', type=float, default=None, help='downsample input before training')
@@ -99,6 +105,7 @@ def parse_args(desc, *addl_args, argv=None):
 
     args = parser.parse_args(argv)
     ret = vars(args)
+    ret['model'] = models._models[ret['model']]
 
     logger = ret['logger']
     # set up logger
@@ -239,7 +246,7 @@ def validate_epoch(model, data_loader, criterion):
         {'name': 'criterion', 'type': nn.Module, 'default': None,
          'help': 'the loss function to use'},
 
-        {'name': 'split_seed', 'type': int, 'default': None,
+        {'name': 'seed', 'type': int, 'default': None,
          'help': 'the seed to use for train-test split'},
 
         {'name': 'epochs', 'type': int, 'default': 1,
@@ -291,7 +298,7 @@ def train_serial(**kwargs):
     epochs = kwargs['epochs']
     checkpoint = kwargs['checkpoint']
     output = kwargs['output']
-    split_seed = kwargs['split_seed']
+    seed = kwargs['seed']
     batch_size = kwargs['batch_size']
     train_size = kwargs['train_size']
     load = kwargs['load']
@@ -322,7 +329,7 @@ def train_serial(**kwargs):
         curr_epoch = checkpoint['epoch'] + 1
         train_loss = np.append(checkpoint['train_loss'], np.zeros(epochs))
         test_loss = np.append(checkpoint['test_loss'], np.zeros(epochs))
-        split_seed = checkpoint['split_seed']
+        seed = checkpoint['seed']
         batch_size = checkpoint['batch_size']
         best_epoch = checkpoint['best_epoch']
         best_state = checkpoint['best_state']
@@ -339,14 +346,14 @@ def train_serial(**kwargs):
         logger.info(f'downsampling dataset by a factor of {downsample}')
 
     logger.info('loading data from %s' % input)
-    logger.info(f'- using {split_seed} as seed for train-test split')
+    logger.info(f'- using {seed} as seed for train-test split')
     logger.info(f'- batch size: {batch_size}')
     if sanity:
         logger.info('running sanity check. i.e. copying response data into inputs')
     train_loader, test_loader, validate_loader = train_test_loaders(dataset,
                                                                     batch_size=batch_size,
                                                                     downsample=downsample,
-                                                                    random_state=split_seed)
+                                                                    random_state=seed)
 
     logger.info(f'- train size:    {len(train_loader.sampler.indices)}')
     logger.info(f'- test size:     {len(test_loader.sampler.indices)}')
@@ -395,7 +402,7 @@ def train_serial(**kwargs):
                     'test_loss': test_loss,
                     'best_epoch': best_epoch,
                     'best_state': best_state,
-                    'split_seed': split_seed,
+                    'seed': seed,
                     'batch_size': batch_size,
                     }, output)
 
@@ -453,7 +460,7 @@ def load_checkpoint(**kwargs):
         train, test, validate = train_test_loaders(dataset,
                                                    batch_size=checkpoint['batch_size'],
                                                    downsample=downsample,
-                                                   random_state=checkpoint['split_seed'])
+                                                   random_state=checkpoint['seed'])
         ret['train'] = train
         ret['test'] = test
         ret['validate'] = validate
@@ -508,3 +515,86 @@ def run(dataset, model, **args):
         if optimizer is None:
             optimizer = optim.Adam(model.parameters(), lr=args['lr'])
         train_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
+
+
+from pytorch_lightning import Trainer, LightningModule, seed_everything
+
+class AbstractLit(LightningModule):
+
+    def __init__(self, args):
+        self.args = args
+        seed_everything(self.args['seed'])
+        tr, te, va = train_test_loaders(self.args['dataset'],
+                                        batch_size=self.args['batch_size'],
+                                        downsample=self.args['downsample'])
+        self.loaders = {'train': tr, 'test': te, 'validate': va}
+
+    def train_dataloader(self):
+        return self.loaders['train']
+
+    def configure_optimizer(self):
+        optimizer = optim.Adam(self.parameters(), lr=self.args['lr'])
+        schedular = StepLR(optimizer, step_size=1)
+        return optimizer, schedular
+
+    def training_step(self):
+        data, target = batch
+        output = self.forward(data)
+        loss = self._loss(output, target)
+        return {'loss': loss}
+
+    def val_dataloader(self):
+        return self.loaders['validate']
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        return {'val_loss': self._loss(y_hat, y)}
+
+    def validation_epoch_end(self, outputs):
+        val_loss_mean = torch.stack([x['val_loss'] for x in outputs]).mean()
+        return {'val_loss': val_loss_mean}
+
+    def test_dataloader(self):
+        return self.loaders['test']
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        return {'test_loss': self._loss(y_hat, y)}
+
+    def test_epoch_end(self, outputs):
+        test_loss_mean = torch.stack([x['test_loss'] for x in outputs]).mean()
+        return {'test_loss': test_loss_mean}
+
+
+def run_lightening():
+    args = parse_args()
+    lit_cls = args.pop('model')
+
+    input_nc = 5
+    if args['protein']:
+        input_nc = 26
+
+    if args['sanity']:
+        input_nc = 5
+    args['input_nc'] = input_nc
+
+    dataset, io = load_dataset(path=args['input'], **args)
+
+    if args['classify']:
+        n_outputs = len(dataset.difile.taxa_table)
+    else:
+        n_outputs = dataset.difile.n_emb_components
+    args['n_outputs'] = n_outputs
+    args['dataset'] = dataset
+
+    net = lit_cls(**args)
+    trainer = Trainer(max_epochs=args['epochs'])
+    trainer.fit(net)
+
+
+from . import models
+
+if __name__ == '__main__':
+    run_lightening()
