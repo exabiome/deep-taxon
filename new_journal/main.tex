@@ -22,12 +22,12 @@ I tried different dropout rates, removing batch norm at the last layer, using ma
 between convolution and fully-connected layers, adding more FC layers, and changing convolution stride. None of these
 things appear to impact network performance. I suspect that the model is too complex, and is overfitting the data. I
 think this because the test performance never improves and is significantly worse than the train performance. See
-\ref{fig:roznet_train_test}.
+Figure~\ref{fig:roznet_train_test}.
 
 \subsubsection*{Thu Apr 23, 2020}
-Earlier, I also ran a simple neural network (1 Conv layer, 3 fc layers). Train loss bottomed out around 53 MSE, similiar
+Earlier, I also ran a simple neural network (1 Conv layer, 3 fc layers). Train loss bottomed out around 53 MSE, similar
 to what previous networks were achieving. This was after about 35 epochs, before it crashed because sequences a bad
-batch could not be passed through the network. This led to me looking into why this problem kep happing, and I discovered
+batch could not be passed through the network. This led to me looking into why this problem kept happening, and I discovered
 that my sequence storage mechanism of packing bits was not being read correctly. I think this might be why I networks are
 not training.
 
@@ -37,6 +37,19 @@ not training.
   \caption{Train and test loss results for RozNet}
   \label{fig:roznet_train_test}
 \end{figure}
+
+\subsubsection*{Thu May 28, 2020}
+I reformatted the data to store label-encoded DNA (i.e. integer encoding) using the HDMF VocabData column type. I ran
+a few different networks/problems, and it appears that training is working (See Figure~\ref{fig:encoding_fix_results}. Now I am having issues with running out of
+memory. I have reworked my training code to use PyTorch-Lightning to handle running on GPUs etc. I will try that, and 
+also explore using 16-bits for training. 
+
+\begin{figure}
+  \includegraphics[width=\linewidth]{encoding_fix.results.png}
+  \caption{Train and test loss results for RozNet}
+  \label{fig:encoding_fix_results}
+\end{figure}
+
 
 \end{document}
 
