@@ -38,5 +38,18 @@ not training.
   \label{fig:roznet_train_test}
 \end{figure}
 
+\subsubsection*{Thu May 28, 2020}
+I reformatted the data to store label-encoded DNA (i.e. integer encoding) using the HDMF VocabData column type. I ran
+a few different networks/problems, and it appears that training is working. Now I am having issues with running out of
+memory. I have reworked my trianing code to use PyTorch-Lightning to handle running on GPUs etc. I will try that, and 
+also explore using 16-bits for training. 
+
+\begin{figure}
+  \includegraphics[width=\linewidth]{encoding_fix.results.png}
+  \caption{Train and test loss results for RozNet}
+  \label{fig:roznet_train_test}
+\end{figure}
+
+
 \end{document}
 
