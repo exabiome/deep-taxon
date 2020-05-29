@@ -92,7 +92,7 @@ class SeqDataset(Dataset):
         seq = F.one_hot(seq.long()).T.float()
 
         # get label
-        label = self.difile.seq_table['taxon'].get(i, index=True)
+        label = self.difile.seq_table['taxon'].get(i, index=True).long()
         if not self._classify:
             label = self.difile.taxa_table['embedding'][label]
         return (idx, seq, label)
