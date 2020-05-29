@@ -18,7 +18,7 @@ class RozNet(AbstractLit):
     '''
 
     def __init__(self, input_nc=None, n_outputs=2, first_kernel_size=7, maxpool=True, **args):
-        super().__init__(args)
+        super().__init__(**args)
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(64),
