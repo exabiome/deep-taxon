@@ -1,4 +1,7 @@
 import sys
+import os
+import os.path
+import pickle
 from datetime import datetime
 import torch
 import torch.nn as nn
@@ -82,12 +85,13 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
-    parser.add_argument('-g', '--gpu', action='store_true', default=False, help='use GPU')
-    parser.add_argument('-i', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
+    parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
+    #parser.add_argument('-i', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('-D', '--downsample', type=float, default=None, help='downsample input before training')
+    parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
@@ -124,12 +128,12 @@ def parse_args(*addl_args, argv=None):
             ret['checkpoint'] = True
     ret.pop('resume')
 
-    if ret.pop('gpu'):
-        cuda_index = ret['cuda_index']
-        to_index = cuda_index
-        if isinstance(cuda_index, list):
-            to_index = cuda_index[0]
-        ret['device'] = torch.device(f"cuda:{to_index}")
+    #if ret.get('gpus', False):
+    #    cuda_index = ret['cuda_index']
+    #    to_index = cuda_index
+    #    if isinstance(cuda_index, list):
+    #        to_index = cuda_index[0]
+    #    ret['device'] = torch.device(f"cuda:{to_index}")
 
 
     return ret
@@ -518,8 +522,25 @@ def run(dataset, model, **args):
 
 
 from pytorch_lightning import Trainer
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+
 def run_lightening():
     args = parse_args()
+
+    if os.path.exists(args['output']):
+        if not os.path.isdir(args['output']):
+            raise ValueError(f'{args["output"]} already exists as a file')
+    else:
+        os.makedirs(args['output'])
+
+    def output(fname):
+        return os.path.join(args['output'], fname)
+
+    # save arguments
+    with open(output('args.pkl'), 'wb') as f:
+        pickle.dump(args, f)
+
     lit_cls = args.pop('model')
 
     input_nc = 5
@@ -537,11 +558,32 @@ def run_lightening():
         n_outputs = len(dataset.difile.taxa_table)
     else:
         n_outputs = dataset.difile.n_emb_components
+
     args['n_outputs'] = n_outputs
     args['dataset'] = dataset
 
+
+    targs = dict(
+        max_epochs=args['epochs'],
+        checkpoint_callback=ModelCheckpoint(filepath=output('{epoch:02d}-{val_loss:.2f}'), save_weights_only=False),
+        logger = TensorBoardLogger(save_dir=output('tb_logs'), name=args['experiment']),
+        row_log_interval=10,
+        log_save_interval=100
+    )
+
+    gpus = args['gpus']
+    if isinstance(gpus, str):
+        gpus = [int(g) for g in gpus.split(',')]
+        targs['distributed_backend'] = 'dp'
+    else:
+        gpus = 1 if gpus else None
+    targs['gpus'] = gpus
+
+    if args['debug']:
+        targs['fast_dev_run'] = True
+
     net = lit_cls(**args)
-    trainer = Trainer(max_epochs=args['epochs'])
+    trainer = Trainer(**targs)
     trainer.fit(net)
 
 
