@@ -436,12 +436,13 @@ class DeepIndexFile(Container):
 
     def get(self, arg):
         idx = self.seq_table.id[arg]
-        seq = self.seq_table['sequence'].get(arg, index=True).astype(np.int)
-        seq = self.seq_table.convert(seq)
-        seq = F.one_hot(seq).T.float()
+        seq = self.seq_table['sequence'].get(arg, index=True)
+        #seq = self.seq_table['sequence'].get(arg, index=True).astype(np.int)
+        #seq = self.seq_table.convert(seq)
+        #seq = F.one_hot(seq).T.float()
         label = self.seq_table['taxon'].get(arg, index=True)
         label = self.taxa_table[self.label_key][label]
-        label = self.taxa_table.convert(label)
+        #label = self.taxa_table.convert(label)
         return (idx, seq, label)
 
     def __len__(self):
@@ -476,25 +477,6 @@ class DeepIndexFile(Container):
         emb = self.taxa_table['embedding'][:]
         ret.fit(emb, np.arange(emb.shape[0]))
         return ret
-
-    @staticmethod
-    def _to_numpy(data):
-        return data[:]
-
-    @staticmethod
-    def _to_torch(device=None, dtype=None):
-        def func(data):
-            return torch.tensor(data, device=device, dtype=dtype)
-        return func
-
-    def load(self, torch=False, device=None):
-        for c in self.seq_table.columns:
-            c.transform(self._to_numpy)
-        for c in self.taxa_table.columns:
-            c.transform(self._to_numpy)
-        if torch:
-            self.seq_table['sequence'].target.transform(self._to_torch(device))
-            self.taxa_table['embedding'].transform(self._to_torch(device))
 
 
 

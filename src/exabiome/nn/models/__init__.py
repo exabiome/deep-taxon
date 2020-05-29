@@ -1,3 +1,4 @@
+from .lit import AbstractLit
 
 _models = dict()
 
@@ -13,6 +14,7 @@ def model(short_hand):
         cls.short_hand = short_hand
         return cls
     return dec
+
 
 #from . import roznet
 import importlib

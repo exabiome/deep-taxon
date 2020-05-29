@@ -48,24 +48,57 @@ class SeqDataset(Dataset):
         #                      pad=kwargs.get('pad', False))
 
         self.set_classify(classify)
-        self.difile.seq_table.set_torch(True, dtype=torch.long, device=self.device)
-        self.difile.set_sanity(kwargs.get('sanity', False))
+        #self.difile.seq_table.set_torch(True, dtype=torch.long, device=self.device)
+        #self.difile.set_sanity(kwargs.get('sanity', False))
         self._target_key = 'class_label' if classify else 'embedding'
 
     def set_classify(self, classify):
-        if classify:
-            self.difile.label_key = 'id'
-            self.difile.taxa_table.set_torch(True, dtype=torch.long, device=self.device)
-        else:
-            self.difile.label_key = 'embedding'
-            self.difile.taxa_table.set_torch(True, dtype=torch.float, device=self.device)
+        self._classify = classify
+        #if classify:
+        #    self.difile.label_key = 'id'
+        #    self.difile.taxa_table.set_torch(True, dtype=torch.long, device=self.device)
+        #else:
+        #    self.difile.label_key = 'embedding'
+        #    self.difile.taxa_table.set_torch(True, dtype=torch.float, device=self.device)
 
     def __len__(self):
         return len(self.difile)
 
+    @staticmethod
+    def _to_numpy(data):
+        return data[:]
+
+    @staticmethod
+    def _to_torch(device=None, dtype=None):
+        def func(data):
+            return torch.tensor(data, device=device, dtype=dtype)
+        return func
+
+    def load(self, torch=False, device=None):
+        tfm = self._to_torch(device)
+        def to_sint(data):
+            return data[:].astype(np.int16)
+        self.difile.seq_table['taxon'].transform(to_sint).transform(tfm)
+        self.difile.seq_table['sequence'].target.transform(to_sint).transform(tfm)
+        if not self._classify:
+            label = self.difile.taxa_table['embedding'].transform(tfm)
+
     def __getitem__(self, i):
-        d = self.difile[i]
-        return d
+        # get sequence index
+        idx = self.difile.seq_table.id[i]
+
+        # get sequence, and one-hot encode
+        seq = self.difile.seq_table['sequence'].get(i, index=True)
+        seq = F.one_hot(seq.long()).T.float()
+
+        # get label
+        label = self.difile.seq_table['taxon'].get(i, index=True)
+        if not self._classify:
+            label = self.difile.taxa_table['embedding'][label]
+        return (idx, seq, label)
+
+        #d = self.difile[i]
+        #return d[0], F.one_hot(d[1]).T.float(), d[2]
 
 
 def get_loader(path, **kwargs):

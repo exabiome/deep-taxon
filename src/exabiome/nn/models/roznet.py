@@ -4,7 +4,8 @@ import torch
 import torch.nn.functional as F
 
 from . import model
-from ..train import AbstractLit
+from . import model, AbstractLit
+#from ..train import AbstractLit
 
 
 @model('roznet')
@@ -17,7 +18,7 @@ class RozNet(AbstractLit):
     '''
 
     def __init__(self, input_nc=None, n_outputs=2, first_kernel_size=7, maxpool=True, **args):
-        super(RozNet, self).__init__(args)
+        super().__init__(args)
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(64),

@@ -148,8 +148,8 @@ def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=Fals
                  protein=False, window=None, step=None, classify=False, **kwargs):
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
-    if load:
-        difile.load()
+    #if load:
+    #    difile.load()
 
     window, step = check_window(window, step)
     if window is not None:
@@ -517,57 +517,7 @@ def run(dataset, model, **args):
         train_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
 
 
-from pytorch_lightning import Trainer, LightningModule, seed_everything
-
-class AbstractLit(LightningModule):
-
-    def __init__(self, args):
-        self.args = args
-        seed_everything(self.args['seed'])
-        tr, te, va = train_test_loaders(self.args['dataset'],
-                                        batch_size=self.args['batch_size'],
-                                        downsample=self.args['downsample'])
-        self.loaders = {'train': tr, 'test': te, 'validate': va}
-
-    def train_dataloader(self):
-        return self.loaders['train']
-
-    def configure_optimizer(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.args['lr'])
-        schedular = StepLR(optimizer, step_size=1)
-        return optimizer, schedular
-
-    def training_step(self):
-        data, target = batch
-        output = self.forward(data)
-        loss = self._loss(output, target)
-        return {'loss': loss}
-
-    def val_dataloader(self):
-        return self.loaders['validate']
-
-    def validation_step(self, batch, batch_idx):
-        x, y = batch
-        y_hat = self(x)
-        return {'val_loss': self._loss(y_hat, y)}
-
-    def validation_epoch_end(self, outputs):
-        val_loss_mean = torch.stack([x['val_loss'] for x in outputs]).mean()
-        return {'val_loss': val_loss_mean}
-
-    def test_dataloader(self):
-        return self.loaders['test']
-
-    def test_step(self, batch, batch_idx):
-        x, y = batch
-        y_hat = self(x)
-        return {'test_loss': self._loss(y_hat, y)}
-
-    def test_epoch_end(self, outputs):
-        test_loss_mean = torch.stack([x['test_loss'] for x in outputs]).mean()
-        return {'test_loss': test_loss_mean}
-
-
+from pytorch_lightning import Trainer
 def run_lightening():
     args = parse_args()
     lit_cls = args.pop('model')
@@ -581,6 +531,7 @@ def run_lightening():
     args['input_nc'] = input_nc
 
     dataset, io = load_dataset(path=args['input'], **args)
+    dataset.load()
 
     if args['classify']:
         n_outputs = len(dataset.difile.taxa_table)

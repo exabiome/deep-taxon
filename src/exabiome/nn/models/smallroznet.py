@@ -3,11 +3,11 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
-from . import model
+from . import model, AbstractLit
 
 
 @model('smallroznet')
-class SmallRozNet(nn.Module):
+class SmallRozNet(AbstractLit):
     '''
     A 1D CNN with 5 convolutional layers, followed by 3 fully-connected layers
 
@@ -15,8 +15,8 @@ class SmallRozNet(nn.Module):
         input_nc (int):  the input number of channels
     '''
 
-    def __init__(self, input_nc, n_outputs=2, first_kernel_size=7, maxpool=True):
-        super(SmallRozNet, self).__init__()
+    def __init__(self, input_nc=None, n_outputs=2, first_kernel_size=7, maxpool=True, **args):
+        super().__init__(**args)
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 32, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(32),
