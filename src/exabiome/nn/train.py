@@ -81,7 +81,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-r', '--resume', action='store_true', help='resume training from checkpoint stored in output', default=False)
-    parser.add_argument('-V', '--validate', action='store_true', help='run validation data through model', default=False)
+    parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
@@ -108,35 +108,32 @@ def parse_args(*addl_args, argv=None):
         sys.exit(1)
 
     args = parser.parse_args(argv)
-    ret = vars(args)
-    ret['model'] = models._models[ret['model']]
 
-    logger = ret['logger']
+    logger = args.logger
     # set up logger
     if logger is None:
         logger = logging.getLogger()
         logger.setLevel(logging.INFO)
     if args.debug:
         logger.setLevel(logging.DEBUG)
-    ret['logger'] = logger
+    args.logger = logger
 
-    if args.checkpoint is None:
-        ret['checkpoint'] = False
-    if args.resume:
-        if not isinstance(ret['checkpoint'], str):
-            # don't overwrite a given path
-            ret['checkpoint'] = True
-    ret.pop('resume')
+    #if args.checkpoint is None:
+    #    args.checkpoint = False
+    #if args.resume:
+    #    if not isinstance(args.checkpoint, str):
+    #        # don't overwrite a given path
+    #        args.checkpoint = True
 
-    #if ret.get('gpus', False):
-    #    cuda_index = ret['cuda_index']
-    #    to_index = cuda_index
-    #    if isinstance(cuda_index, list):
-    #        to_index = cuda_index[0]
-    #    ret['device'] = torch.device(f"cuda:{to_index}")
+    model = models._models[args.model]
+    input_path = args.input
+    criterion = nn.CrossEntropyLoss() if args.classify else nn.MSELoss()
 
+    del args.resume
+    del args.input
+    del args.model
 
-    return ret
+    return model, input_path, criterion, args
 
 
 def check_window(window, step):
@@ -148,8 +145,7 @@ def check_window(window, step):
         return window, step
 
 
-def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=False,
-                 protein=False, window=None, step=None, classify=False, **kwargs):
+def get_dataset(path, protein=False, window=None, step=None, classify=False, **kwargs):
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
     #if load:
@@ -159,7 +155,7 @@ def load_dataset(path, load=False, ohe=True, device=None, pad=False, sanity=Fals
     if window is not None:
         difile = WindowChunkedDIFile(difile, window, step)
 
-    dataset = SeqDataset(difile, device=device, ohe=ohe, pad=pad, sanity=sanity, classify=classify)
+    dataset = SeqDataset(difile, classify=classify)
     #if not classify:
     #    dataset.difile.label_key = 'embedding'
     return dataset, hdmfio
@@ -521,57 +517,61 @@ def run(dataset, model, **args):
         train_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
 
 
-from pytorch_lightning import Trainer
+from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 def run_lightening():
-    args = parse_args()
+    lit_cls, input_path, criterion, args = parse_args()
 
-    if os.path.exists(args['output']):
-        if not os.path.isdir(args['output']):
-            raise ValueError(f'{args["output"]} already exists as a file')
+    if os.path.exists(args.output):
+        if not os.path.isdir(args.output):
+            raise ValueError(f'{args.output} already exists as a file')
     else:
-        os.makedirs(args['output'])
+        os.makedirs(args.output)
+    outbase = args.output
 
     def output(fname):
-        return os.path.join(args['output'], fname)
+        return os.path.join(outbase, fname)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
 
-    lit_cls = args.pop('model')
+    seed_everything(args.seed)
 
     input_nc = 5
-    if args['protein']:
+    if args.protein:
         input_nc = 26
 
-    if args['sanity']:
+    if args.sanity:
         input_nc = 5
-    args['input_nc'] = input_nc
+    args.input_nc = input_nc
 
-    dataset, io = load_dataset(path=args['input'], **args)
+    dataset, io = get_dataset(input_path,
+                              protein=args.protein,
+                              window=args.window,
+                              step=args.step,
+                              classify=args.classify)
     dataset.load()
 
-    if args['classify']:
+    if args.classify:
         n_outputs = len(dataset.difile.taxa_table)
     else:
+        n_outputs = len(dataset.difile.taxa_table)
         n_outputs = dataset.difile.n_emb_components
-
-    args['n_outputs'] = n_outputs
-    args['dataset'] = dataset
+    args.n_outputs = n_outputs
 
 
     targs = dict(
-        max_epochs=args['epochs'],
-        checkpoint_callback=ModelCheckpoint(filepath=output('{epoch:02d}-{val_loss:.2f}'), save_weights_only=False),
-        logger = TensorBoardLogger(save_dir=output('tb_logs'), name=args['experiment']),
+        max_epochs=args.epochs,
+        checkpoint_callback=ModelCheckpoint(filepath=output('seed=%d-{epoch:02d}-{val_loss:.2f}' % args.seed), save_weights_only=False),
+        logger = TensorBoardLogger(save_dir=output('tb_logs'), name=args.experiment),
         row_log_interval=10,
         log_save_interval=100
     )
 
-    gpus = args['gpus']
+    gpus = args.gpus
     if isinstance(gpus, str):
         gpus = [int(g) for g in gpus.split(',')]
         targs['distributed_backend'] = 'dp'
@@ -579,12 +579,27 @@ def run_lightening():
         gpus = 1 if gpus else None
     targs['gpus'] = gpus
 
-    if args['debug']:
+    if args.debug:
         targs['fast_dev_run'] = True
 
-    net = lit_cls(**args)
     trainer = Trainer(**targs)
-    trainer.fit(net)
+    if args.test:
+        if args.checkpoint is not None:
+            net = lit_cls.load_from_checkpoint(args.checkpoint)
+        else:
+            print('If running with --test, must provide argument to --checkpoint', file=sys.stderr)
+            sys.exit(1)
+        net.set_dataset(dataset)
+        net.set_loss(criterion)
+        trainer.test(net)
+    else:
+        if args.checkpoint is not None:
+            net = lit_cls.load_from_checkpoint(args.checkpoint)
+        else:
+            net = lit_cls(args)
+        net.set_dataset(dataset)
+        net.set_loss(criterion)
+        trainer.fit(net)
 
 
 from . import models

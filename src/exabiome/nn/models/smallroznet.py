@@ -15,8 +15,12 @@ class SmallRozNet(AbstractLit):
         input_nc (int):  the input number of channels
     '''
 
-    def __init__(self, input_nc=None, n_outputs=2, first_kernel_size=7, maxpool=True, **args):
-        super().__init__(**args)
+    def __init__(self, hparams):
+        super().__init__(hparams)
+        input_nc = getattr(hparams, 'input_nc', None)
+        n_outputs = getattr(hparams, 'n_outputs', 2)
+        first_kernel_size = getattr(hparams, 'first_kernel_size', 7)
+        maxpool = getattr(hparams, 'maxpool', True)
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 32, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(32),

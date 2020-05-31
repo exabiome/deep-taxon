@@ -1,26 +1,30 @@
 from .. import train_test_loaders
-from pytorch_lightning import LightningModule, seed_everything
+from pytorch_lightning import LightningModule
 import torch.optim as optim
 import torch.nn as nn
 import torch
 
 class AbstractLit(LightningModule):
 
-    def __init__(self, **kwargs):
+    def __init__(self, hparams):
         super().__init__()
-        self.args = kwargs
-        seed_everything(self.args['seed'])
-        tr, te, va = train_test_loaders(self.args['dataset'],
-                                        batch_size=self.args['batch_size'],
-                                        downsample=self.args['downsample'])
+        self.hparams = hparams
+
+    def set_dataset(self, dataset):
+        tr, te, va = train_test_loaders(dataset,
+                                        random_state=self.hparams.seed,
+                                        batch_size=self.hparams.batch_size,
+                                        downsample=self.hparams.downsample)
         self.loaders = {'train': tr, 'test': te, 'validate': va}
-        self._loss = kwargs.get('criterion', False) or (nn.CrossEntropyLoss() if kwargs['classify'] else nn.MSELoss())
+
+    def set_loss(self, criterion):
+        self._loss = criterion
 
     def train_dataloader(self):
         return self.loaders['train']
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.args['lr'])
+        optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
         #schedular = optim.lr_scheduler.StepLR(optimizer, step_size=1)
         #return optimizer, schedular
         return optimizer
