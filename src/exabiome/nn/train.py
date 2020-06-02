@@ -82,6 +82,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-r', '--resume', action='store_true', help='resume training from checkpoint stored in output', default=False)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
+    parser.add_argument('-A', '--accuracy', action='store_true', help='compute accuracy', default=False)
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
@@ -517,6 +518,8 @@ def run(dataset, model, **args):
         train_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
 
 
+
+
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -591,7 +594,17 @@ def run_lightening():
             sys.exit(1)
         net.set_dataset(dataset)
         net.set_loss(criterion)
-        trainer.test(net)
+        if args.accuracy:
+            from .metric import NCorrect, NeighborNCorrect
+            if args.classify:
+                metric = NCorrect()
+            else:
+                dataset.set_classify(True)
+                metric = NeighborNCorrect(dataset.difile)
+            total_correct = overall_metric(net, net.test_dataloader(), metric)
+            print(total_correct/len(net.test_dataloader().sampler))
+        else:
+            trainer.test(net)
     else:
         if args.checkpoint is not None:
             net = lit_cls.load_from_checkpoint(args.checkpoint)
@@ -600,6 +613,13 @@ def run_lightening():
         net.set_dataset(dataset)
         net.set_loss(criterion)
         trainer.fit(net)
+
+def overall_metric(model, loader, metric):
+    val = 0.0
+    for idx, seqs, target, olen in loader:
+        output = model(seqs)
+        val += metric(target, output)
+    return val
 
 
 from . import models

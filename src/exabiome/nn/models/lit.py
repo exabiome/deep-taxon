@@ -20,14 +20,15 @@ class AbstractLit(LightningModule):
     def set_loss(self, criterion):
         self._loss = criterion
 
-    def train_dataloader(self):
-        return self.loaders['train']
-
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
         #schedular = optim.lr_scheduler.StepLR(optimizer, step_size=1)
         #return optimizer, schedular
         return optimizer
+
+    # TRAIN
+    def train_dataloader(self):
+        return self.loaders['train']
 
     def training_step(self, batch, batch_idx):
         idx, seqs, target, olen = batch
@@ -35,6 +36,10 @@ class AbstractLit(LightningModule):
         loss = self._loss(output, target)
         return {'loss': loss}
 
+    def training_epoch_end(self, outputs):
+        return {'log': outputs[0]}
+
+    # VALIDATION
     def val_dataloader(self):
         return self.loaders['validate']
 
@@ -45,8 +50,9 @@ class AbstractLit(LightningModule):
 
     def validation_epoch_end(self, outputs):
         val_loss_mean = torch.stack([x['val_loss'] for x in outputs]).mean()
-        return {'val_loss': val_loss_mean}
+        return {'log': {'val_loss': val_loss_mean}}
 
+    # TEST
     def test_dataloader(self):
         return self.loaders['test']
 
@@ -58,5 +64,3 @@ class AbstractLit(LightningModule):
     def test_epoch_end(self, outputs):
         test_loss_mean = torch.stack([x['test_loss'] for x in outputs]).mean()
         return {'test_loss': test_loss_mean}
-
-
