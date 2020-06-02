@@ -119,16 +119,8 @@ def parse_args(*addl_args, argv=None):
         logger.setLevel(logging.DEBUG)
     args.logger = logger
 
-    #if args.checkpoint is None:
-    #    args.checkpoint = False
-    #if args.resume:
-    #    if not isinstance(args.checkpoint, str):
-    #        # don't overwrite a given path
-    #        args.checkpoint = True
-
     model = models._models[args.model]
     input_path = args.input
-    criterion = nn.CrossEntropyLoss() if args.classify else nn.MSELoss()
 
     # determing number of input channels:
     # 5 for DNA, 26 for protein
@@ -140,11 +132,13 @@ def parse_args(*addl_args, argv=None):
         input_nc = 5
     args.input_nc = input_nc
 
+    args.window, args.step = check_window(args.window, args.step)
+
     del args.resume
     del args.input
     del args.model
 
-    return model, input_path, criterion, args
+    return model, input_path, args
 
 
 def check_window(window, step):
@@ -159,16 +153,7 @@ def check_window(window, step):
 def get_dataset(path, protein=False, window=None, step=None, classify=False, **kwargs):
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
-    #if load:
-    #    difile.load()
-
-    window, step = check_window(window, step)
-    if window is not None:
-        difile = WindowChunkedDIFile(difile, window, step)
-
     dataset = SeqDataset(difile, classify=classify)
-    #if not classify:
-    #    dataset.difile.label_key = 'embedding'
     return dataset, hdmfio
 
 
@@ -528,6 +513,12 @@ def run(dataset, model, **args):
         train_serial(dataset=dataset, model=model, optimizer=optimizer, **args)
 
 
+def _check_dir(path):
+    if os.path.exists(path):
+        if not os.path.isdir(path):
+            raise ValueError(f'{path} already exists as a file')
+    else:
+        os.makedirs(path)
 
 
 from pytorch_lightning import Trainer, seed_everything
@@ -535,14 +526,12 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 def run_lightening():
-    lit_cls, input_path, criterion, args = parse_args()
+    lit_cls, input_path, args = parse_args()
 
-    if os.path.exists(args.output):
-        if not os.path.isdir(args.output):
-            raise ValueError(f'{args.output} already exists as a file')
-    else:
-        os.makedirs(args.output)
     outbase = args.output
+    if args.experiment:
+        outbase = os.path.join(outbase, args.experiment)
+    _check_dir(outbase)
 
     def output(fname):
         return os.path.join(outbase, fname)
@@ -563,10 +552,8 @@ def run_lightening():
     if args.classify:
         n_outputs = len(dataset.difile.taxa_table)
     else:
-        n_outputs = len(dataset.difile.taxa_table)
         n_outputs = dataset.difile.n_emb_components
     args.n_outputs = n_outputs
-
 
     targs = dict(
         max_epochs=args.epochs,
@@ -594,14 +581,17 @@ def run_lightening():
         else:
             print('If running with --test, must provide argument to --checkpoint', file=sys.stderr)
             sys.exit(1)
+
         net.set_dataset(dataset)
-        net.set_loss(criterion)
+
+        print_dataloader(net.test_dataloader())
+        print_dataloader(net.train_dataloader())
+        print_dataloader(net.val_dataloader())
         if args.accuracy:
             from .metric import NCorrect, NeighborNCorrect
             if args.classify:
                 metric = NCorrect()
             else:
-                dataset.set_classify(True)
                 metric = NeighborNCorrect(dataset.difile)
             total_correct = overall_metric(net, net.test_dataloader(), metric)
             print(total_correct/len(net.test_dataloader().sampler))
@@ -612,9 +602,16 @@ def run_lightening():
             net = lit_cls.load_from_checkpoint(args.checkpoint)
         else:
             net = lit_cls(args)
+
         net.set_dataset(dataset)
-        net.set_loss(criterion)
+
+        print_dataloader(net.test_dataloader())
+        print_dataloader(net.train_dataloader())
+        print_dataloader(net.val_dataloader())
         trainer.fit(net)
+
+def print_dataloader(dl):
+    print(dl.sampler.indices[0], dl.sampler.indices[-1])
 
 def overall_metric(model, loader, metric):
     val = 0.0

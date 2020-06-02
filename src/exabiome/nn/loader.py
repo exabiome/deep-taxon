@@ -43,6 +43,8 @@ class SeqDataset(Dataset):
     def __init__(self, difile, classify=False):
         self.difile = difile
 
+        self.one_hot = self.get_one_hot(False)
+
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'
 
@@ -66,24 +68,23 @@ class SeqDataset(Dataset):
         tfm = self._to_torch(device)
         def to_sint(data):
             return data[:].astype(np.int16)
-        self.difile.seq_table['taxon'].transform(to_sint).transform(tfm)
         self.difile.seq_table['sequence'].target.transform(to_sint).transform(tfm)
-        if not self._classify:
-            label = self.difile.taxa_table['embedding'].transform(tfm)
+        self.difile.taxa_table[self.difile.label_key].transform(tfm)
+        self.one_hot = self.get_one_hot(True)
 
     def __getitem__(self, i):
-        # get sequence index
-        idx = self.difile.seq_table.id[i]
-
-        # get sequence, and one-hot encode
-        seq = self.difile.seq_table['sequence'].get(i, index=True)
-        seq = F.one_hot(seq.long()).T.float()
-
-        # get label
-        label = self.difile.seq_table['taxon'].get(i, index=True).long()
-        if not self._classify:
-            label = self.difile.taxa_table['embedding'][label]
+        # get sequence
+        idx, seq, label = self.difile[i]
+        ## one-hot encode sequence
+        seq = self.one_hot(seq).T
         return (idx, seq, label)
+
+    @staticmethod
+    def get_one_hot(torch=True):
+        if torch:
+            return lambda seq: F.one_hot(seq.long()).float()
+        else:
+            return lambda seq: np.eye(np.max(seq)+1)[seq]
 
 
 def get_loader(path, **kwargs):

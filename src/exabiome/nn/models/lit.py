@@ -4,21 +4,28 @@ import torch.optim as optim
 import torch.nn as nn
 import torch
 
+from ...sequence import WindowChunkedDIFile
+
 class AbstractLit(LightningModule):
 
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
+        self._loss = nn.CrossEntropyLoss() if self.hparams.classify else nn.MSELoss()
 
     def set_dataset(self, dataset):
+        if self.hparams.window is not None:
+            dataset.difile = WindowChunkedDIFile(dataset.difile, self.hparams.window, self.hparams.step)
+        dataset.set_classify(self.hparams.classify)
         tr, te, va = train_test_loaders(dataset,
                                         random_state=self.hparams.seed,
                                         batch_size=self.hparams.batch_size,
                                         downsample=self.hparams.downsample)
         self.loaders = {'train': tr, 'test': te, 'validate': va}
 
-    def set_loss(self, criterion):
-        self._loss = criterion
+    def _check_loaders(self):
+        if not hasattr(self, 'loaders'):
+            raise ValueError('No loaders available. Call set_dataset before fitting')
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
@@ -28,6 +35,7 @@ class AbstractLit(LightningModule):
 
     # TRAIN
     def train_dataloader(self):
+        self._check_loaders()
         return self.loaders['train']
 
     def training_step(self, batch, batch_idx):
@@ -41,6 +49,7 @@ class AbstractLit(LightningModule):
 
     # VALIDATION
     def val_dataloader(self):
+        self._check_loaders()
         return self.loaders['validate']
 
     def validation_step(self, batch, batch_idx):
@@ -54,6 +63,7 @@ class AbstractLit(LightningModule):
 
     # TEST
     def test_dataloader(self):
+        self._check_loaders()
         return self.loaders['test']
 
     def test_step(self, batch, batch_idx):

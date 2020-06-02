@@ -436,13 +436,9 @@ class DeepIndexFile(Container):
 
     def get(self, arg):
         idx = self.seq_table.id[arg]
-        seq = self.seq_table['sequence'].get(arg, index=True)
-        #seq = self.seq_table['sequence'].get(arg, index=True).astype(np.int)
-        #seq = self.seq_table.convert(seq)
-        #seq = F.one_hot(seq).T.float()
-        label = self.seq_table['taxon'].get(arg, index=True)
-        label = self.taxa_table[self.label_key][label]
-        #label = self.taxa_table.convert(label)
+        seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
+        label = self.seq_table['taxon'].get(arg, index=True)    # index to taxon table
+        label = self.taxa_table[self.label_key][label]          # get the interesting information from the taxon table i.e. embedding
         return (idx, seq, label)
 
     def __len__(self):
@@ -498,7 +494,6 @@ class AbstractChunkedDIFile(object):
     def __getitem__(self, i):
         if not isinstance(i, (int, np.integer)):
             raise ValueError("ChunkedDIFile only supportsd indexing with an integer")
-
         seq_i = self.seq_idx[i]
         item = self.difile[seq_i]
         s = self.start[i]
@@ -508,12 +503,6 @@ class AbstractChunkedDIFile(object):
     def __getattr__(self, attr):
         """Delegate retrival of attributes to the data in self.data"""
         return getattr(self.difile, attr)
-#
-#    def set_torch(self, *args, **kwargs):
-#        self.difile.set_torch(*args, **kwargs)
-#
-#    def set_sanity(self, *args, **kwargs):
-#        self.difile.set_sanity(*args, **kwargs)
 
 
 class WindowChunkedDIFile(AbstractChunkedDIFile):
