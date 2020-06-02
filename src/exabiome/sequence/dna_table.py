@@ -500,12 +500,10 @@ class AbstractChunkedDIFile(object):
             raise ValueError("ChunkedDIFile only supportsd indexing with an integer")
 
         seq_i = self.seq_idx[i]
-        ret = self.difile[seq_i]
+        item = self.difile[seq_i]
         s = self.start[i]
         e = self.end[i]
-        ret['sequence'] = ret['sequence'][:,s:e]
-        ret['name'] += "|%d-%d" % (s, e)
-        return ret
+        return seq_i, item[1][s:e], item[2]
 
     def __getattr__(self, attr):
         """Delegate retrival of attributes to the data in self.data"""

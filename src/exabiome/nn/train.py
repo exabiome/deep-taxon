@@ -130,6 +130,16 @@ def parse_args(*addl_args, argv=None):
     input_path = args.input
     criterion = nn.CrossEntropyLoss() if args.classify else nn.MSELoss()
 
+    # determing number of input channels:
+    # 5 for DNA, 26 for protein
+    # 5 for sanity check (this probably doesn't work anymore)
+    input_nc = 5
+    if args.protein:
+        input_nc = 26
+    if args.sanity:
+        input_nc = 5
+    args.input_nc = input_nc
+
     del args.resume
     del args.input
     del args.model
@@ -542,14 +552,6 @@ def run_lightening():
         pickle.dump(args, f)
 
     seed_everything(args.seed)
-
-    input_nc = 5
-    if args.protein:
-        input_nc = 26
-
-    if args.sanity:
-        input_nc = 5
-    args.input_nc = input_nc
 
     dataset, io = get_dataset(input_path,
                               protein=args.protein,
