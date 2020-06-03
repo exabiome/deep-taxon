@@ -65,12 +65,19 @@ class SeqDataset(Dataset):
             return torch.tensor(data, device=device, dtype=dtype)
         return func
 
-    def load(self, torch=False, device=None):
+    def _check_load(self, data, transforms):
+        if not isinstance(data.data, torch.Tensor):
+            if not isinstance(transforms, (tuple, list)):
+                transforms = [transforms]
+            for tfm in transforms:
+                data.transform(tfm)
+
+    def load(self, device=None):
         tfm = self._to_torch(device)
         def to_sint(data):
             return data[:].astype(np.int16)
-        self.difile.seq_table['sequence'].target.transform(to_sint).transform(tfm)
-        self.difile.taxa_table[self.difile.label_key].transform(tfm)
+        self._check_load(self.difile.seq_table['sequence'].target, [to_sint, tfm])
+        self._check_load(self.difile.taxa_table[self.difile.label_key], tfm)
         self.one_hot = self.get_one_hot(True)
 
     def __getitem__(self, i):

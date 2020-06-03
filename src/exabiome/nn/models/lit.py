@@ -13,7 +13,11 @@ class AbstractLit(LightningModule):
         self.hparams = hparams
         self._loss = nn.CrossEntropyLoss() if self.hparams.classify else nn.MSELoss()
 
-    def set_dataset(self, dataset):
+    def set_dataset(self, dataset, load=True):
+        dataset.set_classify(self.hparams.classify)
+        if load:
+            dataset.load()
+
         if self.hparams.window is not None:
             dataset.difile = WindowChunkedDIFile(dataset.difile, self.hparams.window, self.hparams.step)
         dataset.set_classify(self.hparams.classify)

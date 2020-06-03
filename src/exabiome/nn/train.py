@@ -150,10 +150,10 @@ def check_window(window, step):
         return window, step
 
 
-def get_dataset(path, protein=False, window=None, step=None, classify=False, **kwargs):
+def get_dataset(path):
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
-    dataset = SeqDataset(difile, classify=classify)
+    dataset = SeqDataset(difile)
     return dataset, hdmfio
 
 
@@ -186,13 +186,9 @@ def run_lightening():
 
     seed_everything(args.seed)
 
-    dataset, io = get_dataset(input_path,
-                              protein=args.protein,
-                              window=args.window,
-                              step=args.step,
-                              classify=args.classify)
-    dataset.load()
-
+    # get dataset so we can set model parameters that are
+    # dependent on the dataset, such as final number of outputs
+    dataset, io = get_dataset(input_path)
     if args.classify:
         n_outputs = len(dataset.difile.taxa_table)
     else:
@@ -228,15 +224,18 @@ def run_lightening():
 
         net.set_dataset(dataset)
 
-        print_dataloader(net.test_dataloader())
-        print_dataloader(net.train_dataloader())
-        print_dataloader(net.val_dataloader())
+        if args.debug:
+            print_dataloader(net.test_dataloader())
+            print_dataloader(net.train_dataloader())
+            print_dataloader(net.val_dataloader())
         if args.accuracy:
             from .metric import NCorrect, NeighborNCorrect
-            if args.classify:
+            if net.hparams.classify:
                 metric = NCorrect()
             else:
                 metric = NeighborNCorrect(dataset.difile)
+            net.test_dataloader().dataset.set_classify(True)
+            net.test_dataloader().dataset.load()
             total_correct = overall_metric(net, net.test_dataloader(), metric)
             print(total_correct/len(net.test_dataloader().sampler))
         else:
@@ -246,12 +245,12 @@ def run_lightening():
             net = lit_cls.load_from_checkpoint(args.checkpoint)
         else:
             net = lit_cls(args)
-
         net.set_dataset(dataset)
 
-        print_dataloader(net.test_dataloader())
-        print_dataloader(net.train_dataloader())
-        print_dataloader(net.val_dataloader())
+        if args.debug:
+            print_dataloader(net.test_dataloader())
+            print_dataloader(net.train_dataloader())
+            print_dataloader(net.val_dataloader())
         trainer.fit(net)
 
 def print_dataloader(dl):
