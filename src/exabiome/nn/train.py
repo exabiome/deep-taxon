@@ -174,7 +174,7 @@ def run_lightening():
 
     outbase = args.output
     if args.experiment:
-        outbase = os.path.join(outbase, args.experiment)
+        outbase = os.path.join(outbase, 'training_results', args.experiment)
     _check_dir(outbase)
 
     def output(fname):
@@ -202,7 +202,7 @@ def run_lightening():
     targs = dict(
         max_epochs=args.epochs,
         checkpoint_callback=ModelCheckpoint(filepath=output('seed=%d-{epoch:02d}-{val_loss:.2f}' % args.seed), save_weights_only=False),
-        logger = TensorBoardLogger(save_dir=output('tb_logs'), name=args.experiment),
+        logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
         row_log_interval=10,
         log_save_interval=100
     )

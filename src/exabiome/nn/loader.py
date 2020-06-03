@@ -49,6 +49,7 @@ class SeqDataset(Dataset):
         self._target_key = 'class_label' if classify else 'embedding'
 
     def set_classify(self, classify):
+        self.difile.set_classify(classify)
         self._classify = classify
 
     def __len__(self):

@@ -418,6 +418,12 @@ class DeepIndexFile(Container):
         self._sanity = sanity
         self._sanity_features = n_features
 
+    def set_classify(self, classify=True):
+        if classify:
+            self.label_key = 'id'
+        else:
+            self.label_key = 'embedding'
+
     @property
     def labels(self):
         if self.__labels is None:
