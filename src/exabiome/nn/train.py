@@ -63,12 +63,14 @@ def parse_model(string):
     return models[string]
 
 
-def parse_args(*addl_args, argv=None):
+def parse_args(*addl_args, argv=None, return_io=False):
     """
     Parse arguments for training executable
     """
     if argv is None:
         argv = sys.argv[1:]
+    if isinstance(argv, str):
+        argv = argv.strip().split()
 
     epi = """
     output can be used as a checkpoint
@@ -80,14 +82,12 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('output', type=str, help='file to save model', default=None)
     parser.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
-    parser.add_argument('-r', '--resume', action='store_true', help='resume training from checkpoint stored in output', default=False)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
     parser.add_argument('-A', '--accuracy', action='store_true', help='compute accuracy', default=False)
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
-    #parser.add_argument('-i', '--cuda_index', type=parse_cuda_index, default='all', help='which CUDA device to use')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
@@ -120,7 +120,7 @@ def parse_args(*addl_args, argv=None):
     args.logger = logger
 
     model = models._models[args.model]
-    input_path = args.input
+    del args.model
 
     # determing number of input channels:
     # 5 for DNA, 26 for protein
@@ -134,11 +134,35 @@ def parse_args(*addl_args, argv=None):
 
     args.window, args.step = check_window(args.window, args.step)
 
-    del args.resume
-    del args.input
-    del args.model
+    dataset, io = get_dataset(input_path)
 
-    return model, input_path, args
+    if args.classify:
+        n_outputs = len(dataset.difile.taxa_table)
+    else:
+        n_outputs = dataset.difile.n_emb_components
+    args.n_outputs = n_outputs
+
+    targs = dict(
+        max_epochs=args.epochs,
+    )
+
+    gpus = args.gpus
+    del args.gpus
+    if isinstance(gpus, str):
+        gpus = [int(g) for g in gpus.split(',')]
+        targs['distributed_backend'] = 'dp'
+    else:
+        gpus = 1 if gpus else None
+    targs['gpus'] = gpus
+
+    if args.debug:
+        targs['fast_dev_run'] = True
+
+    ret = [model, input_path, args, targs]
+    if return_io:
+        ret.append(io)
+
+    return tuple(ret)
 
 
 def check_window(window, step):
@@ -170,7 +194,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 def run_lightening():
-    lit_cls, input_path, args = parse_args()
+    lit_cls, dataset, args, addl_targs = parse_args()
 
     outbase = args.output
     if args.experiment:
@@ -188,31 +212,14 @@ def run_lightening():
 
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
-    dataset, io = get_dataset(input_path)
-    if args.classify:
-        n_outputs = len(dataset.difile.taxa_table)
-    else:
-        n_outputs = dataset.difile.n_emb_components
-    args.n_outputs = n_outputs
 
     targs = dict(
-        max_epochs=args.epochs,
         checkpoint_callback=ModelCheckpoint(filepath=output('seed=%d-{epoch:02d}-{val_loss:.2f}' % args.seed), save_weights_only=False),
         logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
         row_log_interval=10,
         log_save_interval=100
     )
-
-    gpus = args.gpus
-    if isinstance(gpus, str):
-        gpus = [int(g) for g in gpus.split(',')]
-        targs['distributed_backend'] = 'dp'
-    else:
-        gpus = 1 if gpus else None
-    targs['gpus'] = gpus
-
-    if args.debug:
-        targs['fast_dev_run'] = True
+    targs.update(addl_targs)
 
     trainer = Trainer(**targs)
     if args.test:
