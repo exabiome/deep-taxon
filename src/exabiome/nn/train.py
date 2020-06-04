@@ -134,7 +134,7 @@ def parse_args(*addl_args, argv=None, return_io=False):
 
     args.window, args.step = check_window(args.window, args.step)
 
-    dataset, io = get_dataset(input_path)
+    dataset, io = get_dataset(args.input)
 
     if args.classify:
         n_outputs = len(dataset.difile.taxa_table)
@@ -158,7 +158,7 @@ def parse_args(*addl_args, argv=None, return_io=False):
     if args.debug:
         targs['fast_dev_run'] = True
 
-    ret = [model, input_path, args, targs]
+    ret = [model, dataset, args, targs]
     if return_io:
         ret.append(io)
 
