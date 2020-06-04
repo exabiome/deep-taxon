@@ -43,14 +43,25 @@ class SeqDataset(Dataset):
     def __init__(self, difile, classify=False):
         self.difile = difile
 
-        self.one_hot = self.get_one_hot(False)
+        self.one_hot = self.get_one_hot(True)
 
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'
 
+
     def set_classify(self, classify):
-        self.difile.set_classify(classify)
         self._classify = classify
+        if classify:
+            self._label_key = 'id'
+            self._label_dtype = torch.int64
+        else:
+            self._label_key = 'embedding'
+            self._label_dtype = torch.float32
+
+        # THIS HAS BEEN A MAJOR SOURCE OF PAIN. DYNAMIC TABLE NEEDS BETTER SLICING
+        # It should be possible to select individual columns without haveing to modify
+        # the state of the underlying DynamicTable
+        self.difile.label_key = self._label_key
 
     def __len__(self):
         return len(self.difile)
@@ -77,14 +88,14 @@ class SeqDataset(Dataset):
         def to_sint(data):
             return data[:].astype(np.int16)
         self._check_load(self.difile.seq_table['sequence'].target, [to_sint, tfm])
-        self._check_load(self.difile.taxa_table[self.difile.label_key], tfm)
-        self.one_hot = self.get_one_hot(True)
+        self._check_load(self.difile.taxa_table[self._label_key], tfm)
 
     def __getitem__(self, i):
         # get sequence
         idx, seq, label = self.difile[i]
         ## one-hot encode sequence
-        seq = self.one_hot(seq).T
+        seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64)).float().T
+        label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label)
 
     @staticmethod

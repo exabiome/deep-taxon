@@ -114,20 +114,6 @@ class TorchableMixin:
     def set_raw(self):
         self.convert = lambda x: x
 
-    def set_torch(self, use_torch, **kwargs):
-        """
-        Args:
-            use_torch :          convert data to torch.Tensors
-            maxlen (int):        the maximum sequence length to pad to
-        """
-        if use_torch:
-            self.convert = self.get_torch_conversion(**kwargs)
-        else:
-            self.convert = self.get_numpy_conversion(**kwargs)
-
-    def set_classify(self, classify):
-        self.classify = classify
-
 
 class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
 
@@ -370,14 +356,6 @@ class TaxaTable(DynamicTable, TorchableMixin):
             ret = list(super().__getitem__(key))
             return tuple(ret)
 
-    def set_torch(self, use_torch, device=None, **kwargs):
-        super().set_torch(use_torch, device=device, **kwargs)
-        if use_torch:
-            self.convert_taxa = self.get_torch_conversion(device=device, dtype=torch.long)
-        else:
-            self.convert_taxa = self.get_numpy_conversion(len(self))
-
-
 
 @register_class('CondensedDistanceMatrix', NS)
 class CondensedDistanceMatrix(Data):
@@ -418,12 +396,6 @@ class DeepIndexFile(Container):
         self._sanity = sanity
         self._sanity_features = n_features
 
-    def set_classify(self, classify=True):
-        if classify:
-            self.label_key = 'id'
-        else:
-            self.label_key = 'embedding'
-
     @property
     def labels(self):
         if self.__labels is None:
@@ -449,13 +421,6 @@ class DeepIndexFile(Container):
 
     def __len__(self):
         return len(self.seq_table)
-
-    def set_torch(self, use_torch, dtype=None, device=None, ohe=True, pad=False):
-        maxlen = None
-        if pad:
-            maxlen = np.max(self.seq_table['length'][:])
-        self.seq_table.set_torch(use_torch, dtype=dtype, device=device, ohe=ohe, maxlen=maxlen)
-        self.taxa_table.set_torch(use_torch, dtype=dtype, device=device)
 
     def set_raw(self):
         self.seq_table.set_raw()
@@ -519,6 +484,8 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
     """
 
     def __init__(self, difile, wlen, step=None):
+        if not isinstance(difile, DeepIndexFile):
+            raise ValueError(f'difile must be a DeepIndexFile, got {type(difile)}')
         if step is None:
             step = wlen
         self.wlen = wlen

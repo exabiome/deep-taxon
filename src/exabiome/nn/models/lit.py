@@ -14,13 +14,6 @@ class AbstractLit(LightningModule):
         self._loss = nn.CrossEntropyLoss() if self.hparams.classify else nn.MSELoss()
 
     def set_dataset(self, dataset, load=True):
-        dataset.set_classify(self.hparams.classify)
-        if load:
-            dataset.load()
-
-        if self.hparams.window is not None:
-            dataset.difile = WindowChunkedDIFile(dataset.difile, self.hparams.window, self.hparams.step)
-        dataset.set_classify(self.hparams.classify)
         tr, te, va = train_test_loaders(dataset,
                                         random_state=self.hparams.seed,
                                         batch_size=self.hparams.batch_size,

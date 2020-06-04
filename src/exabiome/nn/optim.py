@@ -1,5 +1,6 @@
 from .train import parse_args
 import os
+import copy
 
 import pytorch_lightning as pl
 from pytorch_lightning import Callback
@@ -23,8 +24,10 @@ class Objective:
     A helper class for building the objective function
     """
 
-    def __init__(self, model=None, monitor_metric='val_loss', targs=None):
-        self.model = model
+    def __init__(self, model_cls, hparams, dataset, monitor_metric='val_loss', targs=None):
+        self.model_cls = model_cls
+        self.hparams = hparams
+        self.dataset = dataset
         self.monitor_metric = monitor_metric
         if targs is not None:
             # do not let user overwrite checkpoint_callback or callbacks
@@ -43,6 +46,11 @@ class Objective:
             targs = dict()
         self.targs = targs
 
+    def get_hparams(self, trial):
+        ret = dict()
+        ret['dropout_rate'] = trial.suggest_uniform('dropout_rate', 0.0, 1.0)
+        return ret
+
     def __call__(self, trial):
         # Filenames for each trial must be made unique in order to access each checkpoint.
         ckpt_path = os.path.join('optuna',
@@ -50,6 +58,13 @@ class Objective:
                                  "trial_{}".format(trial.number),
                                  "{epoch:03d}")
         checkpoint_callback = pl.callbacks.ModelCheckpoint(ckpt_path, monitor=self.monitor_metric)
+
+        # set hyperparameters under optimization
+        hparams = copy.copy(self.hparams)
+        for k, v in self.get_hparams(trial).items():
+            setattr(hparams, k, v)
+        model = self.model_cls(hparams)
+        model.set_dataset(self.dataset)
 
         # The default logger in PyTorch Lightning writes to event files to be consumed by
         # TensorBoard. We don't use any logger here as it requires us to implement several abstract
@@ -66,7 +81,7 @@ class Objective:
         _targs.update(self.targs)
 
         trainer = pl.Trainer(**_targs)
-        trainer.fit(self.model)
+        trainer.fit(model)
 
         return metrics_callback.metrics[-1][self.monitor_metric]
 
@@ -75,9 +90,6 @@ def get_objective(cmdline):
     Return an Optuna objective for the given command-line arguments
     """
 
-    model_cls, dataset, args, addl_targs = parse_args(argv=cmdline)
+    model_cls, dataset, hparams, addl_targs = parse_args(argv=cmdline)
 
-    model = model_cls(args)
-    model.set_dataset(dataset)
-
-    return Objective(model, targs=addl_targs)
+    return Objective(model_cls, hparams, dataset, targs=addl_targs)

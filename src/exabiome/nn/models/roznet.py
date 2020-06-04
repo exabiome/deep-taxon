@@ -41,16 +41,17 @@ class RozNet(AbstractLit):
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
         )
+        pool_size = 24
         if maxpool:
-            self.pool = nn.AdaptiveMaxPool1d(24)
+            self.pool = nn.AdaptiveMaxPool1d(pool_size)
         else:
-            self.pool = nn.AdaptiveAvgPool1d(24)
+            self.pool = nn.AdaptiveAvgPool1d(pool_size)
         self.classifier = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(256*24, 1024),
+            nn.Dropout(hparams.dropout_rate),
+            nn.Linear(256*pool_size, 1024),
             nn.BatchNorm1d(1024),
             nn.ReLU(inplace=True),
-            nn.Dropout(),
+            nn.Dropout(hparams.dropout_rate),
             nn.Linear(1024, 1024),
             nn.BatchNorm1d(1024),
             nn.ReLU(inplace=True),

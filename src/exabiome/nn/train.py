@@ -86,12 +86,13 @@ def parse_args(*addl_args, argv=None, return_io=False):
     parser.add_argument('-A', '--accuracy', action='store_true', help='compute accuracy', default=False)
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
+    parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
-    parser.add_argument('-D', '--downsample', type=float, default=None, help='downsample input before training')
+    parser.add_argument('--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
@@ -132,8 +133,6 @@ def parse_args(*addl_args, argv=None, return_io=False):
         input_nc = 5
     args.input_nc = input_nc
 
-    args.window, args.step = check_window(args.window, args.step)
-
     dataset, io = get_dataset(args.input)
 
     if args.classify:
@@ -157,6 +156,14 @@ def parse_args(*addl_args, argv=None, return_io=False):
 
     if args.debug:
         targs['fast_dev_run'] = True
+
+    args.window, args.step = check_window(args.window, args.step)
+    if args.window is not None:
+        dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
+
+    dataset.set_classify(args.classify)
+    if args.load:
+        dataset.load()
 
     ret = [model, dataset, args, targs]
     if return_io:
