@@ -27,7 +27,7 @@ class NeighborNCorrect(AbstractMetric):
         self.knn = difile.get_knn_classifier()
 
     def score(self, target, output):
-        dat = output.data
+        dat = output.data.numpy()
         labels = target.numpy()
         pred = self.knn.predict(dat)
         n_correct = (pred == labels).sum()
