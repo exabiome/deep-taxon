@@ -392,6 +392,9 @@ class DeepIndexFile(Container):
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1]
         self.label_key = 'id'
 
+    def set_label_key(self, val):
+        self.label_key = val
+
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
         self._sanity_features = n_features

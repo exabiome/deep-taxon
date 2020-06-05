@@ -61,7 +61,7 @@ class SeqDataset(Dataset):
         # THIS HAS BEEN A MAJOR SOURCE OF PAIN. DYNAMIC TABLE NEEDS BETTER SLICING
         # It should be possible to select individual columns without haveing to modify
         # the state of the underlying DynamicTable
-        self.difile.label_key = self._label_key
+        self.difile.set_label_key(self._label_key)
 
     def __len__(self):
         return len(self.difile)
@@ -165,6 +165,22 @@ def train_test_validate_split(data, stratify=None, random_state=None,
     return train_idx, test_idx, val_idx
 
 
+class DatasetSubset(Dataset):
+
+    def __init__(self, dataset, index):
+        self.index = index
+        self.dataset = dataset
+
+    def __getitem__(self, i):
+        return self.dataset[self.index[i]]
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getattr__(self, attr):
+        return getattr(self.dataset, attr)
+
+
 def train_test_loaders(dataset, random_state=None, downsample=None,
                        **kwargs):
     """
@@ -177,14 +193,14 @@ def train_test_loaders(dataset, random_state=None, downsample=None,
     index = np.arange(len(dataset))
     stratify = dataset.difile.labels
     if downsample is not None:
-        index, _, stratify, _ = train_test_split(index, stratify, train_size=downsample)
+        index, _, stratify, _ = train_test_split(index, stratify, train_size=downsample, random_state=random_state)
 
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
-    train_sampler = SubsetRandomSampler(train_idx)
-    test_sampler = SubsetRandomSampler(test_idx)
-    validate_sampler = SubsetRandomSampler(validate_idx)
-    return (DataLoader(dataset, collate_fn=collate, sampler=train_sampler, **kwargs),
-            DataLoader(dataset, collate_fn=collate, sampler=test_sampler, **kwargs),
-            DataLoader(dataset, collate_fn=collate, sampler=validate_sampler, **kwargs))
+    train_dataset = DatasetSubset(dataset, train_idx)
+    test_dataset = DatasetSubset(dataset, test_idx)
+    validate_dataset = DatasetSubset(dataset, validate_idx)
+    return (DataLoader(train_dataset, collate_fn=collate, **kwargs),
+            DataLoader(test_dataset, collate_fn=collate, **kwargs),
+            DataLoader(validate_dataset, collate_fn=collate, **kwargs))
