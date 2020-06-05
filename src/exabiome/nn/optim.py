@@ -1,5 +1,6 @@
 from .train import parse_args
 import os
+import sys
 import copy
 
 import pytorch_lightning as pl
@@ -53,7 +54,7 @@ class Objective:
 
     def __call__(self, trial):
         # Filenames for each trial must be made unique in order to access each checkpoint.
-        ckpt_path = os.path.join('optuna',
+        ckpt_path = os.path.join(self.hparams.output,
                                  trial.study.study_name,
                                  "trial_{}".format(trial.number),
                                  "{epoch:03d}")
@@ -85,6 +86,7 @@ class Objective:
 
         return metrics_callback.metrics[-1][self.monitor_metric]
 
+
 def get_objective(cmdline):
     """
     Return an Optuna objective for the given command-line arguments
@@ -93,3 +95,74 @@ def get_objective(cmdline):
     model_cls, dataset, hparams, addl_targs = parse_args(argv=cmdline)
 
     return Objective(model_cls, hparams, dataset, targs=addl_targs)
+
+
+def parse_args(*addl_args, argv=None, return_io=False):
+    """
+    Parse arguments for training executable
+    """
+    import argparse
+    from ..utils import parse_seed
+
+    if argv is None:
+        argv = sys.argv[1:]
+    if isinstance(argv, str):
+        argv = argv.strip().split()
+
+    desc = "run network hyperparameter optimization"
+    parser = argparse.ArgumentParser(description=desc)
+
+    parser.add_argument('storage', help='Optuna storage database')
+    parser.add_argument('study_name', help='the study to run trials for')
+    parser.add_argument('output', type=str, help='file to checkpoints to')
+    parser.add_argument('-t', '--n_trials', type=int, default=1, help='the number of trials to run')
+    parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split in this study')
+
+
+    group = parser.add_argument_group(title='Training runtime arguments',
+                                      description='Arguments that configure how training is run')
+    group.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
+    group.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
+    parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+
+    if len(argv) == 0:
+        parser.print_help()
+        sys.exit(1)
+
+    args = parser.parse_args(argv)
+
+    study = optuna.create_study(storage=args.storage,
+                                study_name=args.study_name,
+                                load_if_exists=True)
+
+    # set seed of study if it has not yet been set
+    # otherwise, ignore the provided seed
+    if hasattr(study, 'seed'):
+        args.seed = study.seed
+    else:
+        study.set_user_attr('seed', args.seed)
+
+    n_trials = args.n_trials
+
+    del args.storage
+    del args.study_name
+    del args.n_trials
+
+    return study, n_trials, args
+
+
+def optuna_run(train_cmdline, objective_cls=Objective):
+    from .train import parse_args as parse_train_args, process_args as process_train_args
+
+    study, n_trials, rt_args = parse_args()
+
+    train_args = parse_train_args(argv=train_cmdline)
+
+    for k,v in vars(rt_args).items():
+        setattr(train_args, k, v)
+
+    model_cls, dataset, hparams, addl_targs = process_train_args(train_args)
+
+    objective = Objective(model_cls, hparams, dataset, targs=addl_targs)
+
+    study.optimize(objective, n_trials=n_trials)

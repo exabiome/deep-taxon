@@ -25,6 +25,24 @@ def parse_train_size(string):
     return ret
 
 
+def parse_gpus(gpus):
+    ret = gpus
+    if isinstance(ret, str):
+        ret = [int(g) for g in ret.split(',')]
+        if len(ret) == 1:
+            # user specified the number of GPUs to use,
+            # else assume they just specified which specific GPUS to use
+            ret = ret[0]
+    elif isinstance(ret, bool):
+        if ret:
+            # use all GPUs
+            ret = -1
+        else:
+            # don't use any GPUs
+            ret = None
+    return ret
+
+
 def parse_logger(string):
     if not string:
         ret = logging.getLogger('stdout')
@@ -63,7 +81,7 @@ def parse_model(string):
     return models[string]
 
 
-def parse_args(*addl_args, argv=None, return_io=False):
+def parse_args(*addl_args, argv=None):
     """
     Parse arguments for training executable
     """
@@ -111,6 +129,13 @@ def parse_args(*addl_args, argv=None, return_io=False):
 
     args = parser.parse_args(argv)
 
+    return args
+
+
+def process_args(args, return_io=False):
+    """
+    Process arguments for running training
+    """
     logger = args.logger
     # set up logger
     if logger is None:
@@ -145,14 +170,10 @@ def parse_args(*addl_args, argv=None, return_io=False):
         max_epochs=args.epochs,
     )
 
-    gpus = args.gpus
-    del args.gpus
-    if isinstance(gpus, str):
-        gpus = [int(g) for g in gpus.split(',')]
+    targs['gpus'] = parse_gpus(args.gpus)
+    if targs['gpus'] != 1:
         targs['distributed_backend'] = 'dp'
-    else:
-        gpus = 1 if gpus else None
-    targs['gpus'] = gpus
+    del args.gpus
 
     if args.debug:
         targs['fast_dev_run'] = True
@@ -201,7 +222,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 def run_lightening():
-    lit_cls, dataset, args, addl_targs = parse_args()
+    lit_cls, dataset, args, addl_targs = process_args(parse_args())
 
     outbase = args.output
     if args.experiment:
@@ -248,11 +269,14 @@ def run_lightening():
                 metric = NCorrect()
             else:
                 metric = NeighborNCorrect(dataset.difile)
-            net.test_dataloader().dataset.set_classify(True)
             net.test_dataloader().dataset.load()
+            net.test_dataloader().dataset.set_classify(True)
             total_correct = overall_metric(net, net.test_dataloader(), metric)
             print(total_correct/len(net.test_dataloader().sampler))
         else:
+            net.test_dataloader().dataset.load()
+            if net.hparams.classify:
+                net.test_dataloader().dataset.set_classify(True)
             trainer.test(net)
     else:
         if args.checkpoint is not None:
@@ -268,7 +292,7 @@ def run_lightening():
         trainer.fit(net)
 
 def print_dataloader(dl):
-    print(dl.sampler.indices[0], dl.sampler.indices[-1])
+    print(dl.dataset.index[0], dl.dataset.index[-1])
 
 def overall_metric(model, loader, metric):
     val = 0.0
