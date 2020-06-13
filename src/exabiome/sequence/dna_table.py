@@ -472,7 +472,8 @@ class AbstractChunkedDIFile(object):
         item = self.difile[seq_i]
         s = self.start[i]
         e = self.end[i]
-        return seq_i, item[1][s:e], item[2]
+        #return seq_i, item[1][s:e], item[2]
+        return i, item[1][s:e], item[2]
 
     def __getattr__(self, attr):
         """Delegate retrival of attributes to the data in self.data"""
