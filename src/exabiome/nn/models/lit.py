@@ -5,19 +5,29 @@ import torch.nn as nn
 import torch
 
 from ...sequence import WindowChunkedDIFile
+from ..loss import DistMSELoss
 
 class AbstractLit(LightningModule):
 
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        self._loss = nn.CrossEntropyLoss() if self.hparams.classify else nn.MSELoss()
+        if self.hparams.manifold:
+            self._loss = DistMSELoss()
+        elif self.hparams.classify:
+            self._loss = nn.CrossEntropyLoss()
+        else:
+            self._loss =  nn.MSELoss()
 
-    def set_dataset(self, dataset, load=True):
-        tr, te, va = train_test_loaders(dataset,
-                                        random_state=self.hparams.seed,
-                                        batch_size=self.hparams.batch_size,
-                                        downsample=self.hparams.downsample)
+    def set_dataset(self, dataset, load=True, inference=False):
+        kwargs = dict(random_state=self.hparams.seed,
+                      batch_size=self.hparams.batch_size,
+                      distances=self.hparams.manifold,
+                      downsample=self.hparams.downsample)
+
+        if inference:
+            kwargs['distances'] = False
+        tr, te, va = train_test_loaders(dataset, **kwargs)
         self.loaders = {'train': tr, 'test': te, 'validate': va}
 
     def _check_loaders(self):
