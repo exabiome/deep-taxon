@@ -7,6 +7,43 @@ from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
 
+
+class DistanceCollater:
+    def __init__(self, dmat):
+        if len(dmat.shape) == 1:
+            from scipy.spatial.distance import squareform
+            dmat = squareform(dmat)
+        self.dmat = torch.as_tensor(dmat, dtype=torch.float).pow(2)
+
+    def __call__(self, samples):
+        """
+        A function to collate samples and return a sub-distance matrix
+        """
+        maxlen = 0
+        l_idx = -1
+        for i, X, y in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+        X_ret = list()
+        y_idx = list()
+        idx_ret = list()
+        size_ret = list()
+        for i, X, y in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif))
+            X_ret.append(X_)
+            size_ret.append(X.shape[l_idx])
+            idx_ret.append(i)
+            y_idx.append(y)
+        X_ret = torch.stack(X_ret)
+        # Get distances
+        y_ret = self.dmat[y_idx][:, y_idx]
+        size_ret = torch.tensor(size_ret)
+        idx_ret = torch.tensor(idx_ret)
+        return (idx_ret, X_ret, y_ret, size_ret)
+
 def collate(samples):
     """
     A function to collate variable length sequence samples
@@ -32,6 +69,7 @@ def collate(samples):
     X_ret = torch.stack(X_ret)
     y_ret = torch.stack(y_ret)
     size_ret = torch.tensor(size_ret)
+    idx_ret = torch.tensor(idx_ret)
     return (idx_ret, X_ret, y_ret, size_ret)
 
 
@@ -181,26 +219,34 @@ class DatasetSubset(Dataset):
         return getattr(self.dataset, attr)
 
 
-def train_test_loaders(dataset, random_state=None, downsample=None,
+def train_test_loaders(dataset, random_state=None, downsample=None, distances=False,
                        **kwargs):
     """
     Return DataLoaders for training and test datasets.
 
     Args:
-        path (str): the path to the DeepIndex file
+        path (str):                  the path to the DeepIndex file
+        distances (str):             return distances for the
         kwargs    : any additional arguments to pass into torch.DataLoader
     """
     index = np.arange(len(dataset))
     stratify = dataset.difile.labels
     if downsample is not None:
-        index, _, stratify, _ = train_test_split(index, stratify, train_size=downsample, random_state=random_state)
+        index, _, stratify, _ = train_test_split(index, stratify,
+                                                 train_size=downsample,
+                                                 random_state=random_state)
 
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
+
+    collater = collate
+    if distances:
+        collater = DistanceCollater(dataset.difile.distances.data[:])
+
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)
     validate_dataset = DatasetSubset(dataset, validate_idx)
-    return (DataLoader(train_dataset, collate_fn=collate, **kwargs),
-            DataLoader(test_dataset, collate_fn=collate, **kwargs),
-            DataLoader(validate_dataset, collate_fn=collate, **kwargs))
+    return (DataLoader(train_dataset, collate_fn=collater, **kwargs),
+            DataLoader(test_dataset, collate_fn=collater, **kwargs),
+            DataLoader(validate_dataset, collate_fn=collater, **kwargs))
