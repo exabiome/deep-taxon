@@ -3,20 +3,14 @@ import os
 import os.path
 import pickle
 from datetime import datetime
-import torch
-import torch.nn as nn
-import torch.optim as optim
 import numpy as np
-from exabiome.sequence import AbstractChunkedDIFile, WindowChunkedDIFile
-from . import SeqDataset, train_test_loaders
-from ..utils import parse_seed
+from ..utils import parse_seed, check_argv, parse_logger
+from .utils import process_gpus, process_model_and_dataset
 from hdmf.utils import docval
-from hdmf.common import get_hdf5io
 
 import argparse
 import logging
 
-from . import models
 
 def parse_train_size(string):
     ret = float(string)
@@ -25,70 +19,11 @@ def parse_train_size(string):
     return ret
 
 
-def parse_gpus(gpus):
-    ret = gpus
-    if isinstance(ret, str):
-        ret = [int(g) for g in ret.split(',')]
-        if len(ret) == 1:
-            # user specified the number of GPUs to use,
-            # else assume they just specified which specific GPUS to use
-            ret = ret[0]
-    elif isinstance(ret, bool):
-        if ret:
-            # use all GPUs
-            ret = -1
-        else:
-            # don't use any GPUs
-            ret = None
-    return ret
-
-
-def parse_logger(string):
-    if not string:
-        ret = logging.getLogger('stdout')
-        hdlr = logging.StreamHandler(sys.stdout)
-    else:
-        ret = logging.getLogger(string)
-        hdlr = logging.FileHandler(string)
-    ret.setLevel(logging.INFO)
-    ret.addHandler(hdlr)
-    hdlr.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-    return ret
-
-
-def _parse_cuda_index_helper(s):
-    try:
-        i = int(s)
-        if i > torch.cuda.device_count() or i < 0:
-            raise ValueError(s)
-        return i
-    except :
-        devices = str(np.arange(torch.cuda.device_count()))
-        raise argparse.ArgumentTypeError(f'{s} is not a valid CUDA index. Please choose from {devices}')
-
-
-def parse_cuda_index(string):
-    if string == 'all':
-        return list(range(torch.cuda.device_count()))
-    else:
-        if ',' in string:
-            return [_parse_cuda_index_helper(_) for _ in string.split(',')]
-        else:
-            return _parse_cuda_index_helper(string)
-
-
-def parse_model(string):
-    return models[string]
-
-
 def parse_args(*addl_args, argv=None):
     """
     Parse arguments for training executable
     """
-    if argv is None:
-        argv = sys.argv[1:]
-    if isinstance(argv, str):
-        argv = argv.strip().split()
+    argv = check_argv(argv)
 
     epi = """
     output can be used as a checkpoint
@@ -98,7 +33,10 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('model', type=str, help='the model to run', choices=list(models._models.keys()))
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
-    parser.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
+    type_group = parser.add_mutually_exclusive_group()
+    type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
+    type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
+    type_group.add_argument('-R', '--regression', action='store_true', help='run a manifold learning problem', default=False)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
     parser.add_argument('-A', '--accuracy', action='store_true', help='compute accuracy', default=False)
@@ -132,10 +70,13 @@ def parse_args(*addl_args, argv=None):
     return args
 
 
-def process_args(args, return_io=False):
+def process_args(args=None, return_io=False):
     """
     Process arguments for running training
     """
+    if not isinstance(args, argparse.Namespace):
+        args = parse_args(args)
+
     logger = args.logger
     # set up logger
     if logger is None:
@@ -144,9 +85,6 @@ def process_args(args, return_io=False):
     if args.debug:
         logger.setLevel(logging.DEBUG)
     args.logger = logger
-
-    model = models._models[args.model]
-    del args.model
 
     # determing number of input channels:
     # 5 for DNA, 26 for protein
@@ -158,13 +96,7 @@ def process_args(args, return_io=False):
         input_nc = 5
     args.input_nc = input_nc
 
-    dataset, io = get_dataset(args.input)
-
-    if args.classify:
-        n_outputs = len(dataset.difile.taxa_table)
-    else:
-        n_outputs = dataset.difile.n_emb_components
-    args.n_outputs = n_outputs
+    model, dataset, io = process_model_and_dataset(args)
 
     targs = dict(
         max_epochs=args.epochs,
@@ -178,43 +110,11 @@ def process_args(args, return_io=False):
     if args.debug:
         targs['fast_dev_run'] = True
 
-    args.window, args.step = check_window(args.window, args.step)
-    if args.window is not None:
-        dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
-
-    dataset.set_classify(args.classify)
-    if args.load:
-        dataset.load()
-
     ret = [model, dataset, args, targs]
     if return_io:
         ret.append(io)
 
     return tuple(ret)
-
-
-def check_window(window, step):
-    if window is None:
-        return None, None
-    else:
-        if step is None:
-            step = window
-        return window, step
-
-
-def get_dataset(path):
-    hdmfio = get_hdf5io(path, 'r')
-    difile = hdmfio.read()
-    dataset = SeqDataset(difile)
-    return dataset, hdmfio
-
-
-def _check_dir(path):
-    if os.path.exists(path):
-        if not os.path.isdir(path):
-            raise ValueError(f'{path} already exists as a file')
-    else:
-        os.makedirs(path)
 
 
 from pytorch_lightning import Trainer, seed_everything
@@ -224,13 +124,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 def run_lightening():
     lit_cls, dataset, args, addl_targs = process_args(parse_args())
 
-    outbase = args.output
-    if args.experiment:
-        outbase = os.path.join(outbase, 'training_results', args.experiment)
-    _check_dir(outbase)
-
-    def output(fname):
-        return os.path.join(outbase, fname)
+    outbase, output = process_output(args)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -251,13 +145,9 @@ def run_lightening():
 
     trainer = Trainer(**targs)
     if args.test:
-        if args.checkpoint is not None:
-            net = lit_cls.load_from_checkpoint(args.checkpoint)
-        else:
+        if args.checkpoint is None
             print('If running with --test, must provide argument to --checkpoint', file=sys.stderr)
             sys.exit(1)
-
-        net.set_dataset(dataset)
 
         if args.debug:
             print_dataloader(net.test_dataloader())
@@ -279,12 +169,6 @@ def run_lightening():
                 net.test_dataloader().dataset.set_classify(True)
             trainer.test(net)
     else:
-        if args.checkpoint is not None:
-            net = lit_cls.load_from_checkpoint(args.checkpoint)
-        else:
-            net = lit_cls(args)
-        net.set_dataset(dataset)
-
         if args.debug:
             print_dataloader(net.test_dataloader())
             print_dataloader(net.train_dataloader())
