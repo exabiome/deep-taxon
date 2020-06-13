@@ -2,7 +2,37 @@ from datetime import datetime
 import argparse
 import glob
 import os
+import sys
+import logging
 
+
+def check_argv(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if isinstance(argv, str):
+        argv = argv.strip().split()
+    return argv
+
+
+def parse_logger(string):
+    if not string:
+        ret = logging.getLogger('stdout')
+        hdlr = logging.StreamHandler(sys.stdout)
+    else:
+        ret = logging.getLogger(string)
+        hdlr = logging.FileHandler(string)
+    ret.setLevel(logging.INFO)
+    ret.addHandler(hdlr)
+    hdlr.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+    return ret
+
+
+def check_directory(path):
+    if os.path.exists(path):
+        if not os.path.isdir(path):
+            raise ValueError(f'{path} already exists as a file')
+    else:
+        os.makedirs(path)
 
 def get_seed():
     return int(datetime.now().timestamp()*1000000) % (2**32 -1)

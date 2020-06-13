@@ -3,8 +3,10 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+from . import model, AbstractLit
 
-class FC(nn.Module):
+@model('fc')
+class FC(AbstractLit):
     '''
     A 1D CNN with 5 convolutional layers, followed by 3 fully-connected layers
 

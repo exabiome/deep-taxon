@@ -114,20 +114,6 @@ class TorchableMixin:
     def set_raw(self):
         self.convert = lambda x: x
 
-    def set_torch(self, use_torch, **kwargs):
-        """
-        Args:
-            use_torch :          convert data to torch.Tensors
-            maxlen (int):        the maximum sequence length to pad to
-        """
-        if use_torch:
-            self.convert = self.get_torch_conversion(**kwargs)
-        else:
-            self.convert = self.get_numpy_conversion(**kwargs)
-
-    def set_classify(self, classify):
-        self.classify = classify
-
 
 class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
 
@@ -370,14 +356,6 @@ class TaxaTable(DynamicTable, TorchableMixin):
             ret = list(super().__getitem__(key))
             return tuple(ret)
 
-    def set_torch(self, use_torch, device=None, **kwargs):
-        super().set_torch(use_torch, device=device, **kwargs)
-        if use_torch:
-            self.convert_taxa = self.get_torch_conversion(device=device, dtype=torch.long)
-        else:
-            self.convert_taxa = self.get_numpy_conversion(len(self))
-
-
 
 @register_class('CondensedDistanceMatrix', NS)
 class CondensedDistanceMatrix(Data):
@@ -414,6 +392,9 @@ class DeepIndexFile(Container):
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1]
         self.label_key = 'id'
 
+    def set_label_key(self, val):
+        self.label_key = val
+
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
         self._sanity_features = n_features
@@ -436,23 +417,13 @@ class DeepIndexFile(Container):
 
     def get(self, arg):
         idx = self.seq_table.id[arg]
-        seq = self.seq_table['sequence'].get(arg, index=True).astype(np.int)
-        seq = self.seq_table.convert(seq)
-        seq = F.one_hot(seq).T.float()
-        label = self.seq_table['taxon'].get(arg, index=True)
-        label = self.taxa_table[self.label_key][label]
-        label = self.taxa_table.convert(label)
+        seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
+        label = self.seq_table['taxon'].get(arg, index=True)    # index to taxon table
+        label = self.taxa_table[self.label_key][label]          # get the interesting information from the taxon table i.e. embedding
         return (idx, seq, label)
 
     def __len__(self):
         return len(self.seq_table)
-
-    def set_torch(self, use_torch, dtype=None, device=None, ohe=True, pad=False):
-        maxlen = None
-        if pad:
-            maxlen = np.max(self.seq_table['length'][:])
-        self.seq_table.set_torch(use_torch, dtype=dtype, device=device, ohe=ohe, maxlen=maxlen)
-        self.taxa_table.set_torch(use_torch, dtype=dtype, device=device)
 
     def set_raw(self):
         self.seq_table.set_raw()
@@ -477,25 +448,6 @@ class DeepIndexFile(Container):
         ret.fit(emb, np.arange(emb.shape[0]))
         return ret
 
-    @staticmethod
-    def _to_numpy(data):
-        return data[:]
-
-    @staticmethod
-    def _to_torch(device=None, dtype=None):
-        def func(data):
-            return torch.tensor(data, device=device, dtype=dtype)
-        return func
-
-    def load(self, torch=False, device=None):
-        for c in self.seq_table.columns:
-            c.transform(self._to_numpy)
-        for c in self.taxa_table.columns:
-            c.transform(self._to_numpy)
-        if torch:
-            self.seq_table['sequence'].target.transform(self._to_torch(device))
-            self.taxa_table['embedding'].transform(self._to_torch(device))
-
 
 
 class AbstractChunkedDIFile(object):
@@ -516,24 +468,16 @@ class AbstractChunkedDIFile(object):
     def __getitem__(self, i):
         if not isinstance(i, (int, np.integer)):
             raise ValueError("ChunkedDIFile only supportsd indexing with an integer")
-
         seq_i = self.seq_idx[i]
-        ret = self.difile[seq_i]
+        item = self.difile[seq_i]
         s = self.start[i]
         e = self.end[i]
-        ret['sequence'] = ret['sequence'][:,s:e]
-        ret['name'] += "|%d-%d" % (s, e)
-        return ret
+        #return seq_i, item[1][s:e], item[2]
+        return i, item[1][s:e], item[2]
 
     def __getattr__(self, attr):
         """Delegate retrival of attributes to the data in self.data"""
         return getattr(self.difile, attr)
-#
-#    def set_torch(self, *args, **kwargs):
-#        self.difile.set_torch(*args, **kwargs)
-#
-#    def set_sanity(self, *args, **kwargs):
-#        self.difile.set_sanity(*args, **kwargs)
 
 
 class WindowChunkedDIFile(AbstractChunkedDIFile):
@@ -544,6 +488,8 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
     """
 
     def __init__(self, difile, wlen, step=None):
+        if not isinstance(difile, DeepIndexFile):
+            raise ValueError(f'difile must be a DeepIndexFile, got {type(difile)}')
         if step is None:
             step = wlen
         self.wlen = wlen

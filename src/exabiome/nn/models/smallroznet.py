@@ -3,8 +3,11 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+from . import model, AbstractLit
 
-class RozNet(nn.Module):
+
+@model('smallroznet')
+class SmallRozNet(AbstractLit):
     '''
     A 1D CNN with 5 convolutional layers, followed by 3 fully-connected layers
 
@@ -12,42 +15,46 @@ class RozNet(nn.Module):
         input_nc (int):  the input number of channels
     '''
 
-    def __init__(self, input_nc, n_outputs=2, first_kernel_size=7, maxpool=True):
-        super(RozNet, self).__init__()
+    def __init__(self, hparams):
+        super().__init__(hparams)
+        input_nc = getattr(hparams, 'input_nc', None)
+        n_outputs = getattr(hparams, 'n_outputs', 2)
+        first_kernel_size = getattr(hparams, 'first_kernel_size', 7)
+        maxpool = getattr(hparams, 'maxpool', True)
         self.features = nn.Sequential(
-            nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
+            nn.Conv1d(input_nc, 32, kernel_size=first_kernel_size, stride=1, padding=2),
+            nn.BatchNorm1d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool1d(kernel_size=3, stride=1),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
-            nn.Conv1d(64, 192, kernel_size=5, padding=2),
-            nn.BatchNorm1d(192),
+            nn.Conv1d(64, 96, kernel_size=3, padding=1),
+            nn.BatchNorm1d(96),
             nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=3, stride=1),
-            nn.Conv1d(192, 384, kernel_size=3, padding=1),
-            nn.BatchNorm1d(384),
+            nn.Conv1d(96, 96, kernel_size=3, padding=1),
+            nn.BatchNorm1d(96),
             nn.ReLU(inplace=True),
-            nn.Conv1d(384, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
+            nn.Conv1d(96, 64, kernel_size=3, padding=1),
+            nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
         )
         if maxpool:
-            self.pool = nn.AdaptiveMaxPool1d(24)
+            self.pool = nn.AdaptiveMaxPool1d(12)
         else:
-            self.pool = nn.AdaptiveAvgPool1d(24)
+            self.pool = nn.AdaptiveAvgPool1d(12)
         self.classifier = nn.Sequential(
             nn.Dropout(),
-            nn.Linear(256*24, 1024),
-            nn.BatchNorm1d(1024),
+            nn.Linear(64*12, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.Dropout(),
-            nn.Linear(1024, 1024),
-            nn.BatchNorm1d(1024),
+            nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Linear(1024, n_outputs),
+            nn.Linear(256, n_outputs),
             #nn.BatchNorm1d(n_outputs)
         )
 
@@ -81,7 +88,7 @@ if __name__ == '__main__':
     else:
         n_outputs = dataset.difile.n_emb_components
 
-    model = check_model(RozNet(input_nc, n_outputs=n_outputs), **args)
+    model = check_model(SmallRozNet(input_nc, n_outputs=n_outputs), **args)
 
     args['pad'] = True
 

@@ -7,6 +7,43 @@ from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
 
+
+class DistanceCollater:
+    def __init__(self, dmat):
+        if len(dmat.shape) == 1:
+            from scipy.spatial.distance import squareform
+            dmat = squareform(dmat)
+        self.dmat = torch.as_tensor(dmat, dtype=torch.float).pow(2)
+
+    def __call__(self, samples):
+        """
+        A function to collate samples and return a sub-distance matrix
+        """
+        maxlen = 0
+        l_idx = -1
+        for i, X, y in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+        X_ret = list()
+        y_idx = list()
+        idx_ret = list()
+        size_ret = list()
+        for i, X, y in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif))
+            X_ret.append(X_)
+            size_ret.append(X.shape[l_idx])
+            idx_ret.append(i)
+            y_idx.append(y)
+        X_ret = torch.stack(X_ret)
+        # Get distances
+        y_ret = self.dmat[y_idx][:, y_idx]
+        size_ret = torch.tensor(size_ret)
+        idx_ret = torch.tensor(idx_ret)
+        return (idx_ret, X_ret, y_ret, size_ret)
+
 def collate(samples):
     """
     A function to collate variable length sequence samples
@@ -32,6 +69,7 @@ def collate(samples):
     X_ret = torch.stack(X_ret)
     y_ret = torch.stack(y_ret)
     size_ret = torch.tensor(size_ret)
+    idx_ret = torch.tensor(idx_ret)
     return (idx_ret, X_ret, y_ret, size_ret)
 
 
@@ -40,32 +78,70 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, difile, device=None, classify=False, **kwargs):
+    def __init__(self, difile, classify=False):
         self.difile = difile
-        self.device = device
-        #self.difile.set_torch(True, dtype=torch.long, device=device,
-        #                      ohe=kwargs.get('ohe', True),
-        #                      pad=kwargs.get('pad', False))
+
+        self.one_hot = self.get_one_hot(True)
 
         self.set_classify(classify)
-        self.difile.seq_table.set_torch(True, dtype=torch.long, device=self.device)
-        self.difile.set_sanity(kwargs.get('sanity', False))
         self._target_key = 'class_label' if classify else 'embedding'
 
+
     def set_classify(self, classify):
+        self._classify = classify
         if classify:
-            self.difile.label_key = 'id'
-            self.difile.taxa_table.set_torch(True, dtype=torch.long, device=self.device)
+            self._label_key = 'id'
+            self._label_dtype = torch.int64
         else:
-            self.difile.label_key = 'embedding'
-            self.difile.taxa_table.set_torch(True, dtype=torch.float, device=self.device)
+            self._label_key = 'embedding'
+            self._label_dtype = torch.float32
+
+        # THIS HAS BEEN A MAJOR SOURCE OF PAIN. DYNAMIC TABLE NEEDS BETTER SLICING
+        # It should be possible to select individual columns without haveing to modify
+        # the state of the underlying DynamicTable
+        self.difile.set_label_key(self._label_key)
 
     def __len__(self):
         return len(self.difile)
 
+    @staticmethod
+    def _to_numpy(data):
+        return data[:]
+
+    @staticmethod
+    def _to_torch(device=None, dtype=None):
+        def func(data):
+            return torch.tensor(data, device=device, dtype=dtype)
+        return func
+
+    def _check_load(self, data, transforms):
+        if not isinstance(data.data, torch.Tensor):
+            if not isinstance(transforms, (tuple, list)):
+                transforms = [transforms]
+            for tfm in transforms:
+                data.transform(tfm)
+
+    def load(self, device=None):
+        tfm = self._to_torch(device)
+        def to_sint(data):
+            return data[:].astype(np.int16)
+        self._check_load(self.difile.seq_table['sequence'].target, [to_sint, tfm])
+        self._check_load(self.difile.taxa_table[self._label_key], tfm)
+
     def __getitem__(self, i):
-        d = self.difile[i]
-        return d
+        # get sequence
+        idx, seq, label = self.difile[i]
+        ## one-hot encode sequence
+        seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64)).float().T
+        label = torch.as_tensor(label, dtype=self._label_dtype)
+        return (idx, seq, label)
+
+    @staticmethod
+    def get_one_hot(torch=True):
+        if torch:
+            return lambda seq: F.one_hot(seq.long()).float()
+        else:
+            return lambda seq: np.eye(np.max(seq)+1)[seq]
 
 
 def get_loader(path, **kwargs):
@@ -127,26 +203,50 @@ def train_test_validate_split(data, stratify=None, random_state=None,
     return train_idx, test_idx, val_idx
 
 
-def train_test_loaders(dataset, random_state=None, downsample=None,
+class DatasetSubset(Dataset):
+
+    def __init__(self, dataset, index):
+        self.index = index
+        self.dataset = dataset
+
+    def __getitem__(self, i):
+        return self.dataset[self.index[i]]
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getattr__(self, attr):
+        return getattr(self.dataset, attr)
+
+
+def train_test_loaders(dataset, random_state=None, downsample=None, distances=False,
                        **kwargs):
     """
     Return DataLoaders for training and test datasets.
 
     Args:
-        path (str): the path to the DeepIndex file
+        path (str):                  the path to the DeepIndex file
+        distances (str):             return distances for the
         kwargs    : any additional arguments to pass into torch.DataLoader
     """
     index = np.arange(len(dataset))
     stratify = dataset.difile.labels
     if downsample is not None:
-        index, _, stratify, _ = train_test_split(index, stratify, train_size=downsample)
+        index, _, stratify, _ = train_test_split(index, stratify,
+                                                 train_size=downsample,
+                                                 random_state=random_state)
 
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
-    train_sampler = SubsetRandomSampler(train_idx)
-    test_sampler = SubsetRandomSampler(test_idx)
-    validate_sampler = SubsetRandomSampler(validate_idx)
-    return (DataLoader(dataset, collate_fn=collate, sampler=train_sampler, **kwargs),
-            DataLoader(dataset, collate_fn=collate, sampler=test_sampler, **kwargs),
-            DataLoader(dataset, collate_fn=collate, sampler=validate_sampler, **kwargs))
+
+    collater = collate
+    if distances:
+        collater = DistanceCollater(dataset.difile.distances.data[:])
+
+    train_dataset = DatasetSubset(dataset, train_idx)
+    test_dataset = DatasetSubset(dataset, test_idx)
+    validate_dataset = DatasetSubset(dataset, validate_idx)
+    return (DataLoader(train_dataset, collate_fn=collater, **kwargs),
+            DataLoader(test_dataset, collate_fn=collater, **kwargs),
+            DataLoader(validate_dataset, collate_fn=collater, **kwargs))
