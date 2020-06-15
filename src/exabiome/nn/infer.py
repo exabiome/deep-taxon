@@ -133,14 +133,10 @@ def get_outputs(model, loader, device):
     ret = list()
     indices = list()
     labels = list()
-    it = 0
     for i, X, y, olen in loader:
-        if it == 4:
-            break
         ret.append(model(X.to(device)).to('cpu'))
         indices.append(i)
         labels.append(y)
-        it += 1
     return torch.cat(indices).detach().numpy(), torch.cat(ret).detach().numpy(), torch.cat(labels).detach().numpy()
 
 def print_dataloader(dl):
