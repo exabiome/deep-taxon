@@ -4,6 +4,10 @@ import torch.optim as optim
 import torch.nn as nn
 import torch
 
+#from .. import SeqDataset
+#from hdmf.common import get_hdf5io
+from ..loader import process_dataset
+
 from ...sequence import WindowChunkedDIFile
 from ..loss import DistMSELoss
 
@@ -18,6 +22,10 @@ class AbstractLit(LightningModule):
             self._loss = nn.CrossEntropyLoss()
         else:
             self._loss =  nn.MSELoss()
+        self.set_inference(False)
+
+    def set_inference(self, inference=True):
+        self._inference = inference
 
     def set_dataset(self, dataset, load=True, inference=False):
         kwargs = dict(random_state=self.hparams.seed,
@@ -31,8 +39,23 @@ class AbstractLit(LightningModule):
         self.loaders = {'train': tr, 'test': te, 'validate': va}
 
     def _check_loaders(self):
+        """
+        Load dataset if it has not been loaded yet
+        """
         if not hasattr(self, 'loaders'):
-            raise ValueError('No loaders available. Call set_dataset before fitting')
+            dataset, io = process_dataset(self.hparams)
+            if self.hparams.load:
+                dataset.load()
+            kwargs = dict(random_state=self.hparams.seed,
+                          batch_size=self.hparams.batch_size,
+                          distances=self.hparams.manifold,
+                          downsample=self.hparams.downsample)
+            if self._inference:
+                kwargs['distances'] = False
+            tr, te, va = train_test_loaders(dataset, **kwargs)
+            self.loaders = {'train': tr, 'test': te, 'validate': va}
+            self.dataset = dataset
+            self.io = io
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)

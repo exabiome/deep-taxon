@@ -6,6 +6,61 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
+from ..sequence import WindowChunkedDIFile
+
+
+def check_window(window, step):
+    if window is None:
+        return None, None
+    else:
+        if step is None:
+            step = window
+        return window, step
+
+
+def read_dataset(path):
+    hdmfio = get_hdf5io(path, 'r')
+    difile = hdmfio.read()
+    dataset = SeqDataset(difile)
+    return dataset, hdmfio
+
+def process_dataset(args, inference=False):
+    """
+    Process *input* argument and return dataset and HDMFIO object
+
+    Args:
+        args (Namespace):       command-line arguments passed by parser
+        inference (bool):       load data for inference
+    """
+    # First, get the dataset, so we can figure
+    # out how many outputs there are
+    #io = get_hdf5io(args.input, 'r')
+    #difile = io.read()
+    #dataset = SeqDataset(difile)
+    dataset, io = read_dataset(args.input)
+
+
+    if not hasattr(args, 'classify'):
+        raise ValueError('Parser must check for classify/regression/manifold '
+                         'to determine the number of outputs')
+    if args.classify:
+        dataset.set_classify(True)
+        n_outputs = len(dataset.difile.taxa_table)
+    elif args.manifold:
+        dataset.set_classify(True)
+        n_outputs = 32        #TODO make this configurable #breakpoint
+    else:
+        args.regression = True
+        dataset.set_classify(False)
+    args.window, args.step = check_window(args.window, args.step)
+
+    # Process any arguments that impact how we set up the dataset
+    if args.window is not None:
+        dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
+    if args.load:
+        dataset.load()
+
+    return dataset, io
 
 
 class DistanceCollater:
@@ -38,6 +93,7 @@ class DistanceCollater:
             idx_ret.append(i)
             y_idx.append(y)
         X_ret = torch.stack(X_ret)
+        y_idx = torch.stack(y_idx)
         # Get distances
         y_ret = self.dmat[y_idx][:, y_idx]
         size_ret = torch.tensor(size_ret)
