@@ -20,14 +20,21 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, rf_kwargs=None):
     plt.figure(figsize=(n_plots*fig_height, fig_height))
 
     # read data
+    dat = None
     with h5py.File(path, 'r') as f:
-        dat = f['viz_emb'][:]
+        if 'viz_emb' in f:
+            dat = f['viz_emb'][:]
         labels = f['labels'][:]
         train_mask = f['train'][:]
         test_mask = f['test'][:]
         outputs = f['outputs'][:]
         validate_mask = f['validate'][:]
         taxon_id = f['taxon_id'][:]
+    if dat is None:
+        from umap import UMAP
+        umap = UMAP(n_components=2)
+        dat = umap.fit_transform(outputs[:])
+
     uniq_labels = np.unique(labels)
     n_classes = len(uniq_labels)
     class_pal = sns.color_palette('tab10', n_classes)
