@@ -1,10 +1,7 @@
 import sys
 import os
 
-from exabiome.sequence import AbstractChunkedDIFile, WindowChunkedDIFile
-from . import SeqDataset, train_test_loaders
-from hdmf.common import get_hdf5io
-
+from .loader import read_dataset
 from . import models
 
 from ..utils import check_directory
@@ -28,23 +25,7 @@ def process_gpus(gpus):
     return ret
 
 
-def check_window(window, step):
-    if window is None:
-        return None, None
-    else:
-        if step is None:
-            step = window
-        return window, step
-
-
-def read_dataset(path):
-    hdmfio = get_hdf5io(path, 'r')
-    difile = hdmfio.read()
-    dataset = SeqDataset(difile)
-    return dataset, hdmfio
-
-
-def process_model_and_dataset(args, inference=False):
+def process_model(args, inference=False):
     """
     Process a model argument
 
@@ -63,37 +44,24 @@ def process_model_and_dataset(args, inference=False):
 
     if args.checkpoint is not None:
         model = model.load_from_checkpoint(args.checkpoint)
-        args.window = model.hparams.window
-        args.step = model.hparams.step
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
         if args.classify:
-            dataset.set_classify(True)
             n_outputs = len(dataset.difile.taxa_table)
         elif args.manifold:
-            dataset.set_classify(True)
             n_outputs = 32        #TODO make this configurable #breakpoint
         else:
             args.regression = True
-            dataset.set_classify(False)
             n_outputs = dataset.difile.n_emb_components
         args.n_outputs = n_outputs
 
         model = model(args)
-        args.window, args.step = check_window(args.window, args.step)
 
-    # Process any arguments that impact how we set up the dataset
-    if args.window is not None:
-        dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
-    if args.load:
-        dataset.load()
+    io.close()
 
-    # Finally, set the dataset on the model
-    model.set_dataset(dataset, inference=inference)
-
-    return model, dataset, io
+    return model
 
 
 def process_output(args):

@@ -5,7 +5,7 @@ import pickle
 from datetime import datetime
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger
-from .utils import process_gpus, process_model_and_dataset
+from .utils import process_gpus, process_model, process_output
 from hdmf.utils import docval
 
 import argparse
@@ -36,7 +36,7 @@ def parse_args(*addl_args, argv=None):
     type_group = parser.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
-    type_group.add_argument('-R', '--regression', action='store_true', help='run a manifold learning problem', default=False)
+    type_group.add_argument('-R', '--regression', action='store_true', help='run a regression problem', default=False)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
     parser.add_argument('-A', '--accuracy', action='store_true', help='compute accuracy', default=False)
@@ -96,21 +96,21 @@ def process_args(args=None, return_io=False):
         input_nc = 5
     args.input_nc = input_nc
 
-    model, dataset, io = process_model_and_dataset(args)
+    model = process_model(args)
 
     targs = dict(
         max_epochs=args.epochs,
     )
 
-    targs['gpus'] = parse_gpus(args.gpus)
+    targs['gpus'] = process_gpus(args.gpus)
     if targs['gpus'] != 1:
-        targs['distributed_backend'] = 'dp'
+        targs['distributed_backend'] = 'ddp'
     del args.gpus
 
     if args.debug:
         targs['fast_dev_run'] = True
 
-    ret = [model, dataset, args, targs]
+    ret = [model, args, targs]
     if return_io:
         ret.append(io)
 
@@ -122,7 +122,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 def run_lightening():
-    lit_cls, dataset, args, addl_targs = process_args(parse_args())
+    model, args, addl_targs = process_args(parse_args())
 
     outbase, output = process_output(args)
 
@@ -144,36 +144,35 @@ def run_lightening():
     targs.update(addl_targs)
 
     trainer = Trainer(**targs)
-    if args.test:
-        if args.checkpoint is None
-            print('If running with --test, must provide argument to --checkpoint', file=sys.stderr)
-            sys.exit(1)
+    #if args.test:
+    #    if args.checkpoint is None:
+    #        print('If running with --test, must provide argument to --checkpoint', file=sys.stderr)
+    #        sys.exit(1)
 
-        if args.debug:
-            print_dataloader(net.test_dataloader())
-            print_dataloader(net.train_dataloader())
-            print_dataloader(net.val_dataloader())
-        if args.accuracy:
-            from .metric import NCorrect, NeighborNCorrect
-            if net.hparams.classify:
-                metric = NCorrect()
-            else:
-                metric = NeighborNCorrect(dataset.difile)
-            net.test_dataloader().dataset.load()
-            net.test_dataloader().dataset.set_classify(True)
-            total_correct = overall_metric(net, net.test_dataloader(), metric)
-            print(total_correct/len(net.test_dataloader().sampler))
-        else:
-            net.test_dataloader().dataset.load()
-            if net.hparams.classify:
-                net.test_dataloader().dataset.set_classify(True)
-            trainer.test(net)
-    else:
-        if args.debug:
-            print_dataloader(net.test_dataloader())
-            print_dataloader(net.train_dataloader())
-            print_dataloader(net.val_dataloader())
-        trainer.fit(net)
+    #    if args.debug:
+    #        print_dataloader(model.test_dataloader())
+    #        print_dataloader(model.train_dataloader())
+    #        print_dataloader(model.val_dataloader())
+    #    if args.accuracy:
+    #        from .metric import NCorrect, NeighborNCorrect
+    #        if model.hparams.classify:
+    #            metric = NCorrect()
+    #        else:
+    #            metric = NeighborNCorrect(dataset.difile)
+    #        model.test_dataloader().dataset.load()
+    #        model.test_dataloader().dataset.set_classify(True)
+    #        total_correct = overall_metric(model, model.test_dataloader(), metric)
+    #        print(total_correct/len(model.test_dataloader().sampler))
+    #    else:
+    #        model.test_dataloader().dataset.load()
+    #        if model.hparams.classify:
+    #            model.test_dataloader().dataset.set_classify(True)
+    #        trainer.test(model)
+    if args.debug:
+        print_dataloader(model.test_dataloader())
+        print_dataloader(model.train_dataloader())
+        print_dataloader(model.val_dataloader())
+    trainer.fit(model)
 
 def print_dataloader(dl):
     print(dl.dataset.index[0], dl.dataset.index[-1])
