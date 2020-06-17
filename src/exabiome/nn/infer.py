@@ -1,15 +1,14 @@
 import sys
 from ..utils import check_argv, parse_logger
-from .utils import process_gpus, process_model_and_dataset, process_output
+from .utils import process_gpus, process_model, process_output
 import glob
 import argparse
 import torch
 
 
-
 def parse_args(*addl_args, argv=None):
     """
-    Parse arguments for training executable
+    Parse arguments for running inference
     """
     argv = check_argv(argv)
 
@@ -18,18 +17,27 @@ def parse_args(*addl_args, argv=None):
     """
     desc = "Run network training"
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
-    parser.add_argument('model', type=str, help='the model to run', choices=list(models._models.keys()))
-    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
-    parser.add_argument('output', type=str, help='file to save model')
-    parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
-    parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
+    parser.add_argument('model', type=str, choices=list(models._models.keys()),
+                        help='the model type to run inference with')
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file used to train the model')
+    parser.add_argument('output', type=str, help='directory to save model outputs to')
+    parser.add_argument('-E', '--experiment', type=str, default='default',
+                        help='the experiment name to get the checkpoint from')
+    parser.add_argument('-c', '--checkpoint', type=str, default=None,
+                        help='read the checkpoint from the given checkpoint file')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
-    parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
-    parser.add_argument('-U', '--umap', action='store_true', default=False, help='run 2D UMAP embedding')
-    parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
+    parser.add_argument('-L', '--load', action='store_true', default=False,
+                        help='load data into memory before running inference')
+    parser.add_argument('-U', '--umap', action='store_true', default=False,
+                        help='compute a 2D UMAP embedding for vizualization')
+    parser.add_argument('-d', '--debug', action='store_true', default=False,
+                        help='run in debug mode i.e. only run two batches')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
-    parser.add_argument('--train', action='append_const', const='train', dest='loaders', help='do inference on training data')
-    parser.add_argument('--validate', action='append_const', const='validate', dest='loaders', help='do inference on validation data')
+    parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=None)
+    parser.add_argument('--train', action='append_const', const='train', dest='loaders',
+                        help='do inference on training data')
+    parser.add_argument('--validate', action='append_const', const='validate', dest='loaders',
+                        help='do inference on validation data')
     parser.add_argument('--test', action='append_const', const='test', dest='loaders', help='do inference on test data')
 
     for a in addl_args:
@@ -47,16 +55,19 @@ def parse_args(*addl_args, argv=None):
     return args
 
 
-def process_args(args=None, return_io=False):
+def process_args(argv=None):
     """
-    Process arguments for running training
+    Process arguments for running inference
     """
-    if not isinstance(args, argparse.Namespace):
-        args = parse_args(argv=args)
+    if not isinstance(argv, argparse.Namespace):
+        args = parse_args(argv=argv)
+    else:
+        args = argv
 
     logger = args.logger
     # set up logger
     if logger is None:
+        import logging
         logger = logging.getLogger()
         logger.setLevel(logging.INFO)
     if args.debug:
@@ -65,6 +76,9 @@ def process_args(args=None, return_io=False):
 
     targs = dict()
 
+    # this does not get used in this command,
+    # but leave it here in case we figure out how to
+    # do infernce with Lightning someday
     targs['gpus'] = process_gpus(args.gpus)
     if targs['gpus'] != 1:
         targs['distributed_backend'] = 'dp'
@@ -79,6 +93,8 @@ def process_args(args=None, return_io=False):
     if args.debug:
         targs['fast_dev_run'] = True
 
+    # Figure out the checkpoint file to read from
+    # and where to save outputs to
     outbase, output = process_output(args)
     if args.checkpoint is None:
         ckpt = list(glob.glob(f"{outbase}/*.ckpt"))
@@ -87,32 +103,56 @@ def process_args(args=None, return_io=False):
                   'Please specify checkpoint with -c', file=sys.stderr)
             sys.exit(1)
         args.checkpoint = ckpt[0]
+    args.output = '%s.outputs.h5' % args.checkpoint[:-5]
 
-    model, dataset, io = process_model_and_dataset(args, inference=True)
-    dataset.set_classify(True)
+    # setting classify to so that we can get labels when
+    # we load data. We do this here because we assume that
+    # network is going to output features, and we want to use the
+    # labels for downstream analysis
+    args.classify = True
 
-    ret = [model, dataset, args, targs, output]
-    if return_io:
-        ret.append(io)
+    # load the model and override batch size
+    model = process_model(args)
+    model.set_inference(True)
+    if args.batch_size is not None:
+        model.hparams.batch_size = args.batch_size
+
+    # return the model, any arguments, and Lighting Trainer args just in case
+    # we want to use them down the line when we figure out how to use Lightning for
+    # inference
+    ret = [model, args, targs]
 
     return tuple(ret)
 
 
-def run_inference():
-    model, dataset, args, addl_targs, output = process_args()
+def run_inference(argv=None):
+    """
+    Run inference
+
+    Args:
+        argv: a command-line string or argparse.Namespace object to use for running inference
+              If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
+    """
+    model, args, addl_targs = process_args(argv=argv)
     import h5py
     import numpy as np
     model.to(args.device)
     model.eval()
     n_outputs = model.classifier[-1].out_features
-    f = h5py.File(output('outputs.h5'), 'w')
-    emb_dset = f.create_dataset('outputs', shape=(len(dataset), n_outputs), dtype=float)
-    label_dset = f.create_dataset('labels', shape=(len(dataset),), dtype=int)
+    n_samples = len(model.train_dataloader().dataset) +\
+        len(model.val_dataloader().dataset) +\
+        len(model.test_dataloader().dataset)
+
+    f = h5py.File(args.output, 'w')
+
+    emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
+    label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
+    f.create_dataset('taxon_id', data=model.train_dataloader().dataset.difile.taxa_table['taxon_id'][:])
 
     for loader_key in args.loaders:
-        mask_dset = f.create_dataset(loader_key, shape=(len(dataset),), dtype=bool, fillvalue=False)
+        mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
         loader = model.loaders[loader_key]
-        print(f'computing outputs for {loader_key}')
+        args.logger.info(f'computing outputs for {loader_key}')
         idx, outputs, labels = get_outputs(model, loader, args.device)
         order = np.argsort(idx)
         idx = idx[order]
@@ -121,15 +161,19 @@ def run_inference():
         mask_dset[idx] = True
 
     if args.umap:
-        print('Running UMAP embedding')
+        # compute UMAP arguments for convenience
+        args.logger.info('Running UMAP embedding')
         from umap import UMAP
         umap = UMAP(n_components=2)
         tfm = umap.fit_transform(emb_dset[:])
-        umap_dset = f.create_dataset('viz_emb', shape=(len(dataset), 2), dtype=float)
+        umap_dset = f.create_dataset('viz_emb', shape=(n_samples, 2), dtype=float)
         umap_dset[:] = tfm
 
 
 def get_outputs(model, loader, device):
+    """
+    Get model outputs for all samples in the given loader
+    """
     ret = list()
     indices = list()
     labels = list()
@@ -139,19 +183,8 @@ def get_outputs(model, loader, device):
         labels.append(y)
     return torch.cat(indices).detach().numpy(), torch.cat(ret).detach().numpy(), torch.cat(labels).detach().numpy()
 
-def print_dataloader(dl):
-    print(dl.dataset.index[0], dl.dataset.index[-1])
 
-
-def overall_metric(model, loader, metric):
-    val = 0.0
-    for idx, seqs, target, olen in loader:
-        output = model(seqs)
-        val += metric(target, output)
-    return val
-
-
-from . import models
+from . import models  # noqa: E402
 
 if __name__ == '__main__':
     run_inference()
