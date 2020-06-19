@@ -138,7 +138,7 @@ class SeqDataset(Dataset):
         self.difile = difile
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'
-        self.vocab_len = self.difile.seq_table['sequences'].vocabulary
+        self.vocab_len = len(self.difile.seq_table['sequence'].target.vocabulary)
 
     def set_classify(self, classify):
         self._classify = classify
