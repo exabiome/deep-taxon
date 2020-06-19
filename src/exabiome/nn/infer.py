@@ -89,6 +89,7 @@ def process_args(argv=None):
     print(f'using {dev} device')
     args.device = torch.device(dev)
     del args.gpus
+    args.input_nc = 5
 
     if args.debug:
         targs['fast_dev_run'] = True
@@ -147,17 +148,23 @@ def run_inference(argv=None):
 
     emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
     label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
+    olen_dset = f.create_dataset('orig_lens', shape=(n_samples,), dtype=int)
     f.create_dataset('taxon_id', data=model.train_dataloader().dataset.difile.taxa_table['taxon_id'][:])
 
     for loader_key in args.loaders:
         mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
         loader = model.loaders[loader_key]
         args.logger.info(f'computing outputs for {loader_key}')
-        idx, outputs, labels = get_outputs(model, loader, args.device)
+        idx, outputs, labels, orig_lens = get_outputs(model, loader, args.device)
         order = np.argsort(idx)
         idx = idx[order]
+        args.logger.info('writing outputs')
         emb_dset[idx] = outputs[order]
+        args.logger.info('writing labels')
         label_dset[idx] = labels[order]
+        args.logger.info('writing orig_lens')
+        olen_dset[idx] = orig_lens
+        args.logger.info('writing mask')
         mask_dset[idx] = True
 
     if args.umap:
@@ -177,11 +184,20 @@ def get_outputs(model, loader, device):
     ret = list()
     indices = list()
     labels = list()
-    for i, X, y, olen in loader:
-        ret.append(model(X.to(device)).to('cpu'))
-        indices.append(i)
-        labels.append(y)
-    return torch.cat(indices).detach().numpy(), torch.cat(ret).detach().numpy(), torch.cat(labels).detach().numpy()
+    orig_lens = list()
+    idx = 1
+    from tqdm import tqdm
+    for i, X, y, olen in tqdm(loader):
+        idx += 1
+        ret.append(model(X.to(device)).to('cpu').detach())
+        indices.append(i.to('cpu').detach())
+        labels.append(y.to('cpu').detach())
+        orig_lens.append(olen.to('cpu').detach())
+    ret = (torch.cat(indices).numpy(),
+           torch.cat(ret).numpy(),
+           torch.cat(labels).numpy(),
+           torch.cat(orig_lens).numpy())
+    return ret
 
 
 from . import models  # noqa: E402
