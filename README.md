@@ -2,10 +2,15 @@
 This package contains executable models for each of the main steps in the neural network training process. There exist
 an executable for each of the following steps:
 
-1. Converting ddata
+1. Converting data
 2. Training networks
 3. Network inference
 4. Summarizing network outputs
+
+## Sampling taxa to train with
+```bash
+python -m exabiome.gtdb.sample
+```
 
 ## Converting Data
 
