@@ -54,7 +54,10 @@ if __name__ == '__main__':
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('out', type=str, help='output HDF5')
-    parser.add_argument('-p', '--protein', action='store_true', default=False, help='input is amino acids')
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-p', '--protein', action='store_true', default=False, help='get paths for protein files')
+    grp.add_argument('-c', '--cds', action='store_true', default=False, help='get paths for CDS files')
+    grp.add_argument('-g', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('-V', '--vocab', action='store_true', default=False, help='store sequences as vocabulary data')
@@ -64,6 +67,9 @@ if __name__ == '__main__':
         sys.exit(1)
 
     args = parser.parse_args()
+
+    if not any([args.protein, args.cds, args.genomic]):
+        args.genomic = True
 
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
@@ -155,7 +161,12 @@ if __name__ == '__main__':
             seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
             SeqTable = DNATable
 
-    seqit_bsize = 2**15 if args.protein else 2**18
+    seqit_bsize = 2**25
+    if args.protein:
+        seqit_bsize = 2**15
+    elif args.cds
+        seqit_bsize = 2**18
+
     packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=seqit_bsize, dtype=np.dtype('uint8'))
     seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
     names = DataChunkIterator.from_iterable(seqit.names_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('U'))
