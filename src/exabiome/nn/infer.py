@@ -112,7 +112,7 @@ def process_args(argv=None):
     args.classify = True
 
     # load the model and override batch size
-    model = process_model(args)
+    model = process_model(args, inference=True)
     model.set_inference(True)
     if args.batch_size is not None:
         model.hparams.batch_size = args.batch_size

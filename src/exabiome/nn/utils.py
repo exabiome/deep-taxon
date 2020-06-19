@@ -5,6 +5,7 @@ from .loader import read_dataset
 from . import models
 
 from ..utils import check_directory
+from pytorch_lightning.core.decorators import auto_move_data
 
 
 def process_gpus(gpus):
@@ -40,6 +41,8 @@ def process_model(args, inference=False):
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
     model = models._models[args.model]
+    if inference:
+        model.forward = auto_move_data(model.forward)
     del args.model
 
     if args.checkpoint is not None:
