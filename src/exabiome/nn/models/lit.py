@@ -3,6 +3,7 @@ from pytorch_lightning import LightningModule
 import torch.optim as optim
 import torch.nn as nn
 import torch
+import argparse
 
 #from .. import SeqDataset
 #from hdmf.common import get_hdf5io
@@ -15,7 +16,7 @@ class AbstractLit(LightningModule):
 
     def __init__(self, hparams):
         super().__init__()
-        self.hparams = hparams
+        self.hparams = self.check_hparams(hparams)
         if self.hparams.manifold:
             self._loss = DistMSELoss()
         elif self.hparams.classify:
@@ -23,6 +24,12 @@ class AbstractLit(LightningModule):
         else:
             self._loss =  nn.MSELoss()
         self.set_inference(False)
+
+    @staticmethod
+    def check_hparams(hparams):
+        if isinstance(hparams, dict):
+            return argparse.Namespace(**hparams)
+        return hparams
 
     def set_inference(self, inference=True):
         self._inference = inference

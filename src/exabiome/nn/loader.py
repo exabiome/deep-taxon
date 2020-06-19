@@ -136,12 +136,9 @@ class SeqDataset(Dataset):
 
     def __init__(self, difile, classify=False):
         self.difile = difile
-
-        self.one_hot = self.get_one_hot(True)
-
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'
-
+        self.vocab_len = len(self.difile.seq_table['sequence'].target.vocabulary)
 
     def set_classify(self, classify):
         self._classify = classify
@@ -188,16 +185,9 @@ class SeqDataset(Dataset):
         # get sequence
         idx, seq, label = self.difile[i]
         ## one-hot encode sequence
-        seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64)).float().T
+        seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64), num_classes=self.vocab_len).float().T
         label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label)
-
-    @staticmethod
-    def get_one_hot(torch=True):
-        if torch:
-            return lambda seq: F.one_hot(seq.long()).float()
-        else:
-            return lambda seq: np.eye(np.max(seq)+1)[seq]
 
 
 def get_loader(path, **kwargs):

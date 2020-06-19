@@ -72,6 +72,20 @@ def get_fna_path(acc, directory):
     return _get_path_helper(acc, directory, '_cds_from_genomic.fna.gz')
 
 
+def get_genomic_path(acc, directory):
+    if acc[:3] in ('RS_', 'GB_'):
+        acc = acc[3:]
+    l = [directory, 'all', acc[:3], acc[4:7], acc[7:10], acc[10:13], "%s*"%acc, "%s*_genomic.fna.gz" % acc]
+    glob_str = os.path.join(*l)
+    result = [s for s in glob.glob(glob_str) if not 'cds' in s and 'rna' not in s]
+    if len(result) > 1:
+        breakpoint()
+        raise ValueError(f'more than one file matching {glob_str}')
+    if len(result) == 0:
+        raise ValueError(f'no file matching {glob_str}')
+    return result[0]
+
+
 def get_accession(path):
     """
     Return the genome accession from a given path

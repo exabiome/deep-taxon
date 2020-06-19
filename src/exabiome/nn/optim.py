@@ -87,16 +87,6 @@ class Objective:
         return metrics_callback.metrics[-1][self.monitor_metric]
 
 
-def get_objective(cmdline):
-    """
-    Return an Optuna objective for the given command-line arguments
-    """
-
-    model_cls, dataset, hparams, addl_targs = parse_args(argv=cmdline)
-
-    return Objective(model_cls, hparams, dataset, targs=addl_targs)
-
-
 def parse_args(*addl_args, argv=None, return_io=False):
     """
     Parse arguments for training executable
@@ -163,6 +153,6 @@ def optuna_run(train_cmdline, objective_cls=Objective):
 
     model_cls, dataset, hparams, addl_targs = process_train_args(train_args)
 
-    objective = Objective(model_cls, hparams, dataset, targs=addl_targs)
+    objective = objective_cls(model_cls, hparams, dataset, targs=addl_targs)
 
     study.optimize(objective, n_trials=n_trials)

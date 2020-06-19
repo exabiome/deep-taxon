@@ -121,7 +121,7 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-def run_lightening():
+def run_lightning():
     model, args, addl_targs = process_args(parse_args())
 
     outbase, output = process_output(args)
@@ -144,35 +144,20 @@ def run_lightening():
     targs.update(addl_targs)
 
     trainer = Trainer(**targs)
-    #if args.test:
-    #    if args.checkpoint is None:
-    #        print('If running with --test, must provide argument to --checkpoint', file=sys.stderr)
-    #        sys.exit(1)
 
-    #    if args.debug:
-    #        print_dataloader(model.test_dataloader())
-    #        print_dataloader(model.train_dataloader())
-    #        print_dataloader(model.val_dataloader())
-    #    if args.accuracy:
-    #        from .metric import NCorrect, NeighborNCorrect
-    #        if model.hparams.classify:
-    #            metric = NCorrect()
-    #        else:
-    #            metric = NeighborNCorrect(dataset.difile)
-    #        model.test_dataloader().dataset.load()
-    #        model.test_dataloader().dataset.set_classify(True)
-    #        total_correct = overall_metric(model, model.test_dataloader(), metric)
-    #        print(total_correct/len(model.test_dataloader().sampler))
-    #    else:
-    #        model.test_dataloader().dataset.load()
-    #        if model.hparams.classify:
-    #            model.test_dataloader().dataset.set_classify(True)
-    #        trainer.test(model)
     if args.debug:
         print_dataloader(model.test_dataloader())
         print_dataloader(model.train_dataloader())
         print_dataloader(model.val_dataloader())
+
+    s = datetime.now()
     trainer.fit(model)
+    e = datetime.now()
+    td = e - s
+    hours, seconds = divmod(td.seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+
+    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds))
 
 def print_dataloader(dl):
     print(dl.dataset.index[0], dl.dataset.index[-1])

@@ -47,7 +47,8 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, rf_kwargs=None):
         mask = labels == cl
         plt.scatter(dat[mask,0], dat[mask,1], s=0.5, c=[col], label=cl)
         class_handles.append(Circle(0, 0, color=col))
-    plt.legend(class_handles, taxon_id)
+    if len(uniq_labels) < 10:
+        plt.legend(class_handles, taxon_id)
     plt.title('/'.join(path.split('/')[-2:]))
     plot_count += 1
 

@@ -2,10 +2,15 @@
 This package contains executable models for each of the main steps in the neural network training process. There exist
 an executable for each of the following steps:
 
-1. Converting ddata
+1. Converting data
 2. Training networks
 3. Network inference
 4. Summarizing network outputs
+
+## Sampling taxa to train with
+```bash
+python -m exabiome.gtdb.sample
+```
 
 ## Converting Data
 
@@ -19,7 +24,15 @@ To train neural networks, we use PyTorch Lightning. This code can be executed wi
 ```bash
 python -m exabiome.nn.train
 ```
-This command will split up the input dataset into training, validation, and testing data.
+This command will split up the input dataset into training, validation, and testing data. The seed used to do this
+will be saved in the checkpoint, so subsequent use, such as for testing, will have the same split.
+
+Running with DistributedDataParallel i.e. multiple GPUs. using latest version of PyTorch Lightning (as of June 19, 2020) 
+does not work with executable modules. To get around this, use the following form of calling the training code:
+
+```bash
+python bin/train.py
+```
 
 ## Doing inference with neural networks
 

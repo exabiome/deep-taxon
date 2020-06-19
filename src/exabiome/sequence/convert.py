@@ -318,9 +318,13 @@ class VocabIterator(AbstractSeqIterator):
         super().__init__(paths, logger=logger, min_seq_len=min_seq_len)
         self.lenc = LabelEncoder()
         self.lenc.fit(list(self.characters() + self.characters().lower()))
+        self.to_replace = np.array(['M', 'R', 'W', 'S', 'Y', 'K', 'V', 'H', 'D', 'B'])
 
     def pack(self, seq):
-        tfm = self.lenc.transform(seq.values.astype('U')).astype(np.uint8) % len(self.characters())
+        charar = seq.values.astype('U')
+        # replace ambiguities with Ns for now
+        charar[np.isin(charar, self.to_replace)] = 'N'
+        tfm = self.lenc.transform(charar).astype(np.uint8) % len(self.characters())
         return tfm
 
     @property
