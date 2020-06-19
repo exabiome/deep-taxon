@@ -164,7 +164,7 @@ if __name__ == '__main__':
     seqit_bsize = 2**25
     if args.protein:
         seqit_bsize = 2**15
-    elif args.cds
+    elif args.cds:
         seqit_bsize = 2**18
 
     packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=seqit_bsize, dtype=np.dtype('uint8'))
