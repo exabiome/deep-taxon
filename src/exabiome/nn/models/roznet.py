@@ -3,8 +3,11 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+from . import model, AbstractLit
 
-class RozNet(nn.Module):
+
+@model('roznet')
+class RozNet(AbstractLit):
     '''
     A 1D CNN with 5 convolutional layers, followed by 3 fully-connected layers
 
@@ -12,8 +15,13 @@ class RozNet(nn.Module):
         input_nc (int):  the input number of channels
     '''
 
-    def __init__(self, input_nc, n_outputs=2, first_kernel_size=7, maxpool=True):
-        super(RozNet, self).__init__()
+    def __init__(self, hparams):
+        super().__init__(hparams)
+        hparams = self.check_hparams(hparams)
+        input_nc = getattr(hparams, 'input_nc', None)
+        n_outputs = getattr(hparams, 'n_outputs', 2)
+        first_kernel_size = getattr(hparams, 'first_kernel_size', 7)
+        maxpool = getattr(hparams, 'maxpool', True)
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(64),
@@ -34,16 +42,17 @@ class RozNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
         )
+        pool_size = 24
         if maxpool:
-            self.pool = nn.AdaptiveMaxPool1d(24)
+            self.pool = nn.AdaptiveMaxPool1d(pool_size)
         else:
-            self.pool = nn.AdaptiveAvgPool1d(24)
+            self.pool = nn.AdaptiveAvgPool1d(pool_size)
         self.classifier = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(256*24, 1024),
+            nn.Dropout(hparams.dropout_rate),
+            nn.Linear(256*pool_size, 1024),
             nn.BatchNorm1d(1024),
             nn.ReLU(inplace=True),
-            nn.Dropout(),
+            nn.Dropout(hparams.dropout_rate),
             nn.Linear(1024, 1024),
             nn.BatchNorm1d(1024),
             nn.ReLU(inplace=True),
@@ -66,7 +75,7 @@ if __name__ == '__main__':
     args = parse_args("Train CNN with Spatial Pyramidal Pooling")
                       #[['-E', '--emb_nc'], dict(type=int, default=0, help='the number of embedding channels. default is no embedding')])
 
-    input_nc = 4
+    input_nc = 5
     if args['protein']:
         input_nc = 26
 

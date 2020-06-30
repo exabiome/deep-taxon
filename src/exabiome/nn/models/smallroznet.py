@@ -3,8 +3,11 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+from . import model, AbstractLit
 
-class SmallRozNet(nn.Module):
+
+@model('smallroznet')
+class SmallRozNet(AbstractLit):
     '''
     A 1D CNN with 5 convolutional layers, followed by 3 fully-connected layers
 
@@ -12,8 +15,12 @@ class SmallRozNet(nn.Module):
         input_nc (int):  the input number of channels
     '''
 
-    def __init__(self, input_nc, n_outputs=2, first_kernel_size=7, maxpool=True):
-        super(SmallRozNet, self).__init__()
+    def __init__(self, hparams):
+        super().__init__(hparams)
+        input_nc = getattr(hparams, 'input_nc', None)
+        n_outputs = getattr(hparams, 'n_outputs', 2)
+        first_kernel_size = getattr(hparams, 'first_kernel_size', 7)
+        maxpool = getattr(hparams, 'maxpool', True)
         self.features = nn.Sequential(
             nn.Conv1d(input_nc, 32, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(32),
@@ -66,7 +73,7 @@ if __name__ == '__main__':
     args = parse_args("Train CNN with Spatial Pyramidal Pooling")
                       #[['-E', '--emb_nc'], dict(type=int, default=0, help='the number of embedding channels. default is no embedding')])
 
-    input_nc = 4
+    input_nc = 5
     if args['protein']:
         input_nc = 26
 
