@@ -1,6 +1,8 @@
 numpy
 scipy
 scikit-learn
-./scikit-bio.git
+scikit-bio
 ./hdmf.git
-./umap.git
+umap
+torch
+pytorch_lightning
