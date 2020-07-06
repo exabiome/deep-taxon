@@ -52,6 +52,8 @@ def process_dataset(args, inference=False):
     else:
         args.regression = True
         dataset.set_classify(False)
+    if inference:
+        dataset.set_classify(True)
     args.window, args.step = check_window(args.window, args.step)
 
     # Process any arguments that impact how we set up the dataset

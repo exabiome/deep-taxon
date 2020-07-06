@@ -4,6 +4,7 @@ from .utils import process_gpus, process_model, process_output
 import glob
 import argparse
 import torch
+import logging
 
 
 def parse_args(*addl_args, argv=None):
@@ -67,7 +68,6 @@ def process_args(argv=None):
     logger = args.logger
     # set up logger
     if logger is None:
-        import logging
         logger = logging.getLogger()
         logger.setLevel(logging.INFO)
     if args.debug:
@@ -155,7 +155,7 @@ def run_inference(argv=None):
         mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
         loader = model.loaders[loader_key]
         args.logger.info(f'computing outputs for {loader_key}')
-        idx, outputs, labels, orig_lens = get_outputs(model, loader, args.device)
+        idx, outputs, labels, orig_lens = get_outputs(model, loader, args.device, debug=args.debug)
         order = np.argsort(idx)
         idx = idx[order]
         args.logger.info('writing outputs')
@@ -177,7 +177,7 @@ def run_inference(argv=None):
         umap_dset[:] = tfm
 
 
-def get_outputs(model, loader, device):
+def get_outputs(model, loader, device, debug=False):
     """
     Get model outputs for all samples in the given loader
     """
@@ -193,6 +193,8 @@ def get_outputs(model, loader, device):
         indices.append(i.to('cpu').detach())
         labels.append(y.to('cpu').detach())
         orig_lens.append(olen.to('cpu').detach())
+        if debug:
+            break
     ret = (torch.cat(indices).numpy(),
            torch.cat(ret).numpy(),
            torch.cat(labels).numpy(),
