@@ -4,5 +4,4 @@ scikit-learn
 scikit-bio
 ./hdmf.git
 umap
-torch
 pytorch_lightning
