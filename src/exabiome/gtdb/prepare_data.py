@@ -30,8 +30,12 @@ def get_taxa_id(path):
     c, n = os.path.basename(path).split('_')[0:2]
     return c + '_' + n
 
-if __name__ == '__main__':
 
+from .. import command
+
+@command('prepare_data')
+def prepare_data(argv=None):
+    '''Aggregate sequence data GTDB using a file-of-files'''
     import argparse
     import io
     import sys
@@ -66,7 +70,7 @@ if __name__ == '__main__':
         parser.print_help()
         sys.exit(1)
 
-    args = parser.parse_args()
+    args = parser.parse_args(args=argv)
 
     if not any([args.protein, args.cds, args.genomic]):
         args.genomic = True
@@ -199,3 +203,7 @@ if __name__ == '__main__':
     logger.info("reading %s" % (h5path))
     h5size = os.path.getsize(h5path)
     logger.info("HDF5 size: %d", h5size)
+
+if __name__ == '__main__':
+    prepare_data()
+

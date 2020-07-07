@@ -63,7 +63,14 @@ def sample_taxa(taxa_df, n_classes=1, n_genera=1, n_species=1):
     return taxdf.filter(accessions, axis=0)
 
 
-if __name__ == '__main__':
+from .. import command
+
+@command('sample-gtdb')
+def sample_tree(argv=None):
+    '''Sample taxa from a tree
+
+    Using GTDB tree and metadata, sample species across classes and genera.
+    '''
     import argparse
     import sys
     from .io import read_tree, read_metadata
@@ -81,7 +88,7 @@ if __name__ == '__main__':
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files')
 
-    args = parser.parse_args()
+    args = parser.parse_args(args=argv)
 
     taxdf, tree = read_metadata(args.metadata, args.tree)
 
@@ -98,3 +105,7 @@ if __name__ == '__main__':
     else:
         for acc in df.index:
             print(acc, file=sys.stdout)
+
+
+if __name__ == '__main__':
+    sample_tree()

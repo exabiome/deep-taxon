@@ -9,7 +9,12 @@ def print_help():
     print('Available commands are:\n')
     for c, f in cmds.items():
         nspaces = 16 - len(c)
-        print(f'    {c}' + ' '*nspaces + f.__doc__.split('\n')[0])
+        desc = ''
+        if isinstance(f.__doc__, str):
+            desc = f.__doc__.split('\n')[0]
+        else:
+            desc = 'Run function %s from %s' % (f.__name__, f.__module__)
+        print(f'    {c}' + ' '*nspaces + desc)
 
 if len(sys.argv) == 1:
     print_help()

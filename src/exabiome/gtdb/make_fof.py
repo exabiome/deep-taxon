@@ -7,7 +7,7 @@ def get_taxa_id(path):
 from .. import command
 
 @command('make_fof')
-def make_fof(argv=argv):
+def make_fof(argv=None):
     import argparse
     import logging
     import sys

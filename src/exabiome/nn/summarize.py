@@ -92,13 +92,14 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, rf_kwargs=None):
 from .. import command
 
 @command('summarize')
-def main(argv=argv):
+def main(argv=None):
+    '''Summarize training/inference results'''
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('input', type=str, help='the HDF5 file with network outputs')
     parser.add_argument('output', type=str, nargs='?', help='the file to save the summary figure to')
 
-    args = parser.parse_args(argv=argv)
+    args = parser.parse_args(args=argv)
     if args.output is None:
         s = args.input
         if s.endswith('.h5'):

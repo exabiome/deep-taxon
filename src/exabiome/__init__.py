@@ -8,4 +8,4 @@ def command(name):
 def get_commands():
     return _commands.copy()
 
-from . import nn
+from . import nn, gtdb, tools
