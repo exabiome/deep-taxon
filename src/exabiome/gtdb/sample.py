@@ -67,6 +67,10 @@ from .. import command
 
 @command('sample-gtdb')
 def sample_tree(argv=None):
+    '''Sample taxa from a tree
+
+    Using GTDB tree and metadata, sample species across classes and genera.
+    '''
     import argparse
     import sys
     from .io import read_tree, read_metadata
