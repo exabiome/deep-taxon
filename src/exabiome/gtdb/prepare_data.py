@@ -33,7 +33,7 @@ def get_taxa_id(path):
 
 from .. import command
 
-@command('prepare_data')
+@command('prepare-data')
 def prepare_data(argv=None):
     '''Aggregate sequence data GTDB using a file-of-files'''
     import argparse

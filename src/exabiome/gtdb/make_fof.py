@@ -6,7 +6,7 @@ def get_taxa_id(path):
 
 from .. import command
 
-@command('make_fof')
+@command('make-fof')
 def make_fof(argv=None):
     import argparse
     import logging
@@ -61,6 +61,8 @@ def make_fof(argv=None):
         pattern = "%s/all/G*/[0-9][0-9][0-9]/[0-9][0-9][0-9]/[0-9][0-9][0-9]/*/*%s*.gz" % (args.fadir, suffix)
         for path in glob.iglob(pattern):
             if 'cds' in path and not args.cds:
+                continue
+            if 'rna' in path:
                 continue
             taxa_id = get_taxa_id(path)
             if taxa_id in tid_set:
