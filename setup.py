@@ -60,7 +60,7 @@ setup_args = {
         "Operating System :: Unix",
         "Topic :: Scientific/Engineering :: Medical Science Apps."
     ],
-    'scripts': ['bin/train.py',],
+    'scripts': ['bin/deep-index',],
     'keywords': 'python '
                 'HDF '
                 'HDF5 '

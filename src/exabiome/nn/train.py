@@ -121,8 +121,11 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-def run_lightning():
-    model, args, addl_targs = process_args(parse_args())
+from .. import command
+@command('train')
+def run_lightning(argv=None):
+    '''Run training with PyTorch Lightning'''
+    model, args, addl_targs = process_args(parse_args(argv=argv))
 
     outbase, output = process_output(args)
 

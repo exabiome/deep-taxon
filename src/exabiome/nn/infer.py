@@ -125,10 +125,11 @@ def process_args(argv=None):
 
     return tuple(ret)
 
+from .. import command
 
+@command('infer')
 def run_inference(argv=None):
-    """
-    Run inference
+    """Run inference using PyTorch
 
     Args:
         argv: a command-line string or argparse.Namespace object to use for running inference

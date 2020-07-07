@@ -4,7 +4,10 @@ def get_taxa_id(path):
     c, n = os.path.basename(path).split('_')[0:2]
     return c + '_' + n
 
-if __name__ == '__main__':
+from .. import command
+
+@command('make_fof')
+def make_fof(argv=argv):
     import argparse
     import logging
     import sys
@@ -27,7 +30,7 @@ if __name__ == '__main__':
     parser.add_argument('-v', '--verbose', action='store_true', default=False, help='log to stderr')
 
 
-    args = parser.parse_args()
+    args = parser.parse_args(args=argv)
 
     if not any([args.protein, args.cds, args.genomic]):
         args.genomic = True
@@ -76,3 +79,7 @@ if __name__ == '__main__':
         with open(args.accessions, 'r') as f:
             for line in f.readlines():
                 print(func(line.strip(), args.fadir), file=sys.stdout)
+
+
+if __name__ == '__main__':
+    make_fof()
