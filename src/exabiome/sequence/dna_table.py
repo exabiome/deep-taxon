@@ -306,15 +306,26 @@ class AATable(SequenceTable):
 @register_class('TaxaTable', NS)
 class TaxaTable(DynamicTable, TorchableMixin):
 
+    __columns__ = (
+        {'name': 'taxon_id', 'description': 'the taxon ID'},
+        {'name': 'phylum', 'description': 'the phylum for each taxon'},
+        {'name': 'class', 'description': 'the class for each taxon'},
+        {'name': 'order', 'description': 'the order for each taxon'},
+        {'name': 'family', 'description': 'the family for each taxon'},
+        {'name': 'genus', 'description': 'the genus for each taxon'},
+        {'name': 'species', 'description': 'the species for each taxon'},
+        {'name': 'embedding', 'description': 'the embedding for each taxon'}
+    )
+
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
-            {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon'},
             {'name': 'phylum', 'type': ('array_data', 'data', VectorData), 'doc': 'the phylum for each taxon'},
             {'name': 'class', 'type': ('array_data', 'data', VectorData), 'doc': 'the class for each taxon'},
             {'name': 'order', 'type': ('array_data', 'data', VectorData), 'doc': 'the order for each taxon'},
             {'name': 'family', 'type': ('array_data', 'data', VectorData), 'doc': 'the family for each taxon'},
             {'name': 'genus', 'type': ('array_data', 'data', VectorData), 'doc': 'the genus for each taxon'},
-            {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon'})
+            {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon'},
+            {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None})
     def __init__(self, **kwargs):
         taxon_id, embedding = popargs('taxon_id', 'embedding', kwargs)
         taxonomy_labels = ['phylum', 'class', 'order', 'family', 'genus', 'species']
@@ -323,11 +334,11 @@ class TaxaTable(DynamicTable, TorchableMixin):
         columns = list()
         if isinstance(taxon_id, VectorData):      # data is being read -- here we assume that everything is a VectorData
             columns.append(taxon_id)
-            columns.append(embedding)
             columns.extend(taxonomy)
+            if embedding is not None: columns.append(embedding)
         else:
             columns.append(VectorData('taxon_id', 'taxonomy IDs from NCBI', data=taxon_id))
-            columns.append(VectorData('embedding', 'an embedding for each taxon', data=embedding))
+            if embedding is not None: columns.append(VectorData('embedding', 'an embedding for each taxon', data=embedding))
             for l, t in zip(taxonomy_labels, taxonomy):
                 columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
@@ -389,7 +400,7 @@ class DeepIndexFile(Container):
         self._sanity = False
         self._sanity_features = 5
         self.__labels = None
-        self.__n_emb_components = self.taxa_table['embedding'].data.shape[1]
+        self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
         self.label_key = 'id'
 
     def set_label_key(self, val):

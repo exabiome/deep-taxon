@@ -82,6 +82,7 @@ groups:
     data_type_inc: VectorData
     dtype: float
     doc: embedding of each taxa on n-dimensional space
+    required: false
   - name: phylum
     data_type_inc: VectorData
     dtype: text

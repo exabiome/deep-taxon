@@ -53,12 +53,12 @@ def prepare_data(argv=None):
 
     parser = argparse.ArgumentParser()
     parser.add_argument('fof', type=str, help='file of Fasta files')
-    parser.add_argument('emb_h5', type=str, help='embedding file')
     parser.add_argument('dist_h5', type=str, help='the distances file')
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('out', type=str, help='output HDF5')
     grp = parser.add_mutually_exclusive_group()
+    parser.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
     grp.add_argument('-p', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-c', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-g', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
@@ -117,12 +117,14 @@ def prepare_data(argv=None):
     #############################
     # read and filter embeddings
     #############################
-    logger.info('reading embeddings from %s' % args.emb_h5)
-    with h5py.File(args.emb_h5, 'r') as f:
-        emb = f['embedding'][:]
-        emb_taxa = f['leaf_names'][:]
-    logger.info('selecting embeddings for taxa found in %s' % args.fof)
-    emb = select_embeddings(taxa_ids, emb_taxa, emb)
+    emb = None
+    if args.emb is not None:
+        logger.info('reading embeddings from %s' % args.emb)
+        with h5py.File(args.emb, 'r') as f:
+            emb = f['embedding'][:]
+            emb_taxa = f['leaf_names'][:]
+        logger.info('selecting embeddings for taxa found in %s' % args.fof)
+        emb = select_embeddings(taxa_ids, emb_taxa, emb)
 
     #############################
     # read and trim tree
@@ -165,7 +167,7 @@ def prepare_data(argv=None):
             seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
             SeqTable = DNATable
 
-    seqit_bsize = 2**25
+    seqit_bsize = 2**30
     if args.protein:
         seqit_bsize = 2**15
     elif args.cds:
@@ -180,9 +182,12 @@ def prepare_data(argv=None):
 
     io = get_hdf5io(h5path, 'w')
 
-    tt_args = ['taxa_table', 'a table for storing taxa data', taxa_ids, emb]
+    tt_args = ['taxa_table', 'a table for storing taxa data', taxa_ids]
+    tt_kwargs = dict()
     for t in taxlevels[1:]:
         tt_args.append(taxdf[t].values)
+    if emb is not None:
+        tt_kwargs['embedding'] = emb
 
     taxa_table = TaxaTable(*tt_args)
 
