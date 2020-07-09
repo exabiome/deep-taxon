@@ -1,7 +1,7 @@
 import skbio.io
 from skbio.sequence import DNA, Protein
 import re
-from sklearn.preprocessing import OneHotEncoder, LabelEncoder
+from sklearn.preprocessing import OneHotEncoder
 import numpy as np
 from collections import deque
 from abc import ABCMeta, abstractmethod
@@ -311,39 +311,68 @@ class AASeqIterator(AbstractSeqIterator):
             yield y_seq, y_ltag
 
 
-
 class VocabIterator(AbstractSeqIterator):
+
+    chars, basemap = None, None
+
+    @classmethod
+    def characters(cls):
+        return cls.chars
 
     def __init__(self, paths, logger=None, min_seq_len=None):
         super().__init__(paths, logger=logger, min_seq_len=min_seq_len)
-        self.lenc = LabelEncoder()
-        self.lenc.fit(list(self.characters() + self.characters().lower()))
-        self.to_replace = np.array(['M', 'R', 'W', 'S', 'Y', 'K', 'V', 'H', 'D', 'B'])
+        self._enc_vocab = np.array(list(self.characters()))
 
     def pack(self, seq):
-        charar = seq.values.astype('U')
-        # replace ambiguities with Ns for now
-        charar[np.isin(charar, self.to_replace)] = 'N'
-        tfm = self.lenc.transform(charar).astype(np.uint8) % len(self.characters())
-        return tfm
+        charar = seq.values.view(np.uint8)
+        charar = self.basemap[charar]
+        return charar
 
     @property
     def encoded_vocab(self):
-        return self.lenc.classes_[0:len(self.lenc.classes_)//2]
+        return self._enc_vocab
+
+
+def _get_DNA_map():
+    '''
+    create a DNA map with some redundancy so that we can
+    do base-complements with +/% operations.
+
+    Using this scheme, the complement of a base should be:
+
+    (base_integer + 9) % 18
+
+    chars[(basemap[ord('N')]+9)%18]
+
+    For this to work, bases need to be ordered as they are below
+
+    '''
+    chars = ('ACYWSKDVN'
+             'TGRWSMHBN')
+    basemap = np.zeros(128, dtype=np.uint8)
+    for i, c in reversed(list(enumerate(chars))):  # reverse so we store the lowest for self-complementary codes
+        basemap[ord(c)] = i
+        basemap[ord(c.lower())] = i
+    return chars, basemap
 
 
 class DNAVocabIterator(VocabIterator):
 
-    @classmethod
-    def characters(cls):
-        return 'ATCGN'
+    chars, basemap = _get_DNA_map()
+
+
+def _get_AA_map():
+    chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    basemap = np.zeros(128, dtype=np.uint8)
+    for i, c in enumerate(chars):
+        basemap[ord(c)] = i
+        basemap[ord(c.lower())] = i
+    return chars, basemap
 
 
 class AAVocabIterator(VocabIterator):
 
-    @classmethod
-    def characters(cls):
-        return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    chars, basemap = _get_AA_map()
 
 
 class QueueIterator(object):

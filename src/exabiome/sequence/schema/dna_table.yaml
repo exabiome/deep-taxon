@@ -22,6 +22,11 @@ datasets:
     - null
   doc: a compressed distance matrix
 
+- data_type_def: DNAData
+  data_type_inc: VocabData
+  dtype: uint8
+  doc: DNA sequence data
+
 groups:
 - data_type_def: AbstractSeqTable
   data_type_inc: DynamicTable
@@ -50,6 +55,9 @@ groups:
   - name: sequence_index
     data_type_inc: PackedDNAIndex
     doc: Index for 'sequence'
+  - name: sequence
+    data_type_inc: DNAData
+    doc: DNA sequence data
 
 - data_type_def: AATable
   data_type_inc: AbstractSeqTable

@@ -153,10 +153,11 @@ def prepare_data(argv=None):
 
     if args.vocab:
         if args.protein:
+            SeqTable = SequenceTable
             seqit = AAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
         else:
+            SeqTable = DNATable
             seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
-        SeqTable = SequenceTable
     else:
         if args.protein:
             logger.info("reading and writing protein sequences")
