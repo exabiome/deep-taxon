@@ -219,8 +219,25 @@ class SequenceTable(AbstractSequenceTable):
         super().__init__(**kwargs)
 
 
+@register_class('DNAData', NS)
+class DNAData(VocabData):
+
+    def get(self, key, rev=False, **kwargs):
+        idx = self.data[key]
+        if rev:
+            idx = (idx[::-1] + 9) % 18
+        return self._get_helper(idx, **kwargs)
+
+
 @register_class('DNATable', NS)
 class DNATable(SequenceTable):
+
+    def get_sequence_data(self, data):
+        if isinstance(data, DataIO):
+            vocab = data.data.data.encoded_vocab
+        else:
+            vocab = self.vocab
+        return DNAData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=vocab)
 
     def get_sequence_index(self, data, target):
         return PackedDNAIndex('sequence_index', data, target)
