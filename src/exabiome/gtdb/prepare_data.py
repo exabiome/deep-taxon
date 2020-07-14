@@ -168,7 +168,7 @@ def prepare_data(argv=None):
             seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
             SeqTable = DNATable
 
-    seqit_bsize = 2**30
+    seqit_bsize = 2**25
     if args.protein:
         seqit_bsize = 2**15
     elif args.cds:
