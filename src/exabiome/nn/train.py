@@ -55,6 +55,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
     parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
+    parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
 
@@ -110,6 +111,10 @@ def process_args(args=None, return_io=False):
     if args.debug:
         targs['fast_dev_run'] = True
 
+    if args.lr_find:
+        targs['auto_lr_find'] = True
+    del args.lr_find
+
     ret = [model, args, targs]
     if return_io:
         ret.append(io)
@@ -161,6 +166,40 @@ def run_lightning(argv=None):
     minutes, seconds = divmod(seconds, 60)
 
     print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds))
+
+@command('lr-find')
+def lightning_lr_find(argv=None):
+    '''Run training with PyTorch Lightning'''
+    import matplotlib.pyplot as plt
+
+    model, args, addl_targs = process_args(parse_args(argv=argv))
+
+    outbase, output = process_output(args, subdir='lr_find')
+
+    # save arguments
+    with open(output('args.pkl'), 'wb') as f:
+        pickle.dump(args, f)
+
+    seed_everything(args.seed)
+
+    # get dataset so we can set model parameters that are
+    # dependent on the dataset, such as final number of outputs
+
+    targs = addl_targs
+
+    trainer = Trainer(**targs)
+
+    s = datetime.now()
+    lr_finder = trainer.lr_find(model)
+    e = datetime.now()
+    td = e - s
+    hours, seconds = divmod(td.seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+
+    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds))
+    print('optimal learning rate: %0.6f' % lr_finder.suggestion())
+    fig = lr_finder.plot(suggest=True)
+    fig.savefig(output('lr_finder_results.png'))
 
 def print_dataloader(dl):
     print(dl.dataset.index[0], dl.dataset.index[-1])

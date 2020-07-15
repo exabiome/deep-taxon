@@ -67,13 +67,13 @@ def process_model(args, inference=False):
     return model
 
 
-def process_output(args):
+def process_output(args, subdir='training_results'):
     """
     Process dataset arguments
     """
     outbase = args.output
     if args.experiment:
-        outbase = os.path.join(outbase, 'training_results', args.experiment)
+        outbase = os.path.join(outbase, subdir, args.experiment)
     check_directory(outbase)
 
     def output(fname):
