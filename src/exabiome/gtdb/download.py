@@ -1,3 +1,4 @@
+import sys
 import subprocess
 import os.path
 
@@ -20,9 +21,25 @@ def get_ftp_path(accession, sequence_only=True):
             accession[10:13],
             f'{accession}*']
     if sequence_only:
-        path.append('*f[a,n]a*.gz')
+        path.append('*f[a,n]a.gz')
 
     return os.path.join(*path)
+
+
+@command('ncbi-path')
+def ncbi_path(args):
+    '''Print path at NCBI FTP site to stdout'''
+    import argparse
+
+    desc = 'Print path at NCBI FTP site to stdout '
+    parser  = argparse.ArgumentParser(description=desc)
+    parser.add_argument('accession', type=str, help='the accession of the genome to retreive')
+
+    args = parser.parse_args(args)
+
+    accessions = get_accessions(args)
+    for acc in accessions:
+        print(get_ftp_path(acc))
 
 
 class Rsync:
@@ -53,9 +70,21 @@ class Rsync:
         else:
             self.logger.warning(f'successfully rsynced {accession}')
 
+def get_accessions(args):
+    if args.accession  == '-':
+        accessions = [l[:-1] for l in sys.stdin]
+    else:
+        if args.file:
+            with open(args.accession, 'r') as f:
+                accessions = [l[:-1] for l in f]
+        else:
+            accessions = [args.accession]
+    return accessions
+
+
 
 @command('ncbi-fetch')
-def main(args):
+def ncbi_fetch(args):
     import argparse
 
     desc = 'Retrieve sequence data from NCBI FTP site using rsync'
@@ -69,11 +98,7 @@ def main(args):
 
     args = parser.parse_args(args)
 
-    if args.file:
-        with open(args.accession, 'r') as f:
-            accessions = [l[:-1] for l in f]
-    else:
-        accessions = [args.accession]
+    accessions = get_accessions(args)
 
     if os.path.exists(args.dest):
         if not os.path.isdir(args.dest):
