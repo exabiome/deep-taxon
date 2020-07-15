@@ -114,8 +114,6 @@ class Bottleneck(nn.Module):
 class ResNet(AbstractLit):
 
     def __init__(self, hparams):
-        super(ResNet, self).__init__()
-
         if not hasattr(hparams, 'zero_init_residual'):
             hparams.zero_init_residual = False
         if not hasattr(hparams, 'groups'):
@@ -125,15 +123,13 @@ class ResNet(AbstractLit):
         if not hasattr(hparams, 'replace_stride_with_dilation'):
             hparams.replace_stride_with_dilation = None
         if not hasattr(hparams, 'norm_layer'):
-            hparams.norm_layer = None
+            hparams.norm_layer = nn.BatchNorm1d
+        super(ResNet, self).__init__(hparams)
 
-        self.hparams = hparams
         replace_stride_with_dilation = hparams.replace_stride_with_dilation
         block = hparams.block
         layers = hparams.layers
         norm_layer = hparams.norm_layer
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm1d
 
         self.inplanes = 64
         self.dilation = 1
@@ -144,7 +140,7 @@ class ResNet(AbstractLit):
         if len(replace_stride_with_dilation) != 3:
             raise ValueError("replace_stride_with_dilation should be None "
                              "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
-        self.conv1 = nn.Conv1d(3, self.inplanes, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv1d(hparams.input_nc, self.inplanes, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = norm_layer(self.inplanes)
         self.relu = nn.ReLU(inplace=True)
@@ -156,8 +152,8 @@ class ResNet(AbstractLit):
                                        dilate=replace_stride_with_dilation[1])
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
-        self.avgpool = nn.AdaptiveAvgPool1d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, n_outputs)
+        self.avgpool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.linear(512 * block.expansion, hparams.n_outputs)
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
