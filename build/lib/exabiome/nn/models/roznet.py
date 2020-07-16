@@ -37,7 +37,6 @@ class RozNet(AbstractLit):
 
     def __init__(self, hparams):
         super().__init__(hparams)
-        hparams = self.check_hparams(hparams)
         input_nc = getattr(hparams, 'input_nc', None)
         n_outputs = getattr(hparams, 'n_outputs', 2)
         first_kernel_size = getattr(hparams, 'first_kernel_size', 7)

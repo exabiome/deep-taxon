@@ -5,29 +5,9 @@ import torch.nn.functional as F
 
 from . import model, AbstractLit
 
-class Self_Attention(nn.Module):
-    """ Self attention Layer """
-    def __init__(self, in_dim, activation):
-        self.in_channel = in_dim
-        self.activation = activation
-        self.query = nn.Conv1d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
-        self.key = nn.Conv1d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
-        self.value = nn.Conv1d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1)
-        self.gamma = nn.Parameter(torch.zeros(1))
 
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, x):
-        """
-            inputs :
-                x : input feature maps( B X C X W X H)
-            returns :
-                out : self attention value + input feature
-                attention: B X N X N (N is Width*Height)
-        """
-
-@model('roznet')
-class RozNet(AbstractLit):
+@model('smallroznet')
+class SmallRozNet(AbstractLit):
     '''
     A 1D CNN with 5 convolutional layers, followed by 3 fully-connected layers
 
@@ -37,54 +17,50 @@ class RozNet(AbstractLit):
 
     def __init__(self, hparams):
         super().__init__(hparams)
-        hparams = self.check_hparams(hparams)
         input_nc = getattr(hparams, 'input_nc', None)
         n_outputs = getattr(hparams, 'n_outputs', 2)
         first_kernel_size = getattr(hparams, 'first_kernel_size', 7)
         maxpool = getattr(hparams, 'maxpool', True)
         self.features = nn.Sequential(
-            nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
+            nn.Conv1d(input_nc, 32, kernel_size=first_kernel_size, stride=1, padding=2),
+            nn.BatchNorm1d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool1d(kernel_size=3, stride=1),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
-            nn.Conv1d(64, 192, kernel_size=5, padding=2),
-            nn.BatchNorm1d(192),
+            nn.Conv1d(64, 96, kernel_size=3, padding=1),
+            nn.BatchNorm1d(96),
             nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=3, stride=1),
-            nn.Conv1d(192, 384, kernel_size=3, padding=1),
-            nn.BatchNorm1d(384),
+            nn.Conv1d(96, 96, kernel_size=3, padding=1),
+            nn.BatchNorm1d(96),
             nn.ReLU(inplace=True),
-            nn.Conv1d(384, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
+            nn.Conv1d(96, 64, kernel_size=3, padding=1),
+            nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
         )
-        pool_size = 24
-
-        self.pool = nn.AdaptiveMaxPool1d(pool_size)
-
+        if maxpool:
+            self.pool = nn.AdaptiveMaxPool1d(12)
+        else:
+            self.pool = nn.AdaptiveAvgPool1d(12)
         self.classifier = nn.Sequential(
-            nn.Dropout(hparams.dropout_rate),
-            nn.Linear(256*pool_size, 1024),
-            nn.BatchNorm1d(1024),
+            nn.Dropout(),
+            nn.Linear(64*12, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Dropout(hparams.dropout_rate),
-            nn.Linear(1024, 1024),
-            nn.BatchNorm1d(1024),
+            nn.Dropout(),
+            nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Linear(1024, n_outputs),
+            nn.Linear(256, n_outputs),
             #nn.BatchNorm1d(n_outputs)
         )
-
-        self.attention = Self_Attention(24, 'relu')
 
     def forward(self, x, **kwargs):
         x = self.features(x)
         x = self.pool(x)
-        x = self.attention(x)
         x = torch.flatten(x, 1)
         x = self.classifier(x)
         return x
@@ -112,7 +88,7 @@ if __name__ == '__main__':
     else:
         n_outputs = dataset.difile.n_emb_components
 
-    model = check_model(RozNet(input_nc, n_outputs=n_outputs), **args)
+    model = check_model(SmallRozNet(input_nc, n_outputs=n_outputs), **args)
 
     args['pad'] = True
 
