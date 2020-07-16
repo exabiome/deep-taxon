@@ -24,6 +24,7 @@ class AbstractLit(LightningModule):
         else:
             self._loss =  nn.MSELoss()
         self.set_inference(False)
+        self.lr = hparams.lr
 
     @staticmethod
     def check_hparams(hparams):

@@ -15,6 +15,8 @@ def print_help():
         else:
             desc = 'Run function %s from %s' % (f.__name__, f.__module__)
         print(f'    {c}' + ' '*nspaces + desc)
+    print()
+
 
 if len(sys.argv) == 1:
     print_help()

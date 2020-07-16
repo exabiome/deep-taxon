@@ -60,6 +60,11 @@ def process_model(args, inference=False):
             n_outputs = dataset.difile.n_emb_components
         args.n_outputs = n_outputs
 
+        if args.hparams is not None:
+            for k, v in args.hparams.items():
+                setattr(args, k, v)
+        del args.hparams
+
         model = model(args)
 
     io.close()
@@ -67,13 +72,13 @@ def process_model(args, inference=False):
     return model
 
 
-def process_output(args):
+def process_output(args, subdir='training_results'):
     """
     Process dataset arguments
     """
     outbase = args.output
     if args.experiment:
-        outbase = os.path.join(outbase, 'training_results', args.experiment)
+        outbase = os.path.join(outbase, subdir, args.experiment)
     check_directory(outbase)
 
     def output(fname):
