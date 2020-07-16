@@ -60,6 +60,11 @@ def process_model(args, inference=False):
             n_outputs = dataset.difile.n_emb_components
         args.n_outputs = n_outputs
 
+        if args.hparams is not None:
+            for k, v in args.hparams.items():
+                setattr(args, k, v)
+        del args.hparams
+
         model = model(args)
 
     io.close()
