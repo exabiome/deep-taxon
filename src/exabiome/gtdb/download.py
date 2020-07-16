@@ -85,6 +85,7 @@ def get_accessions(args):
 
 @command('ncbi-fetch')
 def ncbi_fetch(args):
+    '''Retrieve sequence data from NCBI FTP site using rsync'''
     import argparse
 
     desc = 'Retrieve sequence data from NCBI FTP site using rsync'
