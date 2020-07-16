@@ -76,31 +76,11 @@ class DistanceCollater:
         """
         A function to collate samples and return a sub-distance matrix
         """
-        maxlen = 0
-        l_idx = -1
-        for i, X, y in samples:
-            if maxlen < X.shape[l_idx]:
-                maxlen = X.shape[l_idx]
-        X_ret = list()
-        y_idx = list()
-        idx_ret = list()
-        size_ret = list()
-        for i, X, y in samples:
-            dif = maxlen - X.shape[l_idx]
-            X_ = X
-            if dif > 0:
-                X_ = F.pad(X, (0, dif))
-            X_ret.append(X_)
-            size_ret.append(X.shape[l_idx])
-            idx_ret.append(i)
-            y_idx.append(y)
-        X_ret = torch.stack(X_ret)
-        y_idx = torch.stack(y_idx)
+        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = collate(samples)
+
         # Get distances
         y_ret = self.dmat[y_idx][:, y_idx]
-        size_ret = torch.tensor(size_ret)
-        idx_ret = torch.tensor(idx_ret)
-        return (idx_ret, X_ret, y_ret, size_ret)
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 def collate(samples):
     """
@@ -108,14 +88,15 @@ def collate(samples):
     """
     maxlen = 0
     l_idx = -1
-    for i, X, y in samples:
+    for i, X, y, seq_id in samples:
         if maxlen < X.shape[l_idx]:
             maxlen = X.shape[l_idx]
     X_ret = list()
     y_ret = list()
     idx_ret = list()
     size_ret = list()
-    for i, X, y in samples:
+    seq_id_ret = list()
+    for i, X, y, seq_id in samples:
         dif = maxlen - X.shape[l_idx]
         X_ = X
         if dif > 0:
@@ -124,11 +105,13 @@ def collate(samples):
         y_ret.append(y)
         size_ret.append(X.shape[l_idx])
         idx_ret.append(i)
+        seq_id_ret.append(seq_id)
     X_ret = torch.stack(X_ret)
     y_ret = torch.stack(y_ret)
     size_ret = torch.tensor(size_ret)
     idx_ret = torch.tensor(idx_ret)
-    return (idx_ret, X_ret, y_ret, size_ret)
+    seq_id_ret = torch.tensor(seq_id_ret)
+    return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
 class SeqDataset(Dataset):
@@ -185,11 +168,16 @@ class SeqDataset(Dataset):
 
     def __getitem__(self, i):
         # get sequence
-        idx, seq, label = self.difile[i]
+        item = self.difile[i]
+        idx, seq, label, seq_id = None, None, None, -1
+        if len(item) == 4:
+            idx, seq, label, seq_id = item
+        else:
+            idx, seq, label = item
         ## one-hot encode sequence
         seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64), num_classes=self.vocab_len).float().T
         label = torch.as_tensor(label, dtype=self._label_dtype)
-        return (idx, seq, label)
+        return (idx, seq, label, seq_id)
 
 
 def get_loader(path, **kwargs):

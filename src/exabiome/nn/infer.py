@@ -140,7 +140,7 @@ def run_inference(argv=None):
     import numpy as np
     model.to(args.device)
     model.eval()
-    n_outputs = model.classifier[-1].out_features
+    n_outputs = model.hparams.n_outputs
     n_samples = len(model.train_dataloader().dataset) +\
         len(model.val_dataloader().dataset) +\
         len(model.test_dataloader().dataset)
@@ -151,12 +151,15 @@ def run_inference(argv=None):
     label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
     olen_dset = f.create_dataset('orig_lens', shape=(n_samples,), dtype=int)
     f.create_dataset('taxon_id', data=model.train_dataloader().dataset.difile.taxa_table['taxon_id'][:])
+    seq_id_dset = None
+    if model.hparams.window is not None:
+        seq_id_dset = f.create_dataset('seq_ids', shape=(n_samples,), dtype=int)
 
     for loader_key in args.loaders:
         mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
         loader = model.loaders[loader_key]
         args.logger.info(f'computing outputs for {loader_key}')
-        idx, outputs, labels, orig_lens = get_outputs(model, loader, args.device, debug=args.debug)
+        idx, outputs, labels, orig_lens, seq_ids = get_outputs(model, loader, args.device, debug=args.debug)
         order = np.argsort(idx)
         idx = idx[order]
         args.logger.info('writing outputs')
@@ -167,6 +170,8 @@ def run_inference(argv=None):
         olen_dset[idx] = orig_lens
         args.logger.info('writing mask')
         mask_dset[idx] = True
+        if seq_id_dset is not None:
+            seq_id_dset[idx] = seq_ids
 
     if args.umap:
         # compute UMAP arguments for convenience
@@ -186,20 +191,23 @@ def get_outputs(model, loader, device, debug=False):
     indices = list()
     labels = list()
     orig_lens = list()
+    seq_ids = list()
     idx = 1
     from tqdm import tqdm
-    for i, X, y, olen in tqdm(loader):
+    for i, X, y, olen, seq_i in tqdm(loader):
         idx += 1
         ret.append(model(X.to(device)).to('cpu').detach())
         indices.append(i.to('cpu').detach())
         labels.append(y.to('cpu').detach())
         orig_lens.append(olen.to('cpu').detach())
+        seq_ids.append(seq_ids.to('cpu').detach())
         if debug:
             break
     ret = (torch.cat(indices).numpy(),
            torch.cat(ret).numpy(),
            torch.cat(labels).numpy(),
-           torch.cat(orig_lens).numpy())
+           torch.cat(orig_lens).numpy(),
+           torch.cat(seq_ids).numpy())
     return ret
 
 
