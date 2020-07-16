@@ -133,10 +133,12 @@ class ResNet(AbstractLit):
 
         self.inplanes = 64
         self.dilation = 1
-        if replace_stride_with_dilation is None:
+        if replace_stride_with_dilation is None or replace_stride_with_dilation is False:
             # each element in the tuple indicates if we should replace
             # the 2x2 stride with a dilated convolution instead
             replace_stride_with_dilation = [False, False, False]
+        elif replace_stride_with_dilation is True:
+            replace_stride_with_dilation = [True, True, True]
         if len(replace_stride_with_dilation) != 3:
             raise ValueError("replace_stride_with_dilation should be None "
                              "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
@@ -153,7 +155,7 @@ class ResNet(AbstractLit):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.linear(512 * block.expansion, hparams.n_outputs)
+        self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -222,6 +224,7 @@ class ResNet(AbstractLit):
 class ResNet18(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = BasicBlock
         hparams.layers = [2, 2, 2, 2]
         super().__init__(hparams)
@@ -231,6 +234,7 @@ class ResNet18(ResNet):
 class ResNet34(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = BasicBlock
         hparams.layers = [3, 4, 6, 3]
         super().__init__(hparams)
@@ -240,6 +244,7 @@ class ResNet34(ResNet):
 class ResNet50(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 6, 3]
         super().__init__(hparams)
@@ -249,6 +254,7 @@ class ResNet50(ResNet):
 class ResNet101(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 23, 3]
         super().__init__(hparams)
@@ -258,6 +264,7 @@ class ResNet101(ResNet):
 class ResNet152(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 36, 3]
         super().__init__(hparams)
@@ -267,6 +274,7 @@ class ResNet152(ResNet):
 class ResNeXt50_32x4d(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 6, 3]
         hparams.groups = 32
@@ -278,6 +286,7 @@ class ResNeXt50_32x4d(ResNet):
 class ResNeXt101_32x8d(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 23, 3]
         hparams.groups = 32
@@ -289,6 +298,7 @@ class ResNeXt101_32x8d(ResNet):
 class Wide_ResNet50_2(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 6, 3]
         hparams.width_per_group = 128
@@ -299,6 +309,7 @@ class Wide_ResNet50_2(ResNet):
 class Wide_ResNet101_2(ResNet):
 
     def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 23, 3]
         hparams.width_per_group = 128
