@@ -3,7 +3,6 @@ from pytorch_lightning import LightningModule
 import torch.optim as optim
 import torch.nn as nn
 import torch
-import argparse
 
 #from .. import SeqDataset
 #from hdmf.common import get_hdf5io
@@ -16,7 +15,7 @@ class AbstractLit(LightningModule):
 
     def __init__(self, hparams):
         super().__init__()
-        self.hparams = self.check_hparams(hparams)
+        self.hparams = hparams
         if self.hparams.manifold:
             self._loss = DistMSELoss()
         elif self.hparams.classify:
@@ -24,13 +23,6 @@ class AbstractLit(LightningModule):
         else:
             self._loss =  nn.MSELoss()
         self.set_inference(False)
-        self.lr = hparams.lr
-
-    @staticmethod
-    def check_hparams(hparams):
-        if isinstance(hparams, dict):
-            return argparse.Namespace(**hparams)
-        return hparams
 
     def set_inference(self, inference=True):
         self._inference = inference
@@ -51,7 +43,7 @@ class AbstractLit(LightningModule):
         Load dataset if it has not been loaded yet
         """
         if not hasattr(self, 'loaders'):
-            dataset, io = process_dataset(self.hparams, inference=self._inference)
+            dataset, io = process_dataset(self.hparams)
             if self.hparams.load:
                 dataset.load()
             kwargs = dict(random_state=self.hparams.seed,
@@ -77,7 +69,7 @@ class AbstractLit(LightningModule):
         return self.loaders['train']
 
     def training_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        idx, seqs, target, olen = batch
         output = self.forward(seqs)
         loss = self._loss(output, target)
         return {'loss': loss}
@@ -91,7 +83,7 @@ class AbstractLit(LightningModule):
         return self.loaders['validate']
 
     def validation_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        idx, seqs, target, olen = batch
         output = self(seqs)
         return {'val_loss': self._loss(output, target)}
 
@@ -105,7 +97,7 @@ class AbstractLit(LightningModule):
         return self.loaders['test']
 
     def test_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        idx, seqs, target, olen = batch
         output = self(seqs)
         return {'test_loss': self._loss(output, target)}
 
