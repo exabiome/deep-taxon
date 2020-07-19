@@ -5,26 +5,6 @@ import torch.nn.functional as F
 
 from . import model, AbstractLit
 
-class Self_Attention(nn.Module):
-    """ Self attention Layer """
-    def __init__(self, in_dim, activation):
-        self.in_channel = in_dim
-        self.activation = activation
-        self.query = nn.Conv1d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
-        self.key = nn.Conv1d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
-        self.value = nn.Conv1d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1)
-        self.gamma = nn.Parameter(torch.zeros(1))
-
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, x):
-        """
-            inputs :
-                x : input feature maps( B X C X W X H)
-            returns :
-                out : self attention value + input feature
-                attention: B X N X N (N is Width*Height)
-        """
 
 @model('roznet')
 class RozNet(AbstractLit):
@@ -63,9 +43,10 @@ class RozNet(AbstractLit):
             nn.MaxPool1d(kernel_size=3, stride=1),
         )
         pool_size = 24
-
-        self.pool = nn.AdaptiveMaxPool1d(pool_size)
-
+        if maxpool:
+            self.pool = nn.AdaptiveMaxPool1d(pool_size)
+        else:
+            self.pool = nn.AdaptiveAvgPool1d(pool_size)
         self.classifier = nn.Sequential(
             nn.Dropout(hparams.dropout_rate),
             nn.Linear(256*pool_size, 1024),
@@ -79,12 +60,9 @@ class RozNet(AbstractLit):
             #nn.BatchNorm1d(n_outputs)
         )
 
-        self.attention = Self_Attention(24, 'relu')
-
     def forward(self, x, **kwargs):
         x = self.features(x)
         x = self.pool(x)
-        x = self.attention(x)
         x = torch.flatten(x, 1)
         x = self.classifier(x)
         return x
