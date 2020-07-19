@@ -1,7 +1,0 @@
-namespaces:
-- doc: Model for storing data to be read in for deep-index training
-  name: deep-index
-  version: 0.1.0
-  schema:
-  - namespace: hdmf-common
-  - source: dna_table.yaml

@@ -77,7 +77,7 @@ class AbstractLit(LightningModule):
         return self.loaders['train']
 
     def training_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        idx, seqs, target, olen = batch
         output = self.forward(seqs)
         loss = self._loss(output, target)
         return {'loss': loss}
@@ -91,7 +91,7 @@ class AbstractLit(LightningModule):
         return self.loaders['validate']
 
     def validation_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        idx, seqs, target, olen = batch
         output = self(seqs)
         return {'val_loss': self._loss(output, target)}
 
@@ -105,7 +105,7 @@ class AbstractLit(LightningModule):
         return self.loaders['test']
 
     def test_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        idx, seqs, target, olen = batch
         output = self(seqs)
         return {'test_loss': self._loss(output, target)}
 
