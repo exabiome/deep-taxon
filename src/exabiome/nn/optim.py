@@ -50,7 +50,6 @@ class Objective:
     def get_hparams(self, trial):
         ret = dict()
         ret['dropout_rate'] = trial.suggest_uniform('dropout_rate', 0.0, 1.0)
-        # ret['num_layers'] = trial.suggest_int('num_layers', 2, 10)
         return ret
 
     def __call__(self, trial):
