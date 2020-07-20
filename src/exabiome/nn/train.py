@@ -135,7 +135,9 @@ def run_lightning(argv=None):
     model, args, addl_targs = process_args(parse_args(argv=argv))
 
     outbase, output = process_output(args)
-
+    print(args)
+    del args.logger 
+    
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
