@@ -19,10 +19,10 @@ DI_DIR=$CSCRATCH/exabiome/deep-index/
 LOSS=M
 MODEL=roznet
 EXP=g4_b32_lr0.001
-outdir=datasets/medium/chunks/$MODEL/M/training_results/
+OUTDIR=$DI_DIR/train/datasets/medium/chunks/$MODEL/$LOSS
 
 # Run the training
 srun -u deep-index train \
-            $MODEL $DI_DIR/input/ar122_r89.genomic.small.deep_index.input.h5 $DI_DIR/train/datasets/medium/chunks/$MODEL/$LOSS \
+            $MODEL $DI_DIR/input/ar122_r89.genomic.small.deep_index.input.h5 $OUTDIR \
             -$LOSS -g 4 -b 32 -s 3001 -S 1000 -W 1000 --lr 0.001 -e 10 -E $EXP \
-            > $DI_DIR/train/datasets/medium/chunks/$MODEL/$LOSS/logs/$EXP.log 2>&1
+            > $OUTDIR/logs/$EXP.log 2>&1
