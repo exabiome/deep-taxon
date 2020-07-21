@@ -54,7 +54,7 @@ def process_model(args, inference=False):
         if args.classify:
             n_outputs = len(dataset.difile.taxa_table)
         elif args.manifold:
-            n_outputs = 32        #TODO make this configurable #breakpoint
+            n_outputs = args.n_outputs        #TODO make this configurable #breakpoint
         else:
             args.regression = True
             n_outputs = dataset.difile.n_emb_components
