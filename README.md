@@ -7,32 +7,59 @@ an executable for each of the following steps:
 3. Network inference
 4. Summarizing network outputs
 
-## Sampling taxa to train with
+## Installation
+To ensure proper functioning of this package, it should be installed in its own conda environment, cloned from
+the specification file in the `env` subdirectory.
+
 ```bash
-python -m exabiome.gtdb.sample
+git clone git@github.com:exabiome/deep-taxon.git
+cd deep-taxon
+conda create --name myclone --file `env/python_38.txt`
+conda activate myclone
+python setup.py install
+```
+
+## Commands
+All commands can be accessed with the `deep-index` executable. Below is the `deep-index` usage statement, which
+lists the available commands.
+
+```bash
+Usage: deep-index <command> [options]
+Available commands are:
+
+    train           Run training with PyTorch Lightning
+    lr-find         Run Lightning Learning Rate finder
+    cuda-sum        Summarize what Torch sees in CUDA land
+    infer           Run inference using PyTorch
+    summarize       Summarize training/inference results
+    sample-gtdb     Sample taxa from a tree
+    make-fof        Run function make_fof from exabiome.gtdb.make_fof
+    prepare-data    Aggregate sequence data GTDB using a file-of-files
+    ncbi-path       Print path at NCBI FTP site to stdout
+    ncbi-fetch      Retrieve sequence data from NCBI FTP site using rsync
+```
+
+
+## Sampling taxa to train with
+This command will sample taxa from a GTDB tree.
+```bash
+deep-index sample-gtdb
 ```
 
 ## Converting Data
-
+This command can be used to convert sequence data into an aggregated file with data prepared for training.
 ```bash
-python -m exabiome.tools.prepare_data
+deep-index prepare-data
 ```
 
 ## Training neural networks
 To train neural networks, we use PyTorch Lightning. This code can be executed with the following command.
 
 ```bash
-python -m exabiome.nn.train
+deep-index train
 ```
 This command will split up the input dataset into training, validation, and testing data. The seed used to do this
 will be saved in the checkpoint, so subsequent use, such as for testing, will have the same split.
-
-Running with DistributedDataParallel i.e. multiple GPUs. using latest version of PyTorch Lightning (as of June 19, 2020) 
-does not work with executable modules. To get around this, use the following form of calling the training code:
-
-```bash
-python bin/train.py
-```
 
 ## Doing inference with neural networks
 
@@ -41,7 +68,7 @@ this command with the checkpoint produced during training. When it is finished, 
 the same directory that the input checkpoint file was saved.
 
 ```bash
-python -m exabiome.nn.infer
+deep-index infer
 ```
 
 ## Network output summary
@@ -51,5 +78,5 @@ PNG figure with a scatter plot of a 2D UMAP embedding if the model outputs. It w
 random forest classifier and plot a classification report 
 
 ```bash
-python -m exabiome.nn.summarize
+deep-index summarize
 ```
