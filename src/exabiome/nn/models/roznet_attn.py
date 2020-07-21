@@ -22,30 +22,26 @@ class Self_Attention(nn.Module):
     def forward(self,x):
         """
             inputs :
-                x : input feature maps( B X C X W )
+                x : input feature maps(B X C X W)
             returns :
-                out : self attention value + input feature 
-                attention: B X N X N (N is Width*Height)
+                out : self attention value + input feature (B x C x W)
+                attention: softmax scores (B X W X W)
             steps:
             1. create query, key, value 1D conv layers
-            2. matmul transposed query (32 x 24 x 32) by key (32 x 32 x 24) = scores (32 x 24 x 24)
+            2. matmul transposed query (B x W x C/8) by key (B x C/8 x W) = scores (B x W x W)
             3. normalize to sum to 1 with softmax
-            4. matmul value (32 x 32 x 24) by scores (32 x 24 x 24)
+            4. matmul value (B x C x W) by scores (B x W x W) = out (B x C x W)
+            
 
         """
         batch_size, conv, width = x.size()
-        # self.query(x).size() = torch.Size([32, 32, 24])
-        # self.query(x).view(batch_size, -1, width).permute(0, 2, 1).size() = torch.Size([32, 24, 32])
-        proj_query  = self.query(x).view(batch_size, -1, width).permute(0, 2, 1) # B X C X N
-        proj_key =  self.key(x).view(batch_size, -1, width) # B X C x (*W)
-        scores =  torch.bmm(proj_query, proj_key) # transpose check
-        # energy.size() = torch.Size([32, 24, 24])
-        attention = self.softmax(scores) # B X (N) X (N)
-        # attention.size() = torch.Size([32, 24, 24])
-        proj_value = self.value(x).view(batch_size, -1, width) # B X C X N
+        proj_query  = self.query(x).view(batch_size, -1, width).permute(0, 2, 1) 
+        proj_key =  self.key(x).view(batch_size, -1, width) 
+        scores =  torch.bmm(proj_query, proj_key) 
+        attention = self.softmax(scores) 
+        proj_value = self.value(x).view(batch_size, -1, width)
         out = torch.bmm(proj_value, attention)
-        print("===", out.size())
-        # out = out.view(batch_size, conv, width)
+        out = out.view(batch_size, conv, width)
 
         out = self.gamma*out + x
         return out, attention
@@ -107,15 +103,10 @@ class RozNetAttn(AbstractLit):
         self.attention = Self_Attention(256, 'relu')
 
     def forward(self, x, **kwargs):
-        # torch.Size([32, 5, 1000])
         x = self.features(x)
-        # torch.Size([32, 256, 992])
-#         x = self.pool(x)
-        # torch.Size([32, 256, 24])
         x = self.attention(x)[0]
         x = self.pool(x)
         x = torch.flatten(x, 1)
-        # torch.Size([32, 6144])
         x = self.classifier(x)
         return x
 
@@ -149,4 +140,3 @@ if __name__ == '__main__':
     run(dataset, model, **args)
 
     io.close()
-
