@@ -51,6 +51,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
+    parser.add_argument('--half', action='store_true', default=False, help='use 16-bit (i.e. half-precision) training')
     parser.add_argument('--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
@@ -118,6 +119,11 @@ def process_args(args=None, return_io=False):
         targs['auto_lr_find'] = True
     del args.lr_find
 
+    if args.half:
+        targs['amp_level'] = 'O2'
+        targs['precision'] = 16
+    del args.half
+
     ret = [model, args, targs]
     if return_io:
         ret.append(io)
@@ -149,7 +155,7 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(filepath=output('seed=%d-{epoch:02d}-{val_loss:.2f}' % args.seed), save_weights_only=False),
+        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False),
         logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
         row_log_interval=10,
         log_save_interval=100
