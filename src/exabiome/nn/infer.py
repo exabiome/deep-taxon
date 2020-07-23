@@ -16,9 +16,10 @@ def parse_args(*addl_args, argv=None):
     epi = """
     output can be used as a checkpoint
     """
-    desc = "Run network training"
+    desc = "Run network inference"
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
     parser.add_argument('model', type=str, choices=list(models._models.keys()),
+                        metavar='MODEL',
                         help='the model type to run inference with')
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file used to train the model')
     parser.add_argument('output', type=str, help='directory to save model outputs to')
