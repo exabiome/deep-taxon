@@ -8,6 +8,25 @@ from ..utils import check_directory
 from pytorch_lightning.core.decorators import auto_move_data
 
 
+from .. import command
+@command('show-models')
+def num_gpus(argv=None):
+    '''Summarize what Torch sees in CUDA land'''
+    def get_desc(m):
+        if model.__doc__ is None:
+            return "no description"
+        else:
+            return model.__doc__.strip().split('\n')[0]
+    maxlen = max(list(map(len, models._models.keys())))
+    maxlen += (maxlen % 4) + 4
+
+    def pad(s):
+        return s + ' '*(maxlen - len(s))
+
+    for name, model in models._models.items():
+        print(pad(name), get_desc(model))
+
+
 def process_gpus(gpus):
     ret = gpus
     if isinstance(ret, str):
