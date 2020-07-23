@@ -38,6 +38,7 @@ def parse_args(*addl_args, argv=None):
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
     type_group.add_argument('-R', '--regression', action='store_true', help='run a regression problem', default=False)
+    parser.add_argument('-o', '--n_outputs', type=int, help='the number of outputs in the final layer', default=32)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
     parser.add_argument('-A', '--accuracy', action='store_true', help='compute accuracy', default=False)
@@ -136,8 +137,8 @@ def run_lightning(argv=None):
 
     outbase, output = process_output(args)
     print(args)
-    del args.logger 
-    
+    del args.logger
+
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
@@ -204,6 +205,13 @@ def lightning_lr_find(argv=None):
     print('optimal learning rate: %0.6f' % lr_finder.suggestion())
     fig = lr_finder.plot(suggest=True)
     fig.savefig(output('lr_finder_results.png'))
+
+@command('cuda-sum')
+def num_gpus(argv=None):
+    '''Summarize what Torch sees in CUDA land'''
+    import torch
+    print('torch.cuda.is_available:', torch.cuda.is_available())
+    print('torch.cuda.device_count:', torch.cuda.device_count())
 
 def print_dataloader(dl):
     print(dl.dataset.index[0], dl.dataset.index[-1])
