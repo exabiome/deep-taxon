@@ -1,3 +1,6 @@
+import sys
+import glob
+import os.path
 import matplotlib.pyplot as plt
 import h5py
 import seaborn as sns
@@ -100,8 +103,16 @@ def main(argv=None):
     parser.add_argument('output', type=str, nargs='?', help='the file to save the summary figure to')
 
     args = parser.parse_args(args=argv)
-    if args.output is None:
+    s = args.input
+    if os.path.isdir(s):
+        outputs = list(glob.glob(f'{s}/*.outputs.h5'))
+        if len(outputs) != 1:
+            print(f'More than one outputs file in {s}, please specify the exact file')
+            sys.exit(1)
+        args.input = outputs[0]
         s = args.input
+
+    if args.output is None:
         if s.endswith('.h5'):
             s = s[:-3]
         args.output = s + '.png'
@@ -112,4 +123,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     main()
-
