@@ -100,7 +100,10 @@ def process_args(argv=None):
     outbase, output = process_output(args)
     if args.checkpoint is None:
         ckpt = list(glob.glob(f"{outbase}/*.ckpt"))
-        if len(ckpt) > 1:
+        if len(ckpt) == 0:
+            print(f'No checkpoint file found in {outbase}', file=sys.stderr)
+            sys.exit(1)
+        elif len(ckpt) > 1:
             print(f'More than one checkpoint file found in {outbase}. '
                   'Please specify checkpoint with -c', file=sys.stderr)
             sys.exit(1)
@@ -201,7 +204,7 @@ def get_outputs(model, loader, device, debug=False):
         indices.append(i.to('cpu').detach())
         labels.append(y.to('cpu').detach())
         orig_lens.append(olen.to('cpu').detach())
-        seq_ids.append(seq_ids.to('cpu').detach())
+        seq_ids.append(seq_i.to('cpu').detach())
         if debug:
             break
     ret = (torch.cat(indices).numpy(),
