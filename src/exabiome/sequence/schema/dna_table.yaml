@@ -126,6 +126,7 @@ groups:
   - name: distances
     data_type_inc: CondensedDistanceMatrix
     doc: distances between all pairs of taxa in this file
+    quantity: '?'
   groups:
   - name: seq_table
     data_type_inc: AbstractSeqTable

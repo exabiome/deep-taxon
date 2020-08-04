@@ -405,8 +405,8 @@ class DeepIndexFile(Container):
 
     @docval({'name': 'seq_table', 'type': (AATable, DNATable, SequenceTable), 'doc': 'the table storing DNA sequences'},
             {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
-            {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information'},
-            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'})
+            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'},
+            {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information', 'default': None})
     def __init__(self, **kwargs):
         seq_table, taxa_table, distances, tree = popargs('seq_table', 'taxa_table', 'distances', 'tree', kwargs)
         call_docval_func(super().__init__, {'name': 'root'})
