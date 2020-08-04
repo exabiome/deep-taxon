@@ -1,4 +1,5 @@
 import sys
+import os
 from ..utils import check_argv, parse_logger
 from .utils import process_gpus, process_model, process_output
 import glob
@@ -22,11 +23,9 @@ def parse_args(*addl_args, argv=None):
                         metavar='MODEL',
                         help='the model type to run inference with')
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file used to train the model')
-    parser.add_argument('output', type=str, help='directory to save model outputs to')
+    parser.add_argument('checkpoint', type=str, help='read the checkpoint from the given checkpoint file')
     parser.add_argument('-E', '--experiment', type=str, default='default',
                         help='the experiment name to get the checkpoint from')
-    parser.add_argument('-c', '--checkpoint', type=str, default=None,
-                        help='read the checkpoint from the given checkpoint file')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-L', '--load', action='store_true', default=False,
                         help='load data into memory before running inference')
@@ -97,18 +96,22 @@ def process_args(argv=None):
 
     # Figure out the checkpoint file to read from
     # and where to save outputs to
-    outbase, output = process_output(args)
-    if args.checkpoint is None:
-        ckpt = list(glob.glob(f"{outbase}/*.ckpt"))
+    if os.path.isdir(args.checkpoint):
+        ckpt = list(glob.glob(f"{args.checkpoint}/*.ckpt"))
         if len(ckpt) == 0:
-            print(f'No checkpoint file found in {outbase}', file=sys.stderr)
+            print(f'No checkpoint file found in {args.checkpoint}', file=sys.stderr)
             sys.exit(1)
         elif len(ckpt) > 1:
-            print(f'More than one checkpoint file found in {outbase}. '
+            print(f'More than one checkpoint file found in {args.checkpoint}. '
                   'Please specify checkpoint with -c', file=sys.stderr)
             sys.exit(1)
         args.checkpoint = ckpt[0]
-    args.output = '%s.outputs.h5' % args.checkpoint[:-5]
+    outdir = args.checkpoint
+    if outdir.endswith('.ckpt'):
+        outdir = outdir[:-5]
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
+    args.output =  os.path.join(outdir, 'outputs.h5')
 
     # setting classify to so that we can get labels when
     # we load data. We do this here because we assume that
@@ -149,6 +152,7 @@ def run_inference(argv=None):
         len(model.val_dataloader().dataset) +\
         len(model.test_dataloader().dataset)
 
+    args.logger.info(f'saving outputs to {args.output}')
     f = h5py.File(args.output, 'w')
 
     emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
