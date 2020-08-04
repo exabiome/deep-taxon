@@ -26,11 +26,6 @@ def select_embeddings(ids_to_select, taxa_ids, embeddings):
     return embeddings[indices]
 
 
-def get_taxa_id(path):
-    c, n = os.path.basename(path).split('_')[0:2]
-    return c + '_' + n
-
-
 from .. import command
 
 @command('prepare-data')
@@ -48,12 +43,12 @@ def prepare_data(argv=None):
     from hdmf.common import get_hdf5io
     from hdmf.data_utils import DataChunkIterator
 
+    from .utils import get_taxa_id
     from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator
     from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
 
     parser = argparse.ArgumentParser()
     parser.add_argument('fof', type=str, help='file of Fasta files')
-    parser.add_argument('dist_h5', type=str, help='the distances file')
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('out', type=str, help='output HDF5')
@@ -62,6 +57,7 @@ def prepare_data(argv=None):
     grp.add_argument('-p', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-c', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-g', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
+    parser.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('-V', '--vocab', action='store_true', default=False, help='store sequences as vocabulary data')
@@ -78,22 +74,25 @@ def prepare_data(argv=None):
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
 
-    logger.info('reading Fasta paths from %s' % args.tree)
+    logger.info('reading Fasta paths from %s' % args.fof)
     with open(args.fof, 'r') as f:
         fapaths = [l[:-1] for l in f.readlines()]
 
     taxa_ids = list(map(get_taxa_id, fapaths))
 
-    #############################
-    # read and filter distances
-    #############################
-    logger.info('reading distances from %s' % args.dist_h5)
-    with h5py.File(args.dist_h5, 'r') as f:
-        dist = f['distances'][:]
-        dist_taxa = f['leaf_names'][:].astype('U')
-    logger.info('selecting distances for taxa found in %s' % args.fof)
-    dist = select_distances(taxa_ids, dist_taxa, dist)
-    dist = CondensedDistanceMatrix('distances', data=dist)
+    di_kwargs = dict()
+    if args.dist_h5:
+        #############################
+        # read and filter distances
+        #############################
+        logger.info('reading distances from %s' % args.dist_h5)
+        with h5py.File(args.dist_h5, 'r') as f:
+            dist = f['distances'][:]
+            dist_taxa = f['leaf_names'][:].astype('U')
+        logger.info('selecting distances for taxa found in %s' % args.fof)
+        dist = select_distances(taxa_ids, dist_taxa, dist)
+        dist = CondensedDistanceMatrix('distances', data=dist)
+        di_kwargs['distances'] = dist
 
 
     #############################
@@ -104,11 +103,12 @@ def prepare_data(argv=None):
     def func(row):
         dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
         dat['species'] = dat['species'].split(' ')[1]
+        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
         dat['accession'] = row['accession'][3:]
         return pd.Series(data=dat)
 
     logger.info('selecting GTDB taxonomy for taxa found in %s' % args.fof)
-    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy']]\
+    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
                         .apply(func, axis=1)\
                         .set_index('accession')\
                         .filter(items=taxa_ids, axis=0)
@@ -137,7 +137,8 @@ def prepare_data(argv=None):
         tip.name = tip.name[3:].replace(' ', '_')
 
     logger.info('shearing taxa not found in %s' % args.fof)
-    tree = tree.shear(taxa_ids)
+    rep_ids = taxdf['gtdb_genome_representative'].values
+    tree = tree.shear(rep_ids)
 
     logger.info('converting tree to Newick string')
     bytes_io = io.BytesIO()
@@ -201,7 +202,7 @@ def prepare_data(argv=None):
                          taxon_table=taxa_table,
                          id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=(2**15,)))
 
-    difile = DeepIndexFile(seq_table, taxa_table, dist, tree)
+    difile = DeepIndexFile(seq_table, taxa_table, tree, **di_kwargs)
 
     io.write(difile, exhaust_dci=False)
     io.close()
