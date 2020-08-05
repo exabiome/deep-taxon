@@ -179,7 +179,7 @@ def run_inference(argv=None):
         args.logger.info('writing mask')
         mask_dset[idx] = True
         if seq_id_dset is not None:
-            seq_id_dset[idx] = seq_ids
+            seq_id_dset[idx] = seq_ids[order]
 
     if args.umap:
         # compute UMAP arguments for convenience
