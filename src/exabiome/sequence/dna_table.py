@@ -22,58 +22,6 @@ __all__ = ['DeepIndexFile',
 NS = 'deep-index'
 
 
-class BitpackedIndex(VectorIndex, metaclass=ABCMeta):
-
-    def _start_end(self, i):
-        start = 0 if i == 0 else self.data[i-1]
-        end = self.data[i]
-        return start, end
-
-    @abstractmethod
-    def _get_single_item(self, i):
-        pass
-
-    def __getitem__(self, args):
-        """
-        Slice ragged array of *packed* one-hot encoded DNA sequence
-        """
-        if np.issubdtype(type(args), np.integer):
-            return self._get_single_item(args)
-        else:
-            raise ValueError("Can only index bitpacked sequence with integers")
-
-
-@register_class('PackedDNAIndex', NS)
-class PackedDNAIndex(BitpackedIndex):
-
-    def _get_single_item(self, i):
-        start, end = self._start_end(i)
-        shift = start % 2
-        unpacked = np.unpackbits(self.target[start//2:math.ceil(end/2)])
-        unpacked = unpacked.reshape(-1, 4)[shift:shift+end-start].T
-        return unpacked
-
-
-@register_class('PackedAAIndex', NS)
-class PackedAAIndex(BitpackedIndex):
-
-    def _get_single_item(self, i):
-        start, end = self._start_end(i)
-        packed = self.target[start:end]
-        bits = np.unpackbits(packed)
-        bits = bits[bits.shape[0] % 5:]
-        bits = bits.reshape(-1, 5)
-        unpacked = np.pad(bits, ((0, 0), (3, 0)), mode='constant', constant_values=((0, 0), (0, 0)))
-        ohe_pos = np.packbits(unpacked, axis=1).squeeze(axis=1)
-        # trim leading zeros that may be left from padding to
-        # ensure enough bits for pack
-        # trim trailing zeros in case a non-AA character was
-        # used to terminate the original sequence
-        ohe_pos = np.trim_zeros(ohe_pos)
-        ohe_pos = ohe_pos - 1
-        return ohe_pos
-
-
 class TorchableMixin:
 
 
@@ -240,7 +188,7 @@ class DNATable(SequenceTable):
         return DNAData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=vocab)
 
     def get_sequence_index(self, data, target):
-        return PackedDNAIndex('sequence_index', data, target)
+        return VectorIndex('sequence_index', data, target)
 
 
 @register_class('AATable', NS)
@@ -307,7 +255,7 @@ class AATable(SequenceTable):
         return func
 
     def get_sequence_index(self, data, target):
-        return PackedAAIndex('sequence_index', data, target)
+        return VectorIndex('sequence_index', data, target)
 
     @classmethod
     def to_sequence(self, data):
