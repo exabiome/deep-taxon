@@ -130,22 +130,26 @@ def prepare_data(argv=None):
     # read and trim tree
     #############################
     logger.info('reading tree from %s' % args.tree)
-    tree = TreeNode.read(args.tree, format='newick')
+    root = TreeNode.read(args.tree, format='newick')
 
     logger.info('transforming leaf names for shearing')
-    for tip in tree.tips():
+    for tip in root.tips():
         tip.name = tip.name[3:].replace(' ', '_')
 
     logger.info('shearing taxa not found in %s' % args.fof)
     rep_ids = taxdf['gtdb_genome_representative'].values
-    tree = tree.shear(rep_ids)
+    root = root.shear(rep_ids)
 
     logger.info('converting tree to Newick string')
     bytes_io = io.BytesIO()
-    tree.write(bytes_io, format='newick')
+    root.write(bytes_io, format='newick')
     tree_str = bytes_io.getvalue()
     tree = NewickString('tree', data=tree_str)
 
+    if di_kwargs.get('distances') is None:
+        from scipy.spatial.distance import squareform
+        dmat = squareform(root.tip_tip_distances().filter(rep_ids).data)
+        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=dmat)
 
     h5path = args.out
 
