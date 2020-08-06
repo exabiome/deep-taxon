@@ -226,7 +226,7 @@ class DNAData(VocabData):
         idx = self.data[key]
         if rev:
             idx = (idx[::-1] + 9) % 18
-        return self._get_helper(idx, **kwargs)
+        return super()._get_helper(idx, **kwargs)
 
 
 @register_class('DNATable', NS)
@@ -423,6 +423,7 @@ class DeepIndexFile(Container):
         self.__labels = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
         self.label_key = 'id'
+        self.__rev = False
 
     def set_label_key(self, val):
         self.label_key = val
@@ -430,6 +431,11 @@ class DeepIndexFile(Container):
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
         self._sanity_features = n_features
+
+    def set_revcomp(self, revcomp=True):
+        if revcomp and self.seq_table['sequence'].vocab is not 'dna':
+                raise ValueError("Can only set reverse complement on DNA sequence data")
+        self.__rev = revcomp
 
     @property
     def labels(self):
@@ -448,14 +454,17 @@ class DeepIndexFile(Container):
         return self.get(i)
 
     def get(self, arg):
+        rev = False
+        if self.__rev:
+            arg, rev = divmod(arg, 2)
         idx = self.seq_table.id[arg]
-        seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
+        seq = self.seq_table['sequence'].get(arg, index=True, rev=rev)   # sequence data
         label = self.seq_table['taxon'].get(arg, index=True)    # index to taxon table
         label = self.taxa_table[self.label_key][label]          # get the interesting information from the taxon table i.e. embedding
         return (idx, seq, label)
 
     def __len__(self):
-        return len(self.seq_table)
+        return len(self.seq_table) * (2 if self.__rev else 1)
 
     def set_raw(self):
         self.seq_table.set_raw()
@@ -479,7 +488,6 @@ class DeepIndexFile(Container):
         emb = self.taxa_table['embedding'][:]
         ret.fit(emb, np.arange(emb.shape[0]))
         return ret
-
 
 
 class AbstractChunkedDIFile(object):
