@@ -86,6 +86,11 @@ groups:
     data_type_inc: VectorData
     dtype: text
     doc: Taxon ID from GTDB
+  - name: rep_taxon_id
+    data_type_inc: VectorData
+    dtype: text
+    doc: The taxon ID of the genome's representative species in GTDB
+    required: false
   - name: embedding
     data_type_inc: VectorData
     dtype: float

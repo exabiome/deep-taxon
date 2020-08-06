@@ -190,8 +190,9 @@ def prepare_data(argv=None):
         tt_args.append(taxdf[t].values)
     if emb is not None:
         tt_kwargs['embedding'] = emb
+    tt_kwargs['rep_taxon_id'] = rep_ids
 
-    taxa_table = TaxaTable(*tt_args)
+    taxa_table = TaxaTable(*tt_args, **tt_kwargs)
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
                          io.set_dataio(names,    compression='gzip', chunks=(2**15,)),
