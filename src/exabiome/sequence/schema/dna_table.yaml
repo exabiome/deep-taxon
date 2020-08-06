@@ -1,14 +1,4 @@
 datasets:
-- data_type_def: PackedDNAIndex
-  data_type_inc: VectorIndex
-  dtype: int
-  doc: A VectorIndex that indexes bitpacked DNA
-
-- data_type_def: PackedAAIndex
-  data_type_inc: VectorIndex
-  dtype: int
-  doc: A VectorIndex that indexes bitpacked amino acids
-
 - data_type_def: NewickString
   data_type_inc: Data
   dtype: text
@@ -52,9 +42,6 @@ groups:
   data_type_inc: AbstractSeqTable
   doc: A table for storing sequence data
   datasets:
-  - name: sequence_index
-    data_type_inc: PackedDNAIndex
-    doc: Index for 'sequence'
   - name: sequence
     data_type_inc: DNAData
     doc: DNA sequence data
@@ -62,10 +49,6 @@ groups:
 - data_type_def: AATable
   data_type_inc: AbstractSeqTable
   doc: A table for storing sequence data
-  datasets:
-  - name: sequence_index
-    data_type_inc: PackedAAIndex
-    doc: Index for 'sequence'
 
 - data_type_def: SequenceTable
   data_type_inc: AbstractSeqTable
