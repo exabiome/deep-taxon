@@ -331,7 +331,8 @@ class TaxaTable(DynamicTable, TorchableMixin):
         {'name': 'family', 'description': 'the family for each taxon'},
         {'name': 'genus', 'description': 'the genus for each taxon'},
         {'name': 'species', 'description': 'the species for each taxon'},
-        {'name': 'embedding', 'description': 'the embedding for each taxon'}
+        {'name': 'embedding', 'description': 'the embedding for each taxon'},
+        {'name': 'rep_taxon_id', 'description': 'the taxon ID for the this species representative'}
     )
 
     @docval(*get_docval(DynamicTable.__init__),
@@ -342,9 +343,10 @@ class TaxaTable(DynamicTable, TorchableMixin):
             {'name': 'family', 'type': ('array_data', 'data', VectorData), 'doc': 'the family for each taxon'},
             {'name': 'genus', 'type': ('array_data', 'data', VectorData), 'doc': 'the genus for each taxon'},
             {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon'},
-            {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None})
+            {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None},
+            {'name': 'rep_taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID for the species representative', 'default': None})
     def __init__(self, **kwargs):
-        taxon_id, embedding = popargs('taxon_id', 'embedding', kwargs)
+        taxon_id, embedding, rep_taxon_id = popargs('taxon_id', 'embedding', 'rep_taxon_id', kwargs)
         taxonomy_labels = ['phylum', 'class', 'order', 'family', 'genus', 'species']
         taxonomy = popargs(*taxonomy_labels, kwargs)
 
@@ -353,9 +355,11 @@ class TaxaTable(DynamicTable, TorchableMixin):
             columns.append(taxon_id)
             columns.extend(taxonomy)
             if embedding is not None: columns.append(embedding)
+            if rep_taxon_id is not None: columns.append(rep_taxon_id)
         else:
             columns.append(VectorData('taxon_id', 'taxonomy IDs from NCBI', data=taxon_id))
             if embedding is not None: columns.append(VectorData('embedding', 'an embedding for each taxon', data=embedding))
+            if rep_taxon_id is not None: columns.append(VectorData('rep_taxon_id', 'the taxon ID for the this species representative', data=rep_taxon_id))
             for l, t in zip(taxonomy_labels, taxonomy):
                 columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
