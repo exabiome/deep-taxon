@@ -38,18 +38,6 @@ groups:
     data_type_inc: DynamicTableRegion
     doc: integer ID for the taxa that each sequence belongs to
 
-- data_type_def: DNATable
-  data_type_inc: AbstractSeqTable
-  doc: A table for storing sequence data
-  datasets:
-  - name: sequence
-    data_type_inc: DNAData
-    doc: DNA sequence data
-
-- data_type_def: AATable
-  data_type_inc: AbstractSeqTable
-  doc: A table for storing sequence data
-
 - data_type_def: SequenceTable
   data_type_inc: AbstractSeqTable
   doc: A table for storing sequence data
@@ -60,6 +48,18 @@ groups:
   - name: sequence
     data_type_inc: VocabData
     doc: DNA or protein sequence data
+
+- data_type_def: DNATable
+  data_type_inc: SequenceTable
+  doc: A table for storing sequence data
+  datasets:
+  - name: sequence
+    data_type_inc: DNAData
+    doc: DNA sequence data
+
+- data_type_def: AATable
+  data_type_inc: SequenceTable
+  doc: A table for storing sequence data
 
 - data_type_def: TaxaTable
   data_type_inc: DynamicTable

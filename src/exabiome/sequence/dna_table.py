@@ -146,7 +146,7 @@ class SequenceTable(AbstractSequenceTable):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'sequence_name', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
-            {'name': 'sequence', 'type': ('array_data', 'data', VectorData), 'doc': 'bitpacked DNA sequence'},
+            {'name': 'sequence', 'type': ('array_data', 'data', VocabData), 'doc': 'bitpacked DNA sequence'},
             {'name': 'sequence_index', 'type': ('array_data', 'data', VectorIndex), 'doc': 'index for sequence'},
             {'name': 'length', 'type': ('array_data', 'data', VectorData), 'doc': 'lengths of sequence'},
             {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
