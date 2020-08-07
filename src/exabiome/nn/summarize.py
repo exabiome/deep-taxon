@@ -11,6 +11,20 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score
 import scipy.stats as stats
 
+
+all_colors = sns.color_palette('tab20b')[::4] + sns.color_palette('tab20c')[::4] +\
+sns.color_palette('tab20b')[1::4] + sns.color_palette('tab20c')[1::4] +\
+sns.color_palette('tab20b')[2::4] + sns.color_palette('tab20c')[2::4] +\
+sns.color_palette('tab20b')[3::4] + sns.color_palette('tab20c')[3::4]
+
+def get_color_markers(n):
+    ret = []
+    c = n
+    while c > 0:
+        ret.extend(all_colors[0:min(c, len(all_colors))])
+        c -= len(all_colors)
+    return ret
+
 def read_outputs(path):
     ret = dict()
     with h5py.File(path, 'r') as f:
@@ -22,6 +36,7 @@ def read_outputs(path):
         ret['outputs'] = f['outputs'][:]
         ret['validate_mask'] = f['validate'][:]
         ret['taxon_id'] = f['taxon_id'][:]
+        ret['orig_lens'] = f['orig_lens'][:]
         if 'seq_ids' in f:
             ret['seq_ids'] = f['seq_ids'][:]
     return ret
@@ -57,9 +72,7 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
         umap = UMAP(n_components=2)
         viz_emb = umap.fit_transform(outputs)
 
-    uniq_labels = np.unique(labels)
-    n_classes = len(uniq_labels)
-    class_pal = sns.color_palette('tab10', n_classes)
+    class_pal = get_color_markers(len(np.unique(labels)))
     colors = np.array([class_pal[i] for i in labels])
 
     # set up figure
@@ -122,7 +135,7 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
     labels = path['labels']
     outputs = path['outputs']
     seq_ids = path['seq_ids']
-    uniq_labels = np.unique(labels)
+    olens = path['orig_lens']
 
     viz_emb = None
     if 'viz_emb' in path:
@@ -134,6 +147,7 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
     X_mean = np.zeros((uniq_seqs.shape[0], outputs.shape[1]))
     X_median = np.zeros((uniq_seqs.shape[0], outputs.shape[1]))
     y = np.zeros(uniq_seqs.shape[0], dtype=int)
+    seq_len = np.zeros(uniq_seqs.shape[0], dtype=int)
     seq_viz = np.zeros((uniq_seqs.shape[0], 2))
 
     for seq_i, seq in enumerate(uniq_seqs):
@@ -145,33 +159,41 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
         X_mean[seq_i] = outputs[seq_mask].mean(axis=0)
         X_median[seq_i] = np.median(outputs[seq_mask], axis=0)
         seq_viz[seq_i] = viz_emb[seq_mask].mean(axis=0)
+        seq_len[seq_i] = olens[seq_mask].sum()
 
-    plt.figure(figsize=(14, 21))
-    class_pal = sns.color_palette('tab10', len(uniq_labels))
+    seq_len = np.log10(seq_len)
+
+    plt.figure(figsize=(21, 14))
+
+    class_pal = get_color_markers(len(np.unique(labels)))
 
     # classifier from MEAN of outputs
     output_mean_preds = clf.predict(X_mean)
-    ax = plt.subplot(3, 2, 1)
+    ax = plt.subplot(3, 3, 1)
     plot_seq_emb(seq_viz, output_mean_preds, ax, pal=class_pal)
     ax.set_title('Mean classification')
     ax.set_xlabel('Mean of first UMAP dimension')
     ax.set_ylabel('Mean of second UMAP dimension')
 
-    ax = plt.subplot(3, 2, 2)
+    ax = plt.subplot(3, 3, 4)
     plot_clf_report(y, output_mean_preds, ax, pal=class_pal)
-    ax.set_title('Mean classification')
+
+    ax = plt.subplot(3, 3, 7)
+    plot_acc_of_len(y, output_mean_preds, seq_len, ax)
 
     # classifier from MEDIAN of outputs
     output_median_preds = clf.predict(X_median)
-    ax = plt.subplot(3, 2, 3)
+    ax = plt.subplot(3, 3, 2)
     plot_seq_emb(seq_viz, output_median_preds, ax, pal=class_pal)
     ax.set_title('Median classification')
     ax.set_xlabel('Mean of first UMAP dimension')
     ax.set_ylabel('Mean of second UMAP dimension')
 
-    ax = plt.subplot(3, 2, 4)
+    ax = plt.subplot(3, 3, 5)
     plot_clf_report(y, output_median_preds, ax, pal=class_pal)
-    ax.set_title('Median classification')
+
+    ax = plt.subplot(3, 3, 8)
+    plot_acc_of_len(y, output_median_preds, seq_len, ax)
 
     # classifier from voting with chunk predictions
     all_preds = clf.predict(outputs)
@@ -180,25 +202,43 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
         seq_mask = seq_ids == seq
         vote_preds[seq_i] = stats.mode(all_preds[seq_mask])[0][0]
 
-    ax = plt.subplot(3, 2, 5)
+    ax = plt.subplot(3, 3, 3)
     plot_seq_emb(seq_viz, y, ax, pal=class_pal)
     ax.set_title('Vote classification')
     ax.set_xlabel('Mean of first UMAP dimension')
     ax.set_ylabel('Mean of second UMAP dimension')
 
-    ax = plt.subplot(3, 2, 6)
+    ax = plt.subplot(3, 3, 6)
     plot_clf_report(y, vote_preds, ax, pal=class_pal)
-    ax.set_title('Vote classification')
+
+    ax = plt.subplot(3, 3, 9)
+    plot_acc_of_len(y, vote_preds, seq_len, ax)
 
     plt.tight_layout()
 
+def plot_acc_of_len(y_true, y_pred, seq_len, ax):
+    nbins = 100
+    _, edges = np.histogram(seq_len, bins=nbins)
+    avg_len = np.zeros(nbins)
+    acc = np.zeros(nbins)
+    correct = y_true == y_pred
+    filt = list()
+    for i in range(nbins):
+        mask = np.logical_and(seq_len >= edges[i], seq_len < edges[i+1])
+        if mask.any():
+            acc[i] = correct[mask].mean()
+            avg_len[i] = seq_len[mask].mean()
+            filt.append(i)
+    avg_len = avg_len[filt]
+    acc = acc[filt]
+    ax.scatter(avg_len, acc)
 
 def plot_seq_emb(X, labels, ax, pal=None):
     # plot embeddings
     uniq_labels = np.unique(labels)
     class_handles = list()
     if pal is None:
-        pal = sns.color_palette('tab10', len(uniq_labels))
+        pal = sns.color_palette('tab20', len(uniq_labels))
     for cl, col in zip(uniq_labels, pal):
         mask = labels == cl
         ax.scatter(X[mask,0], X[mask,1], s=0.5, c=[col], label=cl)
@@ -209,7 +249,7 @@ def plot_seq_emb(X, labels, ax, pal=None):
 def plot_clf_report(y_true, y_pred, ax, pal=None):
     uniq_labels = np.unique(y_true)
     if pal is None:
-        pal = sns.color_palette('tab10', len(uniq_labels))
+        pal = sns.color_palette('tab20', len(uniq_labels))
     report = classification_report(y_true, y_pred, output_dict=True)
     df = pd.DataFrame(report)
     subdf = df[[str(l) for l in uniq_labels]].iloc[:-1]
