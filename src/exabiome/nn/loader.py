@@ -24,7 +24,7 @@ def read_dataset(path):
     dataset = SeqDataset(difile)
     return dataset, hdmfio
 
-def process_dataset(args, inference=False):
+def process_dataset(args, path=None, inference=False):
     """
     Process *input* argument and return dataset and HDMFIO object
 
@@ -32,12 +32,7 @@ def process_dataset(args, inference=False):
         args (Namespace):       command-line arguments passed by parser
         inference (bool):       load data for inference
     """
-    # First, get the dataset, so we can figure
-    # out how many outputs there are
-    #io = get_hdf5io(args.input, 'r')
-    #difile = io.read()
-    #dataset = SeqDataset(difile)
-    dataset, io = read_dataset(args.input)
+    dataset, io = read_dataset(path or args.input)
 
 
     if not hasattr(args, 'classify'):
@@ -58,7 +53,10 @@ def process_dataset(args, inference=False):
 
     # Process any arguments that impact how we set up the dataset
     if args.window is not None:
-        dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
+        dataset.set_chunks(args.window, args.step)
+        #dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
+    if getattr(args, 'revcomp', False):
+        dataset.set_revcomp()
     if args.load:
         dataset.load()
 
@@ -139,6 +137,12 @@ class SeqDataset(Dataset):
         # the state of the underlying DynamicTable
         self.difile.set_label_key(self._label_key)
 
+    def set_chunks(self, window, step=None):
+        self.difile = WindowChunkedDIFile(self.difile, window, step)
+
+    def set_revcomp(self, revcomp=True):
+        self.difile.set_revcomp(revcomp)
+
     def __len__(self):
         return len(self.difile)
 
@@ -178,19 +182,6 @@ class SeqDataset(Dataset):
         seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64), num_classes=self.vocab_len).float().T
         label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label, seq_id)
-
-
-def get_loader(path, **kwargs):
-    """
-    Return a DataLoader that loads data from the given DeepIndex file
-
-    Args:
-        path (str): the path to the DeepIndex file
-        kwargs    : any additional arguments to pass into torch.DataLoader
-    """
-    hdmfio = get_hdf5io(path, 'r')
-    loader = DataLoader(SeqDataset(hdmfio), collate_fn=collate, **kwargs)
-    return loader
 
 
 def train_test_validate_split(data, stratify=None, random_state=None,
@@ -286,3 +277,19 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
     return (DataLoader(train_dataset, collate_fn=collater, **kwargs),
             DataLoader(test_dataset, collate_fn=collater, **kwargs),
             DataLoader(validate_dataset, collate_fn=collater, **kwargs))
+
+def get_loader(dataset, distances=False, **kwargs):
+    """
+    Return a DataLoader that loads data from the given Dataset
+
+    Args:
+        dataset (Dataset): the dataset to return a DataLoader for
+        distances  (bool): whether or not to return distances for a batch
+    """
+    collater = collate
+    if distances:
+        if dataset.difile.distances is None:
+            raise ValueError('DeepIndexFile {dataset.difile} does not contain distances')
+        collater = DistanceCollater(dataset.difile.distances.data[:])
+    return DataLoader(dataset, collate_fn=collater, **kwargs)
+
