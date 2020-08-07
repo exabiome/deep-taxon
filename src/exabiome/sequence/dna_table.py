@@ -157,6 +157,7 @@ class SequenceTable(AbstractSequenceTable):
              'default': 'dna'}, )
     def __init__(self, **kwargs):
         vocab = popargs('vocab', kwargs)
+        self.vocab_type = vocab
         if vocab is not None:
             if isinstance(vocab, str):
                 if vocab == 'dna':
@@ -381,7 +382,7 @@ class DeepIndexFile(Container):
         self._sanity_features = n_features
 
     def set_revcomp(self, revcomp=True):
-        if revcomp and self.seq_table['sequence'].vocab is not 'dna':
+        if revcomp and self.seq_table.vocab_type is not 'dna':
                 raise ValueError("Can only set reverse complement on DNA sequence data")
         self.__rev = revcomp
 
