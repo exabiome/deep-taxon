@@ -62,7 +62,6 @@ def process_model(args, inference=False):
     model = models._models[args.model]
     if inference:
         model.forward = auto_move_data(model.forward)
-    del args.model
 
     if args.checkpoint is not None:
         model = model.load_from_checkpoint(args.checkpoint)
@@ -98,7 +97,6 @@ def process_output(args, subdir='training_results'):
     outbase = args.output
     if args.experiment:
         outbase = os.path.join(outbase, subdir, args.experiment)
-    check_directory(outbase)
 
     def output(fname):
         return os.path.join(outbase, fname)
