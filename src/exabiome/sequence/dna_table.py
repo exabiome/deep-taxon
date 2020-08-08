@@ -16,6 +16,7 @@ from hdmf import Container, Data
 __all__ = ['DeepIndexFile',
            'AbstractChunkedDIFile',
            'WindowChunkedDIFile',
+           'RevCompFilter',
            'SequenceTable',
            'TaxaTable']
 
@@ -171,10 +172,8 @@ class SequenceTable(AbstractSequenceTable):
 @register_class('DNAData', NS)
 class DNAData(VocabData):
 
-    def get(self, key, rev=False, **kwargs):
+    def get(self, key, **kwargs):
         idx = self.data[key]
-        if rev:
-            idx = (idx[::-1] + 9) % 18
         return super()._get_helper(idx, **kwargs)
 
 
@@ -382,7 +381,7 @@ class DeepIndexFile(Container):
         self._sanity_features = n_features
 
     def set_revcomp(self, revcomp=True):
-        if revcomp and self.seq_table.vocab_type is not 'dna':
+        if revcomp and self.seq_table.vocab_type != 'dna':
                 raise ValueError("Can only set reverse complement on DNA sequence data")
         self.__rev = revcomp
 
@@ -403,14 +402,12 @@ class DeepIndexFile(Container):
         return self.get(i)
 
     def get(self, arg):
-        rev = False
-        if self.__rev:
-            arg, rev = divmod(arg, 2)
         idx = self.seq_table.id[arg]
-        seq = self.seq_table['sequence'].get(arg, index=True, rev=rev)   # sequence data
+        seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
         label = self.seq_table['taxon'].get(arg, index=True)    # index to taxon table
+        length = self.seq_table['length'].get(arg)
         label = self.taxa_table[self.label_key][label]          # get the interesting information from the taxon table i.e. embedding
-        return (idx, seq, label)
+        return {'id': idx, 'seq': seq, 'label': label, 'length': length}
 
     def __len__(self):
         return len(self.seq_table) * (2 if self.__rev else 1)
@@ -438,14 +435,22 @@ class DeepIndexFile(Container):
         ret.fit(emb, np.arange(emb.shape[0]))
         return ret
 
+class DIFileFilter(object):
 
-class AbstractChunkedDIFile(object):
+    def __init__(self, difile):
+        self.difile = difile
+
+    def __getattr__(self, attr):
+        """Delegate retrival of attributes to the data in self.data"""
+        return getattr(self.difile, attr)
+
+class AbstractChunkedDIFile(DIFileFilter):
     """
     An abstract class for chunking sequences from a DeepIndexFile
     """
 
     def __init__(self, difile, seq_idx, start, end, labels):
-        self.difile = difile
+        super().__init__(difile)
         self.seq_idx = np.asarray(seq_idx)
         self.start = np.asarray(start)
         self.end = np.asarray(end)
@@ -461,12 +466,12 @@ class AbstractChunkedDIFile(object):
         item = self.difile[seq_i]
         s = self.start[i]
         e = self.end[i]
-        #return seq_i, item[1][s:e], item[2]
-        return i, item[1][s:e], item[2], seq_i
-
-    def __getattr__(self, attr):
-        """Delegate retrival of attributes to the data in self.data"""
-        return getattr(self.difile, attr)
+        item['seq'] = item['seq'][s:e]
+        item['seq_idx'] = seq_i
+        item['id'] = i
+        # item['seq_name'] += f'|{s}-{e}'
+        item['length'] = e - s
+        return item
 
 
 class WindowChunkedDIFile(AbstractChunkedDIFile):
@@ -476,27 +481,54 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
     By default windows are not overlapping
     """
 
-    def __init__(self, difile, wlen, step=None):
-        if not isinstance(difile, DeepIndexFile):
-            raise ValueError(f'difile must be a DeepIndexFile, got {type(difile)}')
+    def __init__(self, difile, wlen, step=None, min_seq_len=100):
+        if not isinstance(difile, (DeepIndexFile, DIFileFilter)):
+            raise ValueError(f'difile must be a DeepIndexFile or a DIFileFilter, got {type(difile)}')
         if step is None:
             step = wlen
         self.wlen = wlen
         self.step = step
+        self.min_seq_len = min_seq_len
 
         seq_idx = list()
         chunk_start = list()
         chunk_end = list()
         labels = list()
 
-        lengths = difile.seq_table['length'][:]
-        seqlabels = difile.labels
+        # lengths = difile.seq_table['length'][:]
+        # seqlabels = difile.labels
         for i in range(len(difile)):
-            label = seqlabels[i]
-            for start in range(0, lengths[i], step):
-                labels.append(label)
-                seq_idx.append(i)
-                chunk_start.append(start)
-                chunk_end.append(start+step)
-
+            row = difile[i]
+            label = row['label'] # seqlabels[i]
+            #for start in range(0, lengths[i], step):
+            seqlen = row['length']
+            for start in range(0, seqlen, step):
+                end = min(seqlen, start+step)
+                if (end - start) >= self.min_seq_len:
+                    labels.append(label)
+                    seq_idx.append(i)
+                    chunk_start.append(start)
+                    chunk_end.append(end)
         super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
+
+
+class RevCompFilter(DIFileFilter):
+
+    def __init__(self, difile):
+        super().__init__(difile)
+        self.labels = np.concatenate([self.labels, self.labels])
+
+    def __len__(self):
+        return 2*len(self.difile)
+
+    def __getitem__(self, arg):
+        oarg = arg
+        arg, rev = divmod(arg, 2)
+        item = self.difile[arg]
+        if rev:
+            item['seq'] = (item['seq'][::-1] + 9) % 18
+            # item['seq_name'] += '|rev'
+        # else:
+            # item['seq_name'] += '|fwd'
+        item['id'] = oarg
+        return item

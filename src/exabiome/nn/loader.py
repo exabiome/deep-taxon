@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
-from ..sequence import WindowChunkedDIFile
+from ..sequence import WindowChunkedDIFile, RevCompFilter
 
 
 def check_window(window, step):
@@ -24,6 +24,7 @@ def read_dataset(path):
     dataset = SeqDataset(difile)
     return dataset, hdmfio
 
+
 def process_dataset(args, path=None, inference=False):
     """
     Process *input* argument and return dataset and HDMFIO object
@@ -33,7 +34,6 @@ def process_dataset(args, path=None, inference=False):
         inference (bool):       load data for inference
     """
     dataset, io = read_dataset(path or args.input)
-
 
     if not hasattr(args, 'classify'):
         raise ValueError('Parser must check for classify/regression/manifold '
@@ -141,7 +141,7 @@ class SeqDataset(Dataset):
         self.difile = WindowChunkedDIFile(self.difile, window, step)
 
     def set_revcomp(self, revcomp=True):
-        self.difile.set_revcomp(revcomp)
+        self.difile = RevCompFilter(self.difile)
 
     def __len__(self):
         return len(self.difile)
@@ -173,11 +173,10 @@ class SeqDataset(Dataset):
     def __getitem__(self, i):
         # get sequence
         item = self.difile[i]
-        idx, seq, label, seq_id = None, None, None, -1
-        if len(item) == 4:
-            idx, seq, label, seq_id = item
-        else:
-            idx, seq, label = item
+        idx = item['id']
+        seq = item['seq']
+        label = item['label']
+        seq_id = item.get('seq_idx', -1)
         ## one-hot encode sequence
         seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64), num_classes=self.vocab_len).float().T
         label = torch.as_tensor(label, dtype=self._label_dtype)
