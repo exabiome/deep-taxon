@@ -133,9 +133,9 @@ def process_args(argv=None):
         ldr = get_loader(dset, distances=False)
         args.loaders = {'input': ldr}
         args.difile = dset.difile
-    elif args.loader is None:                           # if an input file is not passed in, do all TVT data
+    elif args.loaders is None:                           # if an input file is not passed in, do all TVT data
         args.loaders = {'train': model.train_dataloader(),
-                        'validate': model.validate_dataloader(),
+                        'validate': model.val_dataloader(),
                         'test': model.test_dataloader()}
         args.difile = model.dataset.difile
 
