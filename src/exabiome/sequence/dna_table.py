@@ -539,7 +539,7 @@ class RevCompFilter(DIFileFilter):
     @classmethod
     def get_revcomp_map(cls, vocab):
         d = {c: i for i, c in enumerate(vocab)}
-        rcmap = np.zeros((len(vocab),)
+        rcmap = np.zeros((len(vocab),))
         for i, base in enumerate(vocab):
             rc_base = chars[c]
             base_i = d[base]
