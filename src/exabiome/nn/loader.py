@@ -52,6 +52,7 @@ def process_dataset(args, path=None, inference=False):
     args.window, args.step = check_window(args.window, args.step)
 
     # Process any arguments that impact how we set up the dataset
+    dataset.set_ohe(False)
     if args.window is not None:
         dataset.set_chunks(args.window, args.step)
         #dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
@@ -122,6 +123,7 @@ class SeqDataset(Dataset):
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'
         self.vocab_len = len(self.difile.seq_table['sequence'].target.vocabulary)
+        self.__ohe = True
 
     def set_classify(self, classify):
         self._classify = classify
@@ -142,6 +144,9 @@ class SeqDataset(Dataset):
 
     def set_revcomp(self, revcomp=True):
         self.difile = RevCompFilter(self.difile)
+
+    def set_ohe(self, ohe=True):
+        self.__ohe = ohe
 
     def __len__(self):
         return len(self.difile)
@@ -178,7 +183,10 @@ class SeqDataset(Dataset):
         label = item['label']
         seq_id = item.get('seq_idx', -1)
         ## one-hot encode sequence
-        seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64), num_classes=self.vocab_len).float().T
+        seq = torch.as_tensor(seq, dtype=torch.int64)
+        if self.__ohe:
+            seq = F.one_hot(seq, num_classes=self.vocab_len).float()
+        seq = seq.T
         label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label, seq_id)
 

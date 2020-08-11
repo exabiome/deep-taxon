@@ -514,9 +514,44 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
 
 class RevCompFilter(DIFileFilter):
 
+    rcmap = torch.tensor([ 9, 10, 11, 12, 13, 14, 15, 16, 17,
+                           0,  1,  2,  3,  4,  5,  6,  7,  8])
+
+    chars = {
+        'A': 'T',
+        'G': 'C',
+        'C': 'G',
+        'T': 'A',
+        'Y': 'R',
+        'R': 'Y',
+        'W': 'W',
+        'S': 'S',
+        'K': 'M',
+        'M': 'K',
+        'D': 'H',
+        'V': 'B',
+        'H': 'D',
+        'B': 'V',
+        'X': 'X',
+        'N': 'N',
+    }
+
+    @classmethod
+    def get_revcomp_map(cls, vocab):
+        d = {c: i for i, c in enumerate(vocab)}
+        rcmap = np.zeros((len(vocab),)
+        for i, base in enumerate(vocab):
+            rc_base = chars[c]
+            base_i = d[base]
+            rc_base_i = d[rc_base]
+            rcmap[base_i] = rc_base_i
+        return rcmap
+
     def __init__(self, difile):
         super().__init__(difile)
         self.labels = np.concatenate([self.labels, self.labels])
+        vocab = difile.sequence_table.sequences.vocabulary
+        self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
 
     def __len__(self):
         return 2*len(self.difile)
@@ -526,7 +561,7 @@ class RevCompFilter(DIFileFilter):
         arg, rev = divmod(arg, 2)
         item = self.difile[arg]
         if rev:
-            item['seq'] = (item['seq'][::-1] + 9) % 18
+            item['seq'] = self.rcmap[item['seq'].long()]
             # item['seq_name'] += '|rev'
         # else:
             # item['seq_name'] += '|fwd'
