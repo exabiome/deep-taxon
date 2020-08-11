@@ -163,7 +163,7 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
 
     seq_len = np.log10(seq_len)
 
-    plt.figure(figsize=(21, 14))
+    plt.figure(figsize=(21, 21))
 
     class_pal = get_color_markers(len(np.unique(labels)))
 
