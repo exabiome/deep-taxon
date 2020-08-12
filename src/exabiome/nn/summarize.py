@@ -25,29 +25,34 @@ def get_color_markers(n):
         c -= len(all_colors)
     return ret
 
-def read_outputs(path):
+def read_outputs(path, difile=None):
     ret = dict()
     with h5py.File(path, 'r') as f:
         if 'viz_emb' in f:
             ret['viz_emb'] = f['viz_emb'][:]
         ret['labels'] = f['labels'][:]
-        ret['train_mask'] = f['train'][:]
-        ret['test_mask'] = f['test'][:]
+        if 'train' in f:
+            ret['train_mask'] = f['train'][:]
+        if 'test' in f:
+            ret['test_mask'] = f['test'][:]
         ret['outputs'] = f['outputs'][:]
-        ret['validate_mask'] = f['validate'][:]
+        if 'validate' in f:
+            ret['validate_mask'] = f['validate'][:]
         ret['taxon_id'] = f['taxon_id'][:]
         ret['orig_lens'] = f['orig_lens'][:]
         if 'seq_ids' in f:
             ret['seq_ids'] = f['seq_ids'][:]
+    if difile:
+        from .loader import read_dataset
+        dataset, io = read_dataset(difile)
+        train_toid = dataset.difile.taxa_table.taxon_id[:]
+        d = {toid: i for i, toid in enumerate(train_toid)}
+        ret['labels'] = np.array([d[toid] for toid in ret['taxon_id'][ret['labels']]])
+
     return ret
 
 
 def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None):
-    n_plots = 1
-    if pred is not False:
-        n_plots += 1
-    if tvt:
-        n_plots += 1
     plot_count = 1
     if logger is None:
         logger = logging.getLogger()
@@ -56,11 +61,18 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
     if isinstance(path, str):
         path = read_outputs(path)
 
+    n_plots = 1
+    if pred is not False:
+        n_plots += 1
+
+    if tvt:
+        if all(k in path for k in ('train', 'validate', 'test')):
+            n_plots += 1
+        else:
+            tvt = False
+
     labels = path['labels']
-    train_mask = path['train_mask']
-    test_mask = path['test_mask']
     outputs = path['outputs']
-    validate_mask = path['validate_mask']
     taxon_id = path['taxon_id']
 
     if 'viz_emb' in path:
@@ -88,8 +100,14 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
     plot_count += 1
 
     # plot train/validation/testing data
+    train_mask = None
+    test_mask = None
+    validate_mask = None
     if tvt:
         logger.info('plotting embeddings train/validation/test labels')
+        train_mask = path['train_mask']
+        test_mask = path['test_mask']
+        validate_mask = path['validate_mask']
         pal = ['gray', 'red', 'yellow']
         plt.subplot(1, n_plots, plot_count)
         dsubs = ['train', 'validation', 'test'] # data subsets
@@ -108,13 +126,16 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
         elif not (hasattr(pred, 'fit') and hasattr(pred, 'predict')):
             raise ValueError("argument 'pred' must be a classifier with an SKLearn interface")
 
-        X_train = outputs[train_mask]
-        y_train = labels[train_mask]
-        logger.info(f'training classifier {pred}')
-        pred.fit(X_train, y_train)
-        X_test = outputs[test_mask]
-        y_test = labels[test_mask]
-        logger.info(f'getting predictions')
+        X_test = outputs
+        y_test = labels
+        if train_mask is not None:
+            X_train = outputs[train_mask]
+            y_train = labels[train_mask]
+            logger.info(f'training classifier {pred}')
+            pred.fit(X_train, y_train)
+            X_test = outputs[test_mask]
+            y_test = labels[test_mask]
+            logger.info(f'getting predictions')
         y_pred = pred.predict(X_test)
         logger.info(f'calculating classification report')
         report = classification_report(y_test, y_pred, output_dict=True)
@@ -125,6 +146,7 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
         plot_clf_report(y_test, y_pred, ax=ax, pal=class_pal)
 
     plt.tight_layout()
+    return pred
 
 
 def aggregated_chunk_analysis(path, clf, fig_height=7):
@@ -269,9 +291,16 @@ def main(argv=None):
                         help='the HDF5 file with network outputs or a directory containing a single outputs file')
     parser.add_argument('-A', '--aggregate_chunks', action='store_true', default=False,
                         help='aggregate chunks within sequences and perform analysis')
+    parser.add_argument('-o', '--outdir', type=str, default=None, help='the output directory for figures')
+    parser.add_argument('-c', '--classifier', type=str, default=None, help='the classifier to use for predictions')
+    parser.add_argument('-D', '--difile', type=str, default=None, help='DeepIndexFile used for training')
 
     args = parser.parse_args(args=argv)
     outdir = args.input
+    if args.outdir is not None:
+        outdir = outdir
+        if not os.path.exists(outdir):
+            os.mkdir(outdir)
     if os.path.isdir(args.input):
         outputs = list(glob.glob(f'{args.input}/outputs.h5'))
         if len(outputs) != 1:
@@ -285,16 +314,22 @@ def main(argv=None):
     logger = parse_logger('')
 
     plt.figure(figsize=(21, 7))
-    pred = RandomForestClassifier(n_estimators=30)
-    outputs = read_outputs(args.input)
-    plot_results(outputs, pred=pred, name='/'.join(args.input.split('/',)[-2:]), logger=logger)
+    pretrained = False
+    if args.classifier is not None:
+        with open(args.classifier, 'rb') as f:
+            pred = pickle.load(f)
+        pretrained = True
+    else:
+        pred = RandomForestClassifier(n_estimators=30)
+    outputs = read_outputs(args.input, difile=args.difile)
+    pred = plot_results(outputs, pred=pred, name='/'.join(args.input.split('/',)[-2:]), logger=logger)
     logger.info(f'saving figure to {fig_path}')
     plt.savefig(fig_path, dpi=100)
-
-    clf_path = os.path.join(outdir, 'summary.rf.pkl')
-    logger.info(f'saving classifier to {clf_path}')
-    with open(clf_path, 'wb') as f:
-        pickle.dump(pred, f)
+    if not pretrained:
+        clf_path = os.path.join(outdir, 'summary.rf.pkl')
+        logger.info(f'saving classifier to {clf_path}')
+        with open(clf_path, 'wb') as f:
+            pickle.dump(pred, f)
 
     if args.aggregate_chunks:
         logger.info(f'running summary by aggregating chunks within sequences')
