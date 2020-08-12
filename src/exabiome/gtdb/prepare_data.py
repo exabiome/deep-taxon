@@ -1,8 +1,12 @@
 import math
 import numpy as np
+import skbio.stats.distance as ssd
 import os
 
-def duplicate_samples(dist, dupes):
+def duplicate_dmat_samples(dist, dupes):
+    """
+    Add extra samples to distance matrix
+    """
     new_l = dist.shape[0] + len(dupes)
     new_dist = np.zeros_like(dist, shape=(new_l, new_l))
     new_dist[:dist.shape[0], :dist.shape[0]] = dist
@@ -14,7 +18,16 @@ def duplicate_samples(dist, dupes):
     new_dist[bottom_corner, bottom_corner] = dist[dupes][:,dupes]
     return new_dist
 
-def get_new_matrix(tids, rep_ids, dist):
+def get_nonrep_matrix(tids, rep_ids, dist):
+    """
+    Get a distance matrix for non-representative species using
+    a distance matrix for representative species
+
+    Args:
+        tids (array-like)       : taxon IDs for taxa to orient matrix to
+        rep_ids (array-like)    : taxon IDs for the representative taxa in *tids*
+        dist (DistanceMatrix)   : the distance matrix to orient
+    """
     orig_dist = dist
     uniq, counts = np.unique(rep_ids, return_counts=True)
     dist = orig_dist.filter(uniq).data
@@ -176,17 +189,11 @@ def prepare_data(argv=None):
 
     if di_kwargs.get('distances') is None:
         from scipy.spatial.distance import squareform
-        ttd = root.tip_tip_distances()
-        uniq_reps, uniq_cnts = np.unique(rep_ids, return_counts=True)
-
-
-        ttd_f = ttd.filter(uniq_reps).data
-        dmat = squareform(root.tip_tip_distances().filter(rep_ids).data)
-        dupes = np.where(uniq_cnts - 1 > 0)
-
+        tt_dmat = root.tip_tip_distances()
+        if (rep_ids != taxa_ids).any():
+            tt_dmat = get_nonrep_matrix(taxa_ids, rep_ids, tt_dmat)
+        dmat = tt_dmat.data
         di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=dmat)
-
-        breakpoint()
 
     h5path = args.out
 
