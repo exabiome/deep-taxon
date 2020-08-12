@@ -1,6 +1,6 @@
 from .. import command
 
-@command('sample-strains')
+@command('sample-nonrep')
 def sample_strains(argv=None):
     '''Get test strain genomes
 

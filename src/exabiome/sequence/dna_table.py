@@ -16,62 +16,11 @@ from hdmf import Container, Data
 __all__ = ['DeepIndexFile',
            'AbstractChunkedDIFile',
            'WindowChunkedDIFile',
+           'RevCompFilter',
            'SequenceTable',
            'TaxaTable']
 
 NS = 'deep-index'
-
-
-class BitpackedIndex(VectorIndex, metaclass=ABCMeta):
-
-    def _start_end(self, i):
-        start = 0 if i == 0 else self.data[i-1]
-        end = self.data[i]
-        return start, end
-
-    @abstractmethod
-    def _get_single_item(self, i):
-        pass
-
-    def __getitem__(self, args):
-        """
-        Slice ragged array of *packed* one-hot encoded DNA sequence
-        """
-        if np.issubdtype(type(args), np.integer):
-            return self._get_single_item(args)
-        else:
-            raise ValueError("Can only index bitpacked sequence with integers")
-
-
-@register_class('PackedDNAIndex', NS)
-class PackedDNAIndex(BitpackedIndex):
-
-    def _get_single_item(self, i):
-        start, end = self._start_end(i)
-        shift = start % 2
-        unpacked = np.unpackbits(self.target[start//2:math.ceil(end/2)])
-        unpacked = unpacked.reshape(-1, 4)[shift:shift+end-start].T
-        return unpacked
-
-
-@register_class('PackedAAIndex', NS)
-class PackedAAIndex(BitpackedIndex):
-
-    def _get_single_item(self, i):
-        start, end = self._start_end(i)
-        packed = self.target[start:end]
-        bits = np.unpackbits(packed)
-        bits = bits[bits.shape[0] % 5:]
-        bits = bits.reshape(-1, 5)
-        unpacked = np.pad(bits, ((0, 0), (3, 0)), mode='constant', constant_values=((0, 0), (0, 0)))
-        ohe_pos = np.packbits(unpacked, axis=1).squeeze(axis=1)
-        # trim leading zeros that may be left from padding to
-        # ensure enough bits for pack
-        # trim trailing zeros in case a non-AA character was
-        # used to terminate the original sequence
-        ohe_pos = np.trim_zeros(ohe_pos)
-        ohe_pos = ohe_pos - 1
-        return ohe_pos
 
 
 class TorchableMixin:
@@ -198,7 +147,7 @@ class SequenceTable(AbstractSequenceTable):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'sequence_name', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
-            {'name': 'sequence', 'type': ('array_data', 'data', VectorData), 'doc': 'bitpacked DNA sequence'},
+            {'name': 'sequence', 'type': ('array_data', 'data', VocabData), 'doc': 'bitpacked DNA sequence'},
             {'name': 'sequence_index', 'type': ('array_data', 'data', VectorIndex), 'doc': 'index for sequence'},
             {'name': 'length', 'type': ('array_data', 'data', VectorData), 'doc': 'lengths of sequence'},
             {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
@@ -209,6 +158,7 @@ class SequenceTable(AbstractSequenceTable):
              'default': 'dna'}, )
     def __init__(self, **kwargs):
         vocab = popargs('vocab', kwargs)
+        self.vocab_type = vocab
         if vocab is not None:
             if isinstance(vocab, str):
                 if vocab == 'dna':
@@ -222,11 +172,9 @@ class SequenceTable(AbstractSequenceTable):
 @register_class('DNAData', NS)
 class DNAData(VocabData):
 
-    def get(self, key, rev=False, **kwargs):
+    def get(self, key, **kwargs):
         idx = self.data[key]
-        if rev:
-            idx = (idx[::-1] + 9) % 18
-        return self._get_helper(idx, **kwargs)
+        return super()._get_helper(idx, **kwargs)
 
 
 @register_class('DNATable', NS)
@@ -240,7 +188,7 @@ class DNATable(SequenceTable):
         return DNAData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=vocab)
 
     def get_sequence_index(self, data, target):
-        return PackedDNAIndex('sequence_index', data, target)
+        return VectorIndex('sequence_index', data, target)
 
 
 @register_class('AATable', NS)
@@ -307,7 +255,7 @@ class AATable(SequenceTable):
         return func
 
     def get_sequence_index(self, data, target):
-        return PackedAAIndex('sequence_index', data, target)
+        return VectorIndex('sequence_index', data, target)
 
     @classmethod
     def to_sequence(self, data):
@@ -331,7 +279,8 @@ class TaxaTable(DynamicTable, TorchableMixin):
         {'name': 'family', 'description': 'the family for each taxon'},
         {'name': 'genus', 'description': 'the genus for each taxon'},
         {'name': 'species', 'description': 'the species for each taxon'},
-        {'name': 'embedding', 'description': 'the embedding for each taxon'}
+        {'name': 'embedding', 'description': 'the embedding for each taxon'},
+        {'name': 'rep_taxon_id', 'description': 'the taxon ID for the this species representative'}
     )
 
     @docval(*get_docval(DynamicTable.__init__),
@@ -342,9 +291,10 @@ class TaxaTable(DynamicTable, TorchableMixin):
             {'name': 'family', 'type': ('array_data', 'data', VectorData), 'doc': 'the family for each taxon'},
             {'name': 'genus', 'type': ('array_data', 'data', VectorData), 'doc': 'the genus for each taxon'},
             {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon'},
-            {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None})
+            {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None},
+            {'name': 'rep_taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID for the species representative', 'default': None})
     def __init__(self, **kwargs):
-        taxon_id, embedding = popargs('taxon_id', 'embedding', kwargs)
+        taxon_id, embedding, rep_taxon_id = popargs('taxon_id', 'embedding', 'rep_taxon_id', kwargs)
         taxonomy_labels = ['phylum', 'class', 'order', 'family', 'genus', 'species']
         taxonomy = popargs(*taxonomy_labels, kwargs)
 
@@ -353,9 +303,11 @@ class TaxaTable(DynamicTable, TorchableMixin):
             columns.append(taxon_id)
             columns.extend(taxonomy)
             if embedding is not None: columns.append(embedding)
+            if rep_taxon_id is not None: columns.append(rep_taxon_id)
         else:
             columns.append(VectorData('taxon_id', 'taxonomy IDs from NCBI', data=taxon_id))
             if embedding is not None: columns.append(VectorData('embedding', 'an embedding for each taxon', data=embedding))
+            if rep_taxon_id is not None: columns.append(VectorData('rep_taxon_id', 'the taxon ID for the this species representative', data=rep_taxon_id))
             for l, t in zip(taxonomy_labels, taxonomy):
                 columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
@@ -419,6 +371,7 @@ class DeepIndexFile(Container):
         self.__labels = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
         self.label_key = 'id'
+        self.__rev = False
 
     def set_label_key(self, val):
         self.label_key = val
@@ -426,6 +379,11 @@ class DeepIndexFile(Container):
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
         self._sanity_features = n_features
+
+    def set_revcomp(self, revcomp=True):
+        if revcomp and self.seq_table.vocab_type != 'dna':
+                raise ValueError("Can only set reverse complement on DNA sequence data")
+        self.__rev = revcomp
 
     @property
     def labels(self):
@@ -447,11 +405,12 @@ class DeepIndexFile(Container):
         idx = self.seq_table.id[arg]
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
         label = self.seq_table['taxon'].get(arg, index=True)    # index to taxon table
+        length = self.seq_table['length'].get(arg)
         label = self.taxa_table[self.label_key][label]          # get the interesting information from the taxon table i.e. embedding
-        return (idx, seq, label)
+        return {'id': idx, 'seq': seq, 'label': label, 'length': length}
 
     def __len__(self):
-        return len(self.seq_table)
+        return len(self.seq_table) * (2 if self.__rev else 1)
 
     def set_raw(self):
         self.seq_table.set_raw()
@@ -476,15 +435,22 @@ class DeepIndexFile(Container):
         ret.fit(emb, np.arange(emb.shape[0]))
         return ret
 
+class DIFileFilter(object):
 
+    def __init__(self, difile):
+        self.difile = difile
 
-class AbstractChunkedDIFile(object):
+    def __getattr__(self, attr):
+        """Delegate retrival of attributes to the data in self.data"""
+        return getattr(self.difile, attr)
+
+class AbstractChunkedDIFile(DIFileFilter):
     """
     An abstract class for chunking sequences from a DeepIndexFile
     """
 
     def __init__(self, difile, seq_idx, start, end, labels):
-        self.difile = difile
+        super().__init__(difile)
         self.seq_idx = np.asarray(seq_idx)
         self.start = np.asarray(start)
         self.end = np.asarray(end)
@@ -500,12 +466,12 @@ class AbstractChunkedDIFile(object):
         item = self.difile[seq_i]
         s = self.start[i]
         e = self.end[i]
-        #return seq_i, item[1][s:e], item[2]
-        return i, item[1][s:e], item[2], seq_i
-
-    def __getattr__(self, attr):
-        """Delegate retrival of attributes to the data in self.data"""
-        return getattr(self.difile, attr)
+        item['seq'] = item['seq'][s:e]
+        item['seq_idx'] = seq_i
+        item['id'] = i
+        # item['seq_name'] += f'|{s}-{e}'
+        item['length'] = e - s
+        return item
 
 
 class WindowChunkedDIFile(AbstractChunkedDIFile):
@@ -515,27 +481,89 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
     By default windows are not overlapping
     """
 
-    def __init__(self, difile, wlen, step=None):
-        if not isinstance(difile, DeepIndexFile):
-            raise ValueError(f'difile must be a DeepIndexFile, got {type(difile)}')
+    def __init__(self, difile, wlen, step=None, min_seq_len=100):
+        if not isinstance(difile, (DeepIndexFile, DIFileFilter)):
+            raise ValueError(f'difile must be a DeepIndexFile or a DIFileFilter, got {type(difile)}')
         if step is None:
             step = wlen
         self.wlen = wlen
         self.step = step
+        self.min_seq_len = min_seq_len
 
         seq_idx = list()
         chunk_start = list()
         chunk_end = list()
         labels = list()
 
-        lengths = difile.seq_table['length'][:]
-        seqlabels = difile.labels
+        # lengths = difile.seq_table['length'][:]
+        # seqlabels = difile.labels
         for i in range(len(difile)):
-            label = seqlabels[i]
-            for start in range(0, lengths[i], step):
-                labels.append(label)
-                seq_idx.append(i)
-                chunk_start.append(start)
-                chunk_end.append(start+step)
-
+            row = difile[i]
+            label = row['label'] # seqlabels[i]
+            #for start in range(0, lengths[i], step):
+            seqlen = row['length']
+            for start in range(0, seqlen, step):
+                end = min(seqlen, start+step)
+                if (end - start) >= self.min_seq_len:
+                    labels.append(label)
+                    seq_idx.append(i)
+                    chunk_start.append(start)
+                    chunk_end.append(end)
         super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
+
+
+class RevCompFilter(DIFileFilter):
+
+    rcmap = torch.tensor([ 9, 10, 11, 12, 13, 14, 15, 16, 17,
+                           0,  1,  2,  3,  4,  5,  6,  7,  8])
+
+    chars = {
+        'A': 'T',
+        'G': 'C',
+        'C': 'G',
+        'T': 'A',
+        'Y': 'R',
+        'R': 'Y',
+        'W': 'W',
+        'S': 'S',
+        'K': 'M',
+        'M': 'K',
+        'D': 'H',
+        'V': 'B',
+        'H': 'D',
+        'B': 'V',
+        'X': 'X',
+        'N': 'N',
+    }
+
+    @classmethod
+    def get_revcomp_map(cls, vocab):
+        d = {c: i for i, c in enumerate(vocab)}
+        rcmap = np.zeros(len(vocab), dtype=int)
+        for i, base in enumerate(vocab):
+            rc_base = cls.chars[base]
+            base_i = d[base]
+            rc_base_i = d[rc_base]
+            rcmap[base_i] = rc_base_i
+        return rcmap
+
+    def __init__(self, difile):
+        super().__init__(difile)
+        self.labels = np.concatenate([self.labels, self.labels])
+        vocab = difile.seq_table.sequence.vocabulary
+        self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
+
+    def __len__(self):
+        return 2*len(self.difile)
+
+    def __getitem__(self, arg):
+        oarg = arg
+        arg, rev = divmod(arg, 2)
+        item = self.difile[arg]
+        if rev:
+            item['seq'] = self.rcmap[item['seq'].long()]
+            # item['seq_name'] += '|rev'
+        # else:
+            # item['seq_name'] += '|fwd'
+        item['id'] = oarg
+        return item

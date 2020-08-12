@@ -22,8 +22,9 @@ class RozNet(AbstractLit):
         n_outputs = getattr(hparams, 'n_outputs', 2)
         first_kernel_size = getattr(hparams, 'first_kernel_size', 7)
         maxpool = getattr(hparams, 'maxpool', True)
+        self.embedding = nn.Embedding(input_nc, 8)
         self.features = nn.Sequential(
-            nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
+            nn.Conv1d(8, 64, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
@@ -61,6 +62,8 @@ class RozNet(AbstractLit):
         )
 
     def forward(self, x, **kwargs):
+        x = self.embedding(x)
+        x = x.permute(0, 2, 1)
         x = self.features(x)
         x = self.pool(x)
         x = torch.flatten(x, 1)

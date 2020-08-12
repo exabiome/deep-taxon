@@ -1,7 +1,48 @@
 import math
 import numpy as np
+import skbio.stats.distance as ssd
 import os
 
+def duplicate_dmat_samples(dist, dupes):
+    """
+    Add extra samples to distance matrix
+    """
+    new_l = dist.shape[0] + len(dupes)
+    new_dist = np.zeros_like(dist, shape=(new_l, new_l))
+    new_dist[:dist.shape[0], :dist.shape[0]] = dist
+    new_slice = np.s_[dist.shape[0]:dist.shape[0]+len(dupes)]
+    old_len_slice = np.s_[0:dist.shape[0]]
+    new_dist[new_slice, old_len_slice] = dist[dupes]
+    new_dist[old_len_slice, new_slice] = dist[dupes].T
+    bottom_corner = np.s_[dist.shape[0]:new_dist.shape[0]]
+    new_dist[bottom_corner, bottom_corner] = dist[dupes][:,dupes]
+    return new_dist
+
+def get_nonrep_matrix(tids, rep_ids, dist):
+    """
+    Get a distance matrix for non-representative species using
+    a distance matrix for representative species
+
+    Args:
+        tids (array-like)       : taxon IDs for taxa to orient matrix to
+        rep_ids (array-like)    : taxon IDs for the representative taxa in *tids*
+        dist (DistanceMatrix)   : the distance matrix to orient
+    """
+    orig_dist = dist
+    uniq, counts = np.unique(rep_ids, return_counts=True)
+    dist = orig_dist.filter(uniq).data
+    extra = counts - 1
+    indices = np.where(extra > 0)[0]
+    dupes = np.repeat(np.arange(len(uniq)), extra)
+    rep_map = dict()
+    for rep, const in zip(rep_ids, tids):
+        rep_map.setdefault(rep, list()).append(const)
+    rep_order = np.concatenate([np.arange(dist.shape[0]), dupes])
+    new_tids = [ rep_map[uniq[i]].pop() for i in rep_order ]
+    dupe_dist = duplicate_samples(dist, dupes)
+    ret = ssd.DistanceMatrix(dupe_dist, ids=new_tids)
+    ret = ret.filter(tids)
+    return ret
 
 def select_distances(ids_to_select, taxa_ids, distances):
     id_map = {t[3:]: i for i, t in enumerate(taxa_ids)}
@@ -130,22 +171,29 @@ def prepare_data(argv=None):
     # read and trim tree
     #############################
     logger.info('reading tree from %s' % args.tree)
-    tree = TreeNode.read(args.tree, format='newick')
+    root = TreeNode.read(args.tree, format='newick')
 
     logger.info('transforming leaf names for shearing')
-    for tip in tree.tips():
+    for tip in root.tips():
         tip.name = tip.name[3:].replace(' ', '_')
 
     logger.info('shearing taxa not found in %s' % args.fof)
     rep_ids = taxdf['gtdb_genome_representative'].values
-    tree = tree.shear(rep_ids)
+    root = root.shear(rep_ids)
 
     logger.info('converting tree to Newick string')
     bytes_io = io.BytesIO()
-    tree.write(bytes_io, format='newick')
+    root.write(bytes_io, format='newick')
     tree_str = bytes_io.getvalue()
     tree = NewickString('tree', data=tree_str)
 
+    if di_kwargs.get('distances') is None:
+        from scipy.spatial.distance import squareform
+        tt_dmat = root.tip_tip_distances()
+        if (rep_ids != taxa_ids).any():
+            tt_dmat = get_nonrep_matrix(taxa_ids, rep_ids, tt_dmat)
+        dmat = tt_dmat.data
+        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=dmat)
 
     h5path = args.out
 
@@ -190,8 +238,9 @@ def prepare_data(argv=None):
         tt_args.append(taxdf[t].values)
     if emb is not None:
         tt_kwargs['embedding'] = emb
+    tt_kwargs['rep_taxon_id'] = rep_ids
 
-    taxa_table = TaxaTable(*tt_args)
+    taxa_table = TaxaTable(*tt_args, **tt_kwargs)
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
                          io.set_dataio(names,    compression='gzip', chunks=(2**15,)),

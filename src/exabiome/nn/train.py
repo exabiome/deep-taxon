@@ -5,7 +5,7 @@ import pickle
 import json
 from datetime import datetime
 import numpy as np
-from ..utils import parse_seed, check_argv, parse_logger
+from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
 from hdmf.utils import docval
 
@@ -63,7 +63,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
-    parser.add_argument('-a', '--num_heads', type=int, default=4, help='number of heads for multi-head attention')
+    parser.add_argument('-r', '--revcomp', default=False, action='store_true', help='use reverse strand of sequences')
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -94,9 +94,9 @@ def process_args(args=None, return_io=False):
     args.logger = logger
 
     # determing number of input channels:
-    # 5 for DNA, 26 for protein
+    # 18 for DNA, 26 for protein
     # 5 for sanity check (this probably doesn't work anymore)
-    input_nc = 5
+    input_nc = 18
     if args.protein:
         input_nc = 26
     if args.sanity:
@@ -146,6 +146,7 @@ def run_lightning(argv=None):
     model, args, addl_targs = process_args(parse_args(argv=argv))
 
     outbase, output = process_output(args)
+    check_directory(outbase)
     print(args)
     del args.logger
 

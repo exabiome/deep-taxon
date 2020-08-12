@@ -1,14 +1,4 @@
 datasets:
-- data_type_def: PackedDNAIndex
-  data_type_inc: VectorIndex
-  dtype: int
-  doc: A VectorIndex that indexes bitpacked DNA
-
-- data_type_def: PackedAAIndex
-  data_type_inc: VectorIndex
-  dtype: int
-  doc: A VectorIndex that indexes bitpacked amino acids
-
 - data_type_def: NewickString
   data_type_inc: Data
   dtype: text
@@ -48,25 +38,6 @@ groups:
     data_type_inc: DynamicTableRegion
     doc: integer ID for the taxa that each sequence belongs to
 
-- data_type_def: DNATable
-  data_type_inc: AbstractSeqTable
-  doc: A table for storing sequence data
-  datasets:
-  - name: sequence_index
-    data_type_inc: PackedDNAIndex
-    doc: Index for 'sequence'
-  - name: sequence
-    data_type_inc: DNAData
-    doc: DNA sequence data
-
-- data_type_def: AATable
-  data_type_inc: AbstractSeqTable
-  doc: A table for storing sequence data
-  datasets:
-  - name: sequence_index
-    data_type_inc: PackedAAIndex
-    doc: Index for 'sequence'
-
 - data_type_def: SequenceTable
   data_type_inc: AbstractSeqTable
   doc: A table for storing sequence data
@@ -78,6 +49,18 @@ groups:
     data_type_inc: VocabData
     doc: DNA or protein sequence data
 
+- data_type_def: DNATable
+  data_type_inc: SequenceTable
+  doc: A table for storing sequence data
+  datasets:
+  - name: sequence
+    data_type_inc: DNAData
+    doc: DNA sequence data
+
+- data_type_def: AATable
+  data_type_inc: SequenceTable
+  doc: A table for storing sequence data
+
 - data_type_def: TaxaTable
   data_type_inc: DynamicTable
   doc: A table for storing taxa information
@@ -86,6 +69,11 @@ groups:
     data_type_inc: VectorData
     dtype: text
     doc: Taxon ID from GTDB
+  - name: rep_taxon_id
+    data_type_inc: VectorData
+    dtype: text
+    doc: The taxon ID of the genome's representative species in GTDB
+    required: false
   - name: embedding
     data_type_inc: VectorData
     dtype: float

@@ -10,6 +10,23 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score
 import scipy.stats as stats
+from .. import command
+
+
+all_colors = sns.color_palette('tab20b')[::4] + sns.color_palette('tab20c')[::4] +\
+sns.color_palette('tab20b')[1::4] + sns.color_palette('tab20c')[1::4] +\
+sns.color_palette('tab20b')[2::4] + sns.color_palette('tab20c')[2::4] +\
+sns.color_palette('tab20b')[3::4] + sns.color_palette('tab20c')[3::4]
+
+
+def get_color_markers(n):
+    ret = []
+    c = n
+    while c > 0:
+        ret.extend(all_colors[0:min(c, len(all_colors))])
+        c -= len(all_colors)
+    return ret
+
 
 def read_outputs(path):
     ret = dict()
@@ -17,22 +34,20 @@ def read_outputs(path):
         if 'viz_emb' in f:
             ret['viz_emb'] = f['viz_emb'][:]
         ret['labels'] = f['labels'][:]
-        ret['train_mask'] = f['train'][:]
-        ret['test_mask'] = f['test'][:]
+        if 'train' in f:
+            ret['train_mask'] = f['train'][:]
+        if 'test' in f:
+            ret['test_mask'] = f['test'][:]
         ret['outputs'] = f['outputs'][:]
-        ret['validate_mask'] = f['validate'][:]
-        ret['taxon_id'] = f['taxon_id'][:]
+        if 'validate' in f:
+            ret['validate_mask'] = f['validate'][:]
+        ret['orig_lens'] = f['orig_lens'][:]
         if 'seq_ids' in f:
             ret['seq_ids'] = f['seq_ids'][:]
     return ret
 
 
 def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None):
-    n_plots = 1
-    if pred is not False:
-        n_plots += 1
-    if tvt:
-        n_plots += 1
     plot_count = 1
     if logger is None:
         logger = logging.getLogger()
@@ -41,12 +56,18 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
     if isinstance(path, str):
         path = read_outputs(path)
 
+    n_plots = 1
+    if pred is not False:
+        n_plots += 1
+
+    if tvt:
+        if all(k in path for k in ('train', 'validate', 'test')):
+            n_plots += 1
+        else:
+            tvt = False
+
     labels = path['labels']
-    train_mask = path['train_mask']
-    test_mask = path['test_mask']
     outputs = path['outputs']
-    validate_mask = path['validate_mask']
-    taxon_id = path['taxon_id']
 
     if 'viz_emb' in path:
         logger.info('found viz_emb')
@@ -57,10 +78,11 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
         umap = UMAP(n_components=2)
         viz_emb = umap.fit_transform(outputs)
 
-    uniq_labels = np.unique(labels)
-    n_classes = len(uniq_labels)
-    class_pal = sns.color_palette('tab10', n_classes)
-    colors = np.array([class_pal[i] for i in labels])
+    color_labels = getattr(pred, 'classes_', None)
+    if color_labels is None:
+        color_labels = labels
+    class_pal = get_color_markers(len(np.unique(color_labels)))
+    colors = np.array([class_pal[i] for i in color_labels])
 
     # set up figure
     fig_height = 7
@@ -75,8 +97,14 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
     plot_count += 1
 
     # plot train/validation/testing data
+    train_mask = None
+    test_mask = None
+    validate_mask = None
     if tvt:
         logger.info('plotting embeddings train/validation/test labels')
+        train_mask = path['train_mask']
+        test_mask = path['test_mask']
+        validate_mask = path['validate_mask']
         pal = ['gray', 'red', 'yellow']
         plt.subplot(1, n_plots, plot_count)
         dsubs = ['train', 'validation', 'test'] # data subsets
@@ -95,16 +123,17 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
         elif not (hasattr(pred, 'fit') and hasattr(pred, 'predict')):
             raise ValueError("argument 'pred' must be a classifier with an SKLearn interface")
 
-        X_train = outputs[train_mask]
-        y_train = labels[train_mask]
-        logger.info(f'training classifier {pred}')
-        pred.fit(X_train, y_train)
-        X_test = outputs[test_mask]
-        y_test = labels[test_mask]
-        logger.info(f'getting predictions')
+        X_test = outputs
+        y_test = labels
+        if train_mask is not None:
+            X_train = outputs[train_mask]
+            y_train = labels[train_mask]
+            logger.info(f'training classifier {pred}')
+            pred.fit(X_train, y_train)
+            X_test = outputs[test_mask]
+            y_test = labels[test_mask]
+            logger.info(f'getting predictions')
         y_pred = pred.predict(X_test)
-        logger.info(f'calculating classification report')
-        report = classification_report(y_test, y_pred, output_dict=True)
 
         logger.info(f'plotting classification report')
         # plot classification report
@@ -112,6 +141,7 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
         plot_clf_report(y_test, y_pred, ax=ax, pal=class_pal)
 
     plt.tight_layout()
+    return pred
 
 
 def aggregated_chunk_analysis(path, clf, fig_height=7):
@@ -122,7 +152,7 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
     labels = path['labels']
     outputs = path['outputs']
     seq_ids = path['seq_ids']
-    uniq_labels = np.unique(labels)
+    olens = path['orig_lens']
 
     viz_emb = None
     if 'viz_emb' in path:
@@ -134,6 +164,7 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
     X_mean = np.zeros((uniq_seqs.shape[0], outputs.shape[1]))
     X_median = np.zeros((uniq_seqs.shape[0], outputs.shape[1]))
     y = np.zeros(uniq_seqs.shape[0], dtype=int)
+    seq_len = np.zeros(uniq_seqs.shape[0], dtype=int)
     seq_viz = np.zeros((uniq_seqs.shape[0], 2))
 
     for seq_i, seq in enumerate(uniq_seqs):
@@ -145,33 +176,24 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
         X_mean[seq_i] = outputs[seq_mask].mean(axis=0)
         X_median[seq_i] = np.median(outputs[seq_mask], axis=0)
         seq_viz[seq_i] = viz_emb[seq_mask].mean(axis=0)
+        seq_len[seq_i] = olens[seq_mask].sum()
 
-    plt.figure(figsize=(14, 21))
-    class_pal = sns.color_palette('tab10', len(uniq_labels))
+    seq_len = np.log10(seq_len)
+
+    color_labels = getattr(clf, 'classes_', None)
+    if color_labels is None:
+        color_labels = labels
+    class_pal = get_color_markers(len(np.unique(color_labels)))
+
+    fig, axes = plt.subplots(nrows=3, ncols=3, sharey='row', figsize=(21, 21))
 
     # classifier from MEAN of outputs
     output_mean_preds = clf.predict(X_mean)
-    ax = plt.subplot(3, 2, 1)
-    plot_seq_emb(seq_viz, output_mean_preds, ax, pal=class_pal)
-    ax.set_title('Mean classification')
-    ax.set_xlabel('Mean of first UMAP dimension')
-    ax.set_ylabel('Mean of second UMAP dimension')
-
-    ax = plt.subplot(3, 2, 2)
-    plot_clf_report(y, output_mean_preds, ax, pal=class_pal)
-    ax.set_title('Mean classification')
+    make_plots(seq_viz, y, output_mean_preds, axes[:,0], class_pal, seq_len, 'Mean classification')
 
     # classifier from MEDIAN of outputs
     output_median_preds = clf.predict(X_median)
-    ax = plt.subplot(3, 2, 3)
-    plot_seq_emb(seq_viz, output_median_preds, ax, pal=class_pal)
-    ax.set_title('Median classification')
-    ax.set_xlabel('Mean of first UMAP dimension')
-    ax.set_ylabel('Mean of second UMAP dimension')
-
-    ax = plt.subplot(3, 2, 4)
-    plot_clf_report(y, output_median_preds, ax, pal=class_pal)
-    ax.set_title('Median classification')
+    make_plots(seq_viz, y, output_median_preds, axes[:,1], class_pal, seq_len, 'Median classification')
 
     # classifier from voting with chunk predictions
     all_preds = clf.predict(outputs)
@@ -180,17 +202,36 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
         seq_mask = seq_ids == seq
         vote_preds[seq_i] = stats.mode(all_preds[seq_mask])[0][0]
 
-    ax = plt.subplot(3, 2, 5)
-    plot_seq_emb(seq_viz, y, ax, pal=class_pal)
-    ax.set_title('Vote classification')
-    ax.set_xlabel('Mean of first UMAP dimension')
-    ax.set_ylabel('Mean of second UMAP dimension')
-
-    ax = plt.subplot(3, 2, 6)
-    plot_clf_report(y, vote_preds, ax, pal=class_pal)
-    ax.set_title('Vote classification')
+    make_plots(seq_viz, y, vote_preds, axes[:,2], class_pal, seq_len, 'Vote classification')
 
     plt.tight_layout()
+
+
+def make_plots(seq_viz, true, pred, axes, pal, seq_len, title):
+    plot_seq_emb(seq_viz, pred, axes[0], pal=pal)
+    axes[0].set_title(title)
+    axes[0].set_xlabel('Mean of first UMAP dimension')
+    axes[0].set_ylabel('Mean of second UMAP dimension')
+    plot_clf_report(true, pred, axes[1], pal=pal)
+    plot_acc_of_len(true, pred, seq_len, axes[2])
+
+
+def plot_acc_of_len(y_true, y_pred, seq_len, ax):
+    nbins = 100
+    _, edges = np.histogram(seq_len, bins=nbins)
+    avg_len = np.zeros(nbins)
+    acc = np.zeros(nbins)
+    correct = y_true == y_pred
+    filt = list()
+    for i in range(nbins):
+        mask = np.logical_and(seq_len >= edges[i], seq_len < edges[i+1])
+        if mask.any():
+            acc[i] = correct[mask].mean()
+            avg_len[i] = seq_len[mask].mean()
+            filt.append(i)
+    avg_len = avg_len[filt]
+    acc = acc[filt]
+    ax.scatter(avg_len, acc)
 
 
 def plot_seq_emb(X, labels, ax, pal=None):
@@ -198,25 +239,25 @@ def plot_seq_emb(X, labels, ax, pal=None):
     uniq_labels = np.unique(labels)
     class_handles = list()
     if pal is None:
-        pal = sns.color_palette('tab10', len(uniq_labels))
-    for cl, col in zip(uniq_labels, pal):
+        pal = sns.color_palette('tab20', len(uniq_labels))
+    print(uniq_labels)
+    for cl in uniq_labels:
+        col = pal[cl]
         mask = labels == cl
         ax.scatter(X[mask,0], X[mask,1], s=0.5, c=[col], label=cl)
         class_handles.append(Circle(0, 0, color=col))
-    if len(uniq_labels) < 10:
-        ax.legend(class_handles, taxon_id)
+
 
 def plot_clf_report(y_true, y_pred, ax, pal=None):
     uniq_labels = np.unique(y_true)
     if pal is None:
-        pal = sns.color_palette('tab10', len(uniq_labels))
-    report = classification_report(y_true, y_pred, output_dict=True)
+        pal = sns.color_palette('tab20', len(uniq_labels))
+    report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
     df = pd.DataFrame(report)
     subdf = df[[str(l) for l in uniq_labels]].iloc[:-1]
     subplot = subdf.plot.barh(ax=ax, color=pal, legend=False)
     ax.text(np.mean(subplot.get_xlim())*1.4, np.max(subplot.get_ylim())*0.95, 'accuracy: %0.6f' % report['accuracy'])
 
-from .. import command
 
 @command('summarize')
 def main(argv=None):
@@ -227,34 +268,45 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('input', type=str,
                         help='the HDF5 file with network outputs or a directory containing a single outputs file')
+    parser.add_argument('classifier', type=str, nargs='?', default=None, help='the classifier to use for predictions')
     parser.add_argument('-A', '--aggregate_chunks', action='store_true', default=False,
                         help='aggregate chunks within sequences and perform analysis')
+    parser.add_argument('-o', '--outdir', type=str, default=None, help='the output directory for figures')
 
     args = parser.parse_args(args=argv)
-    outdir = args.input
     if os.path.isdir(args.input):
         outputs = list(glob.glob(f'{args.input}/outputs.h5'))
         if len(outputs) != 1:
             print(f'More than one outputs file in {args.input}, please specify the exact file')
             sys.exit(1)
         args.input = outputs[0]
-    else:
-        outdir = os.path.dirname(args.input)
+
+    outdir = os.path.dirname(args.input)
+    if args.outdir is not None:
+        outdir = args.outdir
+        if not os.path.exists(outdir):
+            os.mkdir(outdir)
 
     fig_path = os.path.join(outdir, 'summary.png')
     logger = parse_logger('')
 
     plt.figure(figsize=(21, 7))
-    pred = RandomForestClassifier(n_estimators=30)
+    pretrained = False
+    if args.classifier is not None:
+        with open(args.classifier, 'rb') as f:
+            pred = pickle.load(f)
+        pretrained = True
+    else:
+        pred = RandomForestClassifier(n_estimators=30)
     outputs = read_outputs(args.input)
-    plot_results(outputs, pred=pred, name='/'.join(args.input.split('/',)[-2:]), logger=logger)
+    pred = plot_results(outputs, pred=pred, name='/'.join(args.input.split('/',)[-2:]), logger=logger)
     logger.info(f'saving figure to {fig_path}')
     plt.savefig(fig_path, dpi=100)
-
-    clf_path = os.path.join(outdir, 'summary.rf.pkl')
-    logger.info(f'saving classifier to {clf_path}')
-    with open(clf_path, 'wb') as f:
-        pickle.dump(pred, f)
+    if not pretrained:
+        clf_path = os.path.join(outdir, 'summary.rf.pkl')
+        logger.info(f'saving classifier to {clf_path}')
+        with open(clf_path, 'wb') as f:
+            pickle.dump(pred, f)
 
     if args.aggregate_chunks:
         logger.info(f'running summary by aggregating chunks within sequences')
@@ -262,7 +314,6 @@ def main(argv=None):
         agg_fig_path = os.path.join(outdir, 'summary.aggregated.png')
         logger.info(f'saving figure to {agg_fig_path}')
         plt.savefig(agg_fig_path, dpi=100)
-
 
 
 if __name__ == '__main__':

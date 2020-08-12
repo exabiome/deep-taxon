@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
-from ..sequence import WindowChunkedDIFile
+from ..sequence import WindowChunkedDIFile, RevCompFilter
 
 
 def check_window(window, step):
@@ -24,7 +24,8 @@ def read_dataset(path):
     dataset = SeqDataset(difile)
     return dataset, hdmfio
 
-def process_dataset(args, inference=False):
+
+def process_dataset(args, path=None, inference=False):
     """
     Process *input* argument and return dataset and HDMFIO object
 
@@ -32,13 +33,7 @@ def process_dataset(args, inference=False):
         args (Namespace):       command-line arguments passed by parser
         inference (bool):       load data for inference
     """
-    # First, get the dataset, so we can figure
-    # out how many outputs there are
-    #io = get_hdf5io(args.input, 'r')
-    #difile = io.read()
-    #dataset = SeqDataset(difile)
-    dataset, io = read_dataset(args.input)
-
+    dataset, io = read_dataset(path or args.input)
 
     if not hasattr(args, 'classify'):
         raise ValueError('Parser must check for classify/regression/manifold '
@@ -57,8 +52,12 @@ def process_dataset(args, inference=False):
     args.window, args.step = check_window(args.window, args.step)
 
     # Process any arguments that impact how we set up the dataset
+    dataset.set_ohe(False)
     if args.window is not None:
-        dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
+        dataset.set_chunks(args.window, args.step)
+        #dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
+    if getattr(args, 'revcomp', False):
+        dataset.set_revcomp()
     if args.load:
         dataset.load()
 
@@ -124,6 +123,7 @@ class SeqDataset(Dataset):
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'
         self.vocab_len = len(self.difile.seq_table['sequence'].target.vocabulary)
+        self.__ohe = True
 
     def set_classify(self, classify):
         self._classify = classify
@@ -138,6 +138,15 @@ class SeqDataset(Dataset):
         # It should be possible to select individual columns without haveing to modify
         # the state of the underlying DynamicTable
         self.difile.set_label_key(self._label_key)
+
+    def set_chunks(self, window, step=None):
+        self.difile = WindowChunkedDIFile(self.difile, window, step)
+
+    def set_revcomp(self, revcomp=True):
+        self.difile = RevCompFilter(self.difile)
+
+    def set_ohe(self, ohe=True):
+        self.__ohe = ohe
 
     def __len__(self):
         return len(self.difile)
@@ -169,28 +178,17 @@ class SeqDataset(Dataset):
     def __getitem__(self, i):
         # get sequence
         item = self.difile[i]
-        idx, seq, label, seq_id = None, None, None, -1
-        if len(item) == 4:
-            idx, seq, label, seq_id = item
-        else:
-            idx, seq, label = item
+        idx = item['id']
+        seq = item['seq']
+        label = item['label']
+        seq_id = item.get('seq_idx', -1)
         ## one-hot encode sequence
-        seq = F.one_hot(torch.as_tensor(seq, dtype=torch.int64), num_classes=self.vocab_len).float().T
+        seq = torch.as_tensor(seq, dtype=torch.int64)
+        if self.__ohe:
+            seq = F.one_hot(seq, num_classes=self.vocab_len).float()
+        seq = seq.T
         label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label, seq_id)
-
-
-def get_loader(path, **kwargs):
-    """
-    Return a DataLoader that loads data from the given DeepIndex file
-
-    Args:
-        path (str): the path to the DeepIndex file
-        kwargs    : any additional arguments to pass into torch.DataLoader
-    """
-    hdmfio = get_hdf5io(path, 'r')
-    loader = DataLoader(SeqDataset(hdmfio), collate_fn=collate, **kwargs)
-    return loader
 
 
 def train_test_validate_split(data, stratify=None, random_state=None,
@@ -286,3 +284,19 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
     return (DataLoader(train_dataset, collate_fn=collater, **kwargs),
             DataLoader(test_dataset, collate_fn=collater, **kwargs),
             DataLoader(validate_dataset, collate_fn=collater, **kwargs))
+
+def get_loader(dataset, distances=False, **kwargs):
+    """
+    Return a DataLoader that loads data from the given Dataset
+
+    Args:
+        dataset (Dataset): the dataset to return a DataLoader for
+        distances  (bool): whether or not to return distances for a batch
+    """
+    collater = collate
+    if distances:
+        if dataset.difile.distances is None:
+            raise ValueError('DeepIndexFile {dataset.difile} does not contain distances')
+        collater = DistanceCollater(dataset.difile.distances.data[:])
+    return DataLoader(dataset, collate_fn=collater, **kwargs)
+
