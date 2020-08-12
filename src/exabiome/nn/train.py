@@ -63,6 +63,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
+    parser.add_argument('-a', '--num_heads', type=int, default=4, help='number of heads for multi-head attention')
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
