@@ -2,6 +2,34 @@ import math
 import numpy as np
 import os
 
+def duplicate_samples(dist, dupes):
+    new_l = dist.shape[0] + len(dupes)
+    new_dist = np.zeros_like(dist, shape=(new_l, new_l))
+    new_dist[:dist.shape[0], :dist.shape[0]] = dist
+    new_slice = np.s_[dist.shape[0]:dist.shape[0]+len(dupes)]
+    old_len_slice = np.s_[0:dist.shape[0]]
+    new_dist[new_slice, old_len_slice] = dist[dupes]
+    new_dist[old_len_slice, new_slice] = dist[dupes].T
+    bottom_corner = np.s_[dist.shape[0]:new_dist.shape[0]]
+    new_dist[bottom_corner, bottom_corner] = dist[dupes][:,dupes]
+    return new_dist
+
+def get_new_matrix(tids, rep_ids, dist):
+    orig_dist = dist
+    uniq, counts = np.unique(rep_ids, return_counts=True)
+    dist = orig_dist.filter(uniq).data
+    extra = counts - 1
+    indices = np.where(extra > 0)[0]
+    dupes = np.repeat(np.arange(len(uniq)), extra)
+    rep_map = dict()
+    for rep, const in zip(rep_ids, tids):
+        rep_map.setdefault(rep, list()).append(const)
+    rep_order = np.concatenate([np.arange(dist.shape[0]), dupes])
+    new_tids = [ rep_map[uniq[i]].pop() for i in rep_order ]
+    dupe_dist = duplicate_samples(dist, dupes)
+    ret = ssd.DistanceMatrix(dupe_dist, ids=new_tids)
+    ret = ret.filter(tids)
+    return ret
 
 def select_distances(ids_to_select, taxa_ids, distances):
     id_map = {t[3:]: i for i, t in enumerate(taxa_ids)}
@@ -148,8 +176,17 @@ def prepare_data(argv=None):
 
     if di_kwargs.get('distances') is None:
         from scipy.spatial.distance import squareform
+        ttd = root.tip_tip_distances()
+        uniq_reps, uniq_cnts = np.unique(rep_ids, return_counts=True)
+
+
+        ttd_f = ttd.filter(uniq_reps).data
         dmat = squareform(root.tip_tip_distances().filter(rep_ids).data)
+        dupes = np.where(uniq_cnts - 1 > 0)
+
         di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=dmat)
+
+        breakpoint()
 
     h5path = args.out
 
