@@ -1,4 +1,5 @@
 import sys
+import numpy as np
 import os
 from ..utils import check_argv, parse_logger
 from .utils import process_gpus, process_model, process_output
@@ -133,11 +134,19 @@ def process_args(argv=None):
         ldr = get_loader(dset, distances=False)
         args.loaders = {'input': ldr}
         args.difile = dset.difile
+        train_dset, train_io = process_dataset(model.hparams, inference=True)
+        args.label_map = np.zeros(len(dset), dtype=int)
+        train_tid  = train_dset.difile.taxa_table['taxon_id'][:]
+        tid2idx = {tid: i for i, tid in enumerate(train_tid)}
+        rep_tid = dset.difile.taxa_table['rep_taxon_id'][:]
+        args.label_map = np.array([tid2idx[tid] for tid in rep_tid])
+        train_io.close()
     elif args.loaders is None:                           # if an input file is not passed in, do all TVT data
         args.loaders = {'train': model.train_dataloader(),
                         'validate': model.val_dataloader(),
                         'test': model.test_dataloader()}
         args.difile = model.dataset.difile
+        args.label_map = None
 
     # return the model, any arguments, and Lighting Trainer args just in case
     # we want to use them down the line when we figure out how to use Lightning for
@@ -170,7 +179,6 @@ def run_inference(argv=None):
     emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
     label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
     olen_dset = f.create_dataset('orig_lens', shape=(n_samples,), dtype=int)
-    f.create_dataset('taxon_id', data=args.difile.taxa_table['rep_taxon_id'][:])
     seq_id_dset = None
     if model.hparams.window is not None:
         seq_id_dset = f.create_dataset('seq_ids', shape=(n_samples,), dtype=int)
@@ -179,6 +187,8 @@ def run_inference(argv=None):
         mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
         args.logger.info(f'computing outputs for {loader_key}')
         idx, outputs, labels, orig_lens, seq_ids = get_outputs(model, loader, args.device, debug=args.debug)
+        if args.label_map is not None:
+            labels = args.label_map[labels]
         order = np.argsort(idx)
         idx = idx[order]
         args.logger.info('writing outputs')
