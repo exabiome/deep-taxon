@@ -39,7 +39,7 @@ def get_nonrep_matrix(tids, rep_ids, dist):
         rep_map.setdefault(rep, list()).append(const)
     rep_order = np.concatenate([np.arange(dist.shape[0]), dupes])
     new_tids = [ rep_map[uniq[i]].pop() for i in rep_order ]
-    dupe_dist = duplicate_samples(dist, dupes)
+    dupe_dist = duplicate_dmat_samples(dist, dupes)
     ret = ssd.DistanceMatrix(dupe_dist, ids=new_tids)
     ret = ret.filter(tids)
     return ret
