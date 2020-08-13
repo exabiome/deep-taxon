@@ -19,6 +19,8 @@ S=4000
 LOSS=M
 MODEL=roznet
 DATASET=medium
+R=""
+seed=`python -c 'import time; print(int(round(time.time() *1000)) % (2**32 - 1))'`
 
 function print_help(){
 
@@ -31,10 +33,12 @@ function print_help(){
             "    -A:   the number of batches to accumulate. default $A\n"\
             "    -W:   the size of chunks to use. default $W\n"\
             "    -S:   the chunking step size. default $S\n"\
+            "    -s:   the seed to use. default is to pull system time\n"\
             "    -L:   the loss function to use. default $L\n"\
             "    -M:   the model name. default $M\n"\
             "    -D:   the dataset name. default $D\n"\
             "    -E:   the number of epochs to run for. default $E\n"\
+            "    -r:   use reverse complement sequences. use only fwd strand by default\n"\
 
 }
 
@@ -52,14 +56,21 @@ while getopts "hg:b:l:O:A:W:S:L:M:D:E:" opt; do
     M) MODEL=$OPTARG ;;
     D) DATASET=$OPTARG ;;
     E) E=$OPTARG ;;
+    r) R="-r";;
   esac
 done
 shift $(( $OPTIND - 1))
 INPUT=${1:?"Missing input file"};
 INPUT=`realpath $INPUT`
 
+CHUNKS=chunks_W${W}_S${S}
+if [[ ! -z "${R}" ]]; then
+    echo ">$R<"
+    CHUNKS=${CHUNKS}_rev
+fi
+
 EXP=o${O}_g${G}_b${B}_lr${LR}_16bit_A${A}
-OUTDIR=${2:-$CSCRATCH/exabiome/deep-index/train/datasets/$DATASET/chunks_W${W}_S${S}/$MODEL/$LOSS}
+OUTDIR=${2:-$CSCRATCH/exabiome/deep-index/train/datasets/$DATASET/$CHUNKS/$MODEL/$LOSS}
 
 mkdir -p $OUTDIR/logs
 
@@ -68,5 +79,5 @@ module load python
 conda activate exabiome_16bit
 
 # Run the training
-srun -u deep-index train -M -b $B -g $G -o $O -s $S --half -W $W -S $S --lr $LR -A $A -E $EXP -e $E -L \
+srun -u deep-index train $R -M -b $B -g $G -o $O -s $seed --half -W $W -S $S --lr $LR -A $A -E $EXP -e $E -L \
                          $MODEL $INPUT $OUTDIR > $OUTDIR/logs/$EXP.log 2>&1
