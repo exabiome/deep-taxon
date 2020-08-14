@@ -13,6 +13,7 @@ import scipy.stats as stats
 from .. import command
 
 
+
 all_colors = sns.color_palette('tab20b')[::4] + sns.color_palette('tab20c')[::4] +\
 sns.color_palette('tab20b')[1::4] + sns.color_palette('tab20c')[1::4] +\
 sns.color_palette('tab20b')[2::4] + sns.color_palette('tab20c')[2::4] +\
@@ -125,7 +126,9 @@ def plot_results(path, tvt=True, pred=True, fig_height=7, logger=None, name=None
 
         X_test = outputs
         y_test = labels
-        if train_mask is not None:
+        if not hasattr(pred, 'classes_'):
+            train_mask = path['train_mask']
+            test_mask = path['test_mask']
             X_train = outputs[train_mask]
             y_train = labels[train_mask]
             logger.info(f'training classifier {pred}')
@@ -240,7 +243,6 @@ def plot_seq_emb(X, labels, ax, pal=None):
     class_handles = list()
     if pal is None:
         pal = sns.color_palette('tab20', len(uniq_labels))
-    print(uniq_labels)
     for cl in uniq_labels:
         col = pal[cl]
         mask = labels == cl
