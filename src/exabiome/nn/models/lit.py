@@ -71,7 +71,7 @@ class AbstractLit(LightningModule):
         if self.hparams.lr_scheduler == 'adam':
             return optim.Adam(self.parameters(), lr=self.hparams.lr)
         else:
-            optimizer = optim.SGD(self.parameters(), lr=self.hparams.lr, momentum=0.9, nesterov=True)
+            optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
             scheduler = None
             if self.hparams.lr_scheduler == 'cyclic':
                 scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
