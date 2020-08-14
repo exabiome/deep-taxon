@@ -16,11 +16,12 @@ O=256
 A=4
 W=4000
 S=4000
+SCHED=""
 LOSS=M
 MODEL=roznet
 DATASET=medium
 R=""
-seed=`python -c 'import time; print(int(round(time.time() *1000)) % (2**32 - 1))'`
+seed=""
 
 function print_help(){
 
@@ -34,15 +35,16 @@ function print_help(){
             "    -W:   the size of chunks to use. default $W\n"\
             "    -S:   the chunking step size. default $S\n"\
             "    -s:   the seed to use. default is to pull system time\n"\
-            "    -L:   the loss function to use. default $L\n"\
+            "    -L:   the loss function to use. default $LOSS\n"\
             "    -M:   the model name. default $M\n"\
             "    -D:   the dataset name. default $D\n"\
             "    -E:   the number of epochs to run for. default $E\n"\
             "    -r:   use reverse complement sequences. use only fwd strand by default\n"\
+            "    -u:   the learning rate scheduler to use. default is to use train default\n"\
 
 }
 
-while getopts "hg:b:l:O:A:W:S:L:M:D:E:" opt; do
+while getopts "hg:b:l:O:A:W:S:L:M:D:E:ru:s:" opt; do
   case $opt in
     h) print_help & exit 0;;
     g) G=$OPTARG ;;
@@ -52,6 +54,8 @@ while getopts "hg:b:l:O:A:W:S:L:M:D:E:" opt; do
     A) A=$OPTARG ;;
     W) W=$OPTARG ;;
     S) S=$OPTARG ;;
+    u) SCHED=$OPTARG ;;
+    s) seed=$OPTARG ;;
     L) LOSS=$OPTARG ;;
     M) MODEL=$OPTARG ;;
     D) DATASET=$OPTARG ;;
@@ -63,14 +67,34 @@ shift $(( $OPTIND - 1))
 INPUT=${1:?"Missing input file"};
 INPUT=`realpath $INPUT`
 
+OPTIONS="-$LOSS -b $B -g $G -o $O --half -W $W -S $S --lr $LR -A $A -e $E -L"
+EXP=o${O}_g${G}_b${B}_lr${LR}_16bit_A${A}
+
 CHUNKS=chunks_W${W}_S${S}
 if [[ ! -z "${R}" ]]; then
-    echo ">$R<"
-    CHUNKS=${CHUNKS}_rev
+    CHUNKS=${CHUNKS}
+    OPTIONS="$OPTIONS -r"
+else
+    CHUNKS=${CHUNKS}_fwd-only
 fi
 
-EXP=o${O}_g${G}_b${B}_lr${LR}_16bit_A${A}
+if [[ ! -z "${seed}" ]]; then
+    OPTIONS="$OPTIONS -s $seed"
+fi
+
+if [[ ! -z "${SCHED}" ]]; then
+    OPTIONS="$OPTIONS --lr_scheduler $SCHED"
+    EXP=${EXP}_$SCHED
+fi
+OPTIONS="$OPTIONS -E $EXP"
+
 OUTDIR=${2:-$CSCRATCH/exabiome/deep-index/train/datasets/$DATASET/$CHUNKS/$MODEL/$LOSS}
+LOG=$OUTDIR/logs/$EXP.log
+
+echo $OPTIONS
+echo $MODEL
+echo $INPUT
+echo $OUTDIR
 
 mkdir -p $OUTDIR/logs
 
@@ -79,5 +103,4 @@ module load python
 conda activate exabiome_16bit
 
 # Run the training
-srun -u deep-index train $R -M -b $B -g $G -o $O -s $seed --half -W $W -S $S --lr $LR -A $A -E $EXP -e $E -L \
-                         $MODEL $INPUT $OUTDIR > $OUTDIR/logs/$EXP.log 2>&1
+srun -u deep-index train $OPTIONS $MODEL $INPUT $OUTDIR > $LOG 2>&1

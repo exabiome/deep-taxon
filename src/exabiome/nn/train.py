@@ -59,11 +59,12 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
     parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
-    parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
-    parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
     parser.add_argument('-r', '--revcomp', default=False, action='store_true', help='use reverse strand of sequences')
+    parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
+    parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
+    parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -236,6 +237,7 @@ def overall_metric(model, loader, metric):
 
 
 from . import models
+from .models.lit import AbstractLit
 
 if __name__ == '__main__':
     run_lightening()
