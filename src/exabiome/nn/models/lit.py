@@ -14,6 +14,8 @@ from ..loss import DistMSELoss
 
 class AbstractLit(LightningModule):
 
+    schedules = ('adam', 'cyclic', 'plateau')
+
     def __init__(self, hparams):
         super().__init__()
         self.hparams = self.check_hparams(hparams)
@@ -66,10 +68,16 @@ class AbstractLit(LightningModule):
             self.io = io
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
-        #schedular = optim.lr_scheduler.StepLR(optimizer, step_size=1)
-        #return optimizer, schedular
-        return optimizer
+        if self.hparams.lr_scheduler == 'adam':
+            return optim.Adam(self.parameters(), lr=self.hparams.lr)
+        else:
+            optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
+            scheduler = None
+            if self.hparams.lr_scheduler == 'cyclic':
+                scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
+            elif self.hparams.lr_scheduler == 'plateau':
+                scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+            return [optimizer], [scheduler]
 
     # TRAIN
     def train_dataloader(self):

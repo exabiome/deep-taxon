@@ -131,7 +131,7 @@ def process_args(argv=None):
 
     if args.input is not None:                          # if an input file is passed in, use that first
         dset, io  = process_dataset(model.hparams, path=args.input, inference=True)
-        ldr = get_loader(dset, distances=False)
+        ldr = get_loader(dset, batch_size=args.batch_size, distances=False)
         args.loaders = {'input': ldr}
         args.difile = dset.difile
         train_dset, train_io = process_dataset(model.hparams, inference=True)
