@@ -34,6 +34,7 @@ def ncbi_path(args):
     desc = 'Print path at NCBI FTP site to stdout '
     parser  = argparse.ArgumentParser(description=desc)
     parser.add_argument('accession', type=str, help='the accession of the genome to retreive')
+    parser.add_argument('-f', '--file', action='store_true', default=False, help='accession is a file with a list of accessions, one per line')
 
     args = parser.parse_args(args)
 
