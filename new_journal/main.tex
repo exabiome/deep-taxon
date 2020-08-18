@@ -50,6 +50,22 @@ also explore using 16-bits for training.
   \label{fig:encoding_fix_results}
 \end{figure}
 
+\subsubsection*{Thu May 28, 2020}
+After restructuring code to run with PyTorch-Lightning, I'm getting better training results. I am ommitting training-validation loss curves, since those are generated in the form of a TensorBoard log. 
+
+I also added a loss function that is calculated based on distances. Briefly, a distance matrix is calculated for each batch
+
+\begin{equation}
+\sum_{i>j} (\widehat{D}_{i,j} - D_{i,j})^2
+\end{equation}
+where $D_{i,j}$ is the patristic distance between the species from which sequence $i$ and $j$ come from, and $\widehat{D}_{i,j}$ is the distance between the embeddings of sequences $i$ and $j$
+
+\begin{figure}
+  \includegraphics[width=\linewidth]{new_journal/figures/ar122_r89.genomic.small/ddp/g4_b32_lr0.001/seed=2001-epoch=80-val_loss=2.98.outputs.png}
+  \includegraphics[width=\linewidth]{new_journal/figures/ar122_r89.genomic.small/ddp/g4_b32_lr0.001/seed=2001-epoch=95-val_loss=3.98.outputs.png}
+  \caption{Final embedding results when training Roznet with distance-based loss function. Five-species archaea dataset was used.  }
+  \label{fig:g4_b32_lr0.001}
+\end{figure}
 
 \end{document}
 
