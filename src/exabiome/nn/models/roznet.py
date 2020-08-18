@@ -22,8 +22,10 @@ class RozNet(AbstractLit):
         n_outputs = getattr(hparams, 'n_outputs', 2)
         first_kernel_size = getattr(hparams, 'first_kernel_size', 7)
         maxpool = getattr(hparams, 'maxpool', True)
+        emb_dim = 8
+        self.embedding = nn.Embedding(input_nc, emb_dim)
         self.features = nn.Sequential(
-            nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
+            nn.Conv1d(emb_dim, 64, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
@@ -61,10 +63,16 @@ class RozNet(AbstractLit):
         )
 
     def forward(self, x, **kwargs):
+        print("===1", x.shape)
+        x = self.embedding(x).permute(0, 2, 1)
+        print("===2", x.shape)
         x = self.features(x)
+        print("===3", x.shape)
         x = self.pool(x)
         x = torch.flatten(x, 1)
+        print("===4", x.shape)
         x = self.classifier(x)
+        print("====5", x.shape)
         return x
 
 
@@ -73,7 +81,7 @@ if __name__ == '__main__':
     from .train import parse_args, run, check_model, load_dataset
 
     args = parse_args("Train CNN with Spatial Pyramidal Pooling")
-                      #[['-E', '--emb_nc'], dict(type=int, default=0, help='the number of embedding channels. default is no embedding')])
+    #[['-E', '--emb_nc'], dict(type=int, default=0, help='the number of embedding channels. default is no embedding')])
 
     input_nc = 5
     if args['protein']:
