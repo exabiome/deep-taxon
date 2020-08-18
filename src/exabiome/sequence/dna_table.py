@@ -539,9 +539,9 @@ class RevCompFilter(DIFileFilter):
     @classmethod
     def get_revcomp_map(cls, vocab):
         d = {c: i for i, c in enumerate(vocab)}
-        rcmap = np.zeros((len(vocab),))
+        rcmap = np.zeros(len(vocab), dtype=int)
         for i, base in enumerate(vocab):
-            rc_base = chars[c]
+            rc_base = cls.chars[base]
             base_i = d[base]
             rc_base_i = d[rc_base]
             rcmap[base_i] = rc_base_i
@@ -550,7 +550,7 @@ class RevCompFilter(DIFileFilter):
     def __init__(self, difile):
         super().__init__(difile)
         self.labels = np.concatenate([self.labels, self.labels])
-        vocab = difile.sequence_table.sequences.vocabulary
+        vocab = difile.seq_table.sequence.vocabulary
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
 
     def __len__(self):

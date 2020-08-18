@@ -1,7 +1,48 @@
 import math
 import numpy as np
+import skbio.stats.distance as ssd
 import os
 
+def duplicate_dmat_samples(dist, dupes):
+    """
+    Add extra samples to distance matrix
+    """
+    new_l = dist.shape[0] + len(dupes)
+    new_dist = np.zeros_like(dist, shape=(new_l, new_l))
+    new_dist[:dist.shape[0], :dist.shape[0]] = dist
+    new_slice = np.s_[dist.shape[0]:dist.shape[0]+len(dupes)]
+    old_len_slice = np.s_[0:dist.shape[0]]
+    new_dist[new_slice, old_len_slice] = dist[dupes]
+    new_dist[old_len_slice, new_slice] = dist[dupes].T
+    bottom_corner = np.s_[dist.shape[0]:new_dist.shape[0]]
+    new_dist[bottom_corner, bottom_corner] = dist[dupes][:,dupes]
+    return new_dist
+
+def get_nonrep_matrix(tids, rep_ids, dist):
+    """
+    Get a distance matrix for non-representative species using
+    a distance matrix for representative species
+
+    Args:
+        tids (array-like)       : taxon IDs for taxa to orient matrix to
+        rep_ids (array-like)    : taxon IDs for the representative taxa in *tids*
+        dist (DistanceMatrix)   : the distance matrix to orient
+    """
+    orig_dist = dist
+    uniq, counts = np.unique(rep_ids, return_counts=True)
+    dist = orig_dist.filter(uniq).data
+    extra = counts - 1
+    indices = np.where(extra > 0)[0]
+    dupes = np.repeat(np.arange(len(uniq)), extra)
+    rep_map = dict()
+    for rep, const in zip(rep_ids, tids):
+        rep_map.setdefault(rep, list()).append(const)
+    rep_order = np.concatenate([np.arange(dist.shape[0]), dupes])
+    new_tids = [ rep_map[uniq[i]].pop() for i in rep_order ]
+    dupe_dist = duplicate_dmat_samples(dist, dupes)
+    ret = ssd.DistanceMatrix(dupe_dist, ids=new_tids)
+    ret = ret.filter(tids)
+    return ret
 
 def select_distances(ids_to_select, taxa_ids, distances):
     id_map = {t[3:]: i for i, t in enumerate(taxa_ids)}
@@ -26,11 +67,6 @@ def select_embeddings(ids_to_select, taxa_ids, embeddings):
     return embeddings[indices]
 
 
-def get_taxa_id(path):
-    c, n = os.path.basename(path).split('_')[0:2]
-    return c + '_' + n
-
-
 from .. import command
 
 @command('prepare-data')
@@ -48,12 +84,12 @@ def prepare_data(argv=None):
     from hdmf.common import get_hdf5io
     from hdmf.data_utils import DataChunkIterator
 
+    from .utils import get_taxa_id
     from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator
     from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
 
     parser = argparse.ArgumentParser()
     parser.add_argument('fof', type=str, help='file of Fasta files')
-    parser.add_argument('dist_h5', type=str, help='the distances file')
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('out', type=str, help='output HDF5')
@@ -62,6 +98,7 @@ def prepare_data(argv=None):
     grp.add_argument('-p', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-c', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-g', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
+    parser.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('-V', '--vocab', action='store_true', default=False, help='store sequences as vocabulary data')
@@ -78,22 +115,25 @@ def prepare_data(argv=None):
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
 
-    logger.info('reading Fasta paths from %s' % args.tree)
+    logger.info('reading Fasta paths from %s' % args.fof)
     with open(args.fof, 'r') as f:
         fapaths = [l[:-1] for l in f.readlines()]
 
     taxa_ids = list(map(get_taxa_id, fapaths))
 
-    #############################
-    # read and filter distances
-    #############################
-    logger.info('reading distances from %s' % args.dist_h5)
-    with h5py.File(args.dist_h5, 'r') as f:
-        dist = f['distances'][:]
-        dist_taxa = f['leaf_names'][:].astype('U')
-    logger.info('selecting distances for taxa found in %s' % args.fof)
-    dist = select_distances(taxa_ids, dist_taxa, dist)
-    dist = CondensedDistanceMatrix('distances', data=dist)
+    di_kwargs = dict()
+    if args.dist_h5:
+        #############################
+        # read and filter distances
+        #############################
+        logger.info('reading distances from %s' % args.dist_h5)
+        with h5py.File(args.dist_h5, 'r') as f:
+            dist = f['distances'][:]
+            dist_taxa = f['leaf_names'][:].astype('U')
+        logger.info('selecting distances for taxa found in %s' % args.fof)
+        dist = select_distances(taxa_ids, dist_taxa, dist)
+        dist = CondensedDistanceMatrix('distances', data=dist)
+        di_kwargs['distances'] = dist
 
 
     #############################
@@ -104,11 +144,12 @@ def prepare_data(argv=None):
     def func(row):
         dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
         dat['species'] = dat['species'].split(' ')[1]
+        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
         dat['accession'] = row['accession'][3:]
         return pd.Series(data=dat)
 
     logger.info('selecting GTDB taxonomy for taxa found in %s' % args.fof)
-    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy']]\
+    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
                         .apply(func, axis=1)\
                         .set_index('accession')\
                         .filter(items=taxa_ids, axis=0)
@@ -130,21 +171,29 @@ def prepare_data(argv=None):
     # read and trim tree
     #############################
     logger.info('reading tree from %s' % args.tree)
-    tree = TreeNode.read(args.tree, format='newick')
+    root = TreeNode.read(args.tree, format='newick')
 
     logger.info('transforming leaf names for shearing')
-    for tip in tree.tips():
+    for tip in root.tips():
         tip.name = tip.name[3:].replace(' ', '_')
 
     logger.info('shearing taxa not found in %s' % args.fof)
-    tree = tree.shear(taxa_ids)
+    rep_ids = taxdf['gtdb_genome_representative'].values
+    root = root.shear(rep_ids)
 
     logger.info('converting tree to Newick string')
     bytes_io = io.BytesIO()
-    tree.write(bytes_io, format='newick')
+    root.write(bytes_io, format='newick')
     tree_str = bytes_io.getvalue()
     tree = NewickString('tree', data=tree_str)
 
+    if di_kwargs.get('distances') is None:
+        from scipy.spatial.distance import squareform
+        tt_dmat = root.tip_tip_distances()
+        if (rep_ids != taxa_ids).any():
+            tt_dmat = get_nonrep_matrix(taxa_ids, rep_ids, tt_dmat)
+        dmat = tt_dmat.data
+        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=dmat)
 
     h5path = args.out
 
@@ -189,8 +238,9 @@ def prepare_data(argv=None):
         tt_args.append(taxdf[t].values)
     if emb is not None:
         tt_kwargs['embedding'] = emb
+    tt_kwargs['rep_taxon_id'] = rep_ids
 
-    taxa_table = TaxaTable(*tt_args)
+    taxa_table = TaxaTable(*tt_args, **tt_kwargs)
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
                          io.set_dataio(names,    compression='gzip', chunks=(2**15,)),
@@ -201,7 +251,7 @@ def prepare_data(argv=None):
                          taxon_table=taxa_table,
                          id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=(2**15,)))
 
-    difile = DeepIndexFile(seq_table, taxa_table, dist, tree)
+    difile = DeepIndexFile(seq_table, taxa_table, tree, **di_kwargs)
 
     io.write(difile, exhaust_dci=False)
     io.close()

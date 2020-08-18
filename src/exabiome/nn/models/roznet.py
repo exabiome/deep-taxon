@@ -63,9 +63,14 @@ class RozNet(AbstractLit):
         )
 
     def forward(self, x, **kwargs):
+<<<<<<< HEAD
         print("===1", x.shape)
         x = self.embedding(x).permute(0, 2, 1)
         print("===2", x.shape)
+=======
+        x = self.embedding(x)
+        x = x.permute(0, 2, 1)
+>>>>>>> upstream/master
         x = self.features(x)
         print("===3", x.shape)
         x = self.pool(x)

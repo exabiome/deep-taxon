@@ -53,16 +53,12 @@ def process_model(args, inference=False):
         args (Namespace):       command-line arguments passed by parser
         inference (bool):       load data for inference
     """
-    # First, get the dataset, so we can figure
-    # out how many outputs there are
-    dataset, io = read_dataset(args.input)
 
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
     model = models._models[args.model]
     if inference:
         model.forward = auto_move_data(model.forward)
-    del args.model
 
     if args.checkpoint is not None:
         model = model.load_from_checkpoint(args.checkpoint)
@@ -70,6 +66,10 @@ def process_model(args, inference=False):
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
+        # First, get the dataset, so we can figure
+        # out how many outputs there are
+        dataset, io = read_dataset(args.input)
+
         if args.classify:
             n_outputs = len(dataset.difile.taxa_table)
         elif args.manifold:
@@ -86,7 +86,7 @@ def process_model(args, inference=False):
 
         model = model(args)
 
-    io.close()
+        io.close()
 
     return model
 
@@ -98,7 +98,6 @@ def process_output(args, subdir='training_results'):
     outbase = args.output
     if args.experiment:
         outbase = os.path.join(outbase, subdir, args.experiment)
-    check_directory(outbase)
 
     def output(fname):
         return os.path.join(outbase, fname)

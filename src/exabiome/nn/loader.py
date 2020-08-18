@@ -283,6 +283,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
 def get_loader(dataset, distances=False, **kwargs):
     """
     Return a DataLoader that loads data from the given Dataset
+
     Args:
         dataset (Dataset): the dataset to return a DataLoader for
         distances  (bool): whether or not to return distances for a batch
@@ -293,3 +294,4 @@ def get_loader(dataset, distances=False, **kwargs):
             raise ValueError('DeepIndexFile {dataset.difile} does not contain distances')
         collater = DistanceCollater(dataset.difile.distances.data[:])
     return DataLoader(dataset, collate_fn=collater, **kwargs)
+

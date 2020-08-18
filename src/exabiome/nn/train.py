@@ -2,9 +2,10 @@ import sys
 import os
 import os.path
 import pickle
+import json
 from datetime import datetime
 import numpy as np
-from ..utils import parse_seed, check_argv, parse_logger
+from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
 from hdmf.utils import docval
 
@@ -41,7 +42,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-o', '--n_outputs', type=int, help='the number of outputs in the final layer', default=32)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
-    parser.add_argument('-A', '--accuracy', action='store_true', help='compute accuracy', default=False)
+    parser.add_argument('-A', '--accumulate', type=json.loads, help='accumulate_grad_batches argument to pl.Trainer', default=1)
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
@@ -58,10 +59,12 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
     parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
-    parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
-    parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
+    parser.add_argument('-r', '--revcomp', default=False, action='store_true', help='use reverse strand of sequences')
+    parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
+    parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
+    parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -92,9 +95,9 @@ def process_args(args=None, return_io=False):
     args.logger = logger
 
     # determing number of input channels:
-    # 5 for DNA, 26 for protein
+    # 18 for DNA, 26 for protein
     # 5 for sanity check (this probably doesn't work anymore)
-    input_nc = 5
+    input_nc = 18
     if args.protein:
         input_nc = 26
     if args.sanity:
@@ -106,6 +109,8 @@ def process_args(args=None, return_io=False):
     targs = dict(
         max_epochs=args.epochs,
     )
+
+    targs['accumulate_grad_batches'] = args.accumulate
 
     targs['gpus'] = process_gpus(args.gpus)
     if targs['gpus'] != 1:
@@ -142,6 +147,7 @@ def run_lightning(argv=None):
     model, args, addl_targs = process_args(parse_args(argv=argv))
 
     outbase, output = process_output(args)
+    check_directory(outbase)
     print(args)
     del args.logger
 
@@ -231,6 +237,7 @@ def overall_metric(model, loader, metric):
 
 
 from . import models
+from .models.lit import AbstractLit
 
 if __name__ == '__main__':
     run_lightening()
