@@ -79,7 +79,7 @@ def sample_tree(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('metadata', type=str, help='the GTDB metadata file')
     parser.add_argument('tree', type=str, help='the GTDB tree file')
-    parser.add_argument('fadir', type=str, default=None, help='the directory with NCBI Fasta files')
+    parser.add_argument('fadir', type=str, nargs='?', default=None, help='the directory with NCBI Fasta files')
     parser.add_argument('-c', '--n_classes', type=int, help='the number of classes to sample in depth', default=1)
     parser.add_argument('-g', '--n_genera', type=int, help='the number of genera to sample in depth', default=1)
     parser.add_argument('-s', '--n_species', type=int, help='the number of species to sample in depth', default=1)

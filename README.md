@@ -39,11 +39,16 @@ Available commands are:
     ncbi-fetch      Retrieve sequence data from NCBI FTP site using rsync
 ```
 
-
 ## Sampling taxa to train with
 This command will sample taxa from a GTDB tree.
 ```bash
 deep-index sample-gtdb
+```
+
+## Downloading data from NCBI
+This command will retrieve sequence files from NCBI. 
+```bash
+deep-index ncbi-fetch
 ```
 
 ## Converting Data
@@ -80,3 +85,43 @@ random forest classifier and plot a classification report
 ```bash
 deep-index summarize
 ```
+
+# Example workflow
+
+Before preparing an input file for training a network, you will need to download the necessary
+input files from the [Genome Taxonomy Database](https://gtdb.ecogenomic.org/) (GTDB). 
+Files can be downloaded [here](https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/). You
+will need to download the metadata file (i.e. `*_metadata*`) and the tree file (i.e. `*.tree`)
+
+Once you have a metadata file and a tree file, you can run `sample-gtdb` to generate a list of NCBI accessions.
+
+```bash
+$ deep-index sample-gtdb ar122_metadata_r89.tsv ar122_r89.tree > my_accessions.txt
+```
+
+Next, pass `my_accessions.txt` into `ncbi-fetch` to obtain sequence files for the accessions you
+have chosen.
+
+```bash 
+$ deep-index ncbi-fetch -f my_accessions.txt ncbi_sequences
+```
+
+Note that you will need to use the `-f` flag to indication that first arguemnt is a file containing a 
+list of accessions. 
+The second argument is where sequence files get downloaded to. `ncbi-fetch` will
+preserve the directory structure from the NCBI FTP site. Do not modify this, as the following command,
+`prepare-data` will expect this directory structure.
+If you are downloading many files and would like to speed things up, use `-p` to run
+downloads in parallel.
+
+Now that sequence files are downloaded, sequence data can be converted into a input file for training.
+
+```bash
+$ deep-index prepare-data -V -g my_accessions.txt ncbi_sequences ar122_metadata_r89.tsv ar122_r89.tree my_input.h5
+```
+
+This will convert *genomic* sequence (i.e. `-g` flag) for the accessions you stored in `my_accessions.txt`. Data
+will be read from the directory `ncbi_sequences`. 
+
+
+
