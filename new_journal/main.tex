@@ -41,8 +41,8 @@ not training.
 \subsubsection*{Thu May 28, 2020}
 I reformatted the data to store label-encoded DNA (i.e. integer encoding) using the HDMF VocabData column type. I ran
 a few different networks/problems, and it appears that training is working (See Figure~\ref{fig:encoding_fix_results}. Now I am having issues with running out of
-memory. I have reworked my training code to use PyTorch-Lightning to handle running on GPUs etc. I will try that, and 
-also explore using 16-bits for training. 
+memory. I have reworked my training code to use PyTorch-Lightning to handle running on GPUs etc. I will try that, and
+also explore using 16-bits for training.
 
 \begin{figure}
   \includegraphics[width=\linewidth]{encoding_fix.results.png}
@@ -51,7 +51,7 @@ also explore using 16-bits for training.
 \end{figure}
 
 \subsubsection*{Thu May 28, 2020}
-After restructuring code to run with PyTorch-Lightning, I'm getting better training results. I am ommitting training-validation loss curves, since those are generated in the form of a TensorBoard log. 
+After restructuring code to run with PyTorch-Lightning, I'm getting better training results. I am ommitting training-validation loss curves, since those are generated in the form of a TensorBoard log.
 
 I also added a loss function that is calculated based on distances. Briefly, a distance matrix is calculated for each batch
 
@@ -65,6 +65,39 @@ where $D_{i,j}$ is the patristic distance between the species from which sequenc
   \includegraphics[width=\linewidth]{new_journal/figures/ar122_r89.genomic.small/ddp/g4_b32_lr0.001/seed=2001-epoch=95-val_loss=3.98.outputs.png}
   \caption{Final embedding results when training Roznet with distance-based loss function. Five-species archaea dataset was used.  }
   \label{fig:g4_b32_lr0.001}
+\end{figure}
+
+
+\subsubsection*{Tue August 18, 2020}
+Since the last entry, I have moved to a bigger test dataset. This datasest uses 41 archaeal species. Within this set, I chose two species from two genera to assess
+the ability to separate at the species level. I also added an embedding layer to the top of Roznet, which has speed things up substantially--I was able to run to
+roughly 2000 epochs. Figure~\ref{fig:summary_roznet_medium_training} and figure~\ref{fig:summary_aggregated_roznet_medium_training} contains performance results for predicting test \emph{chunks}.
+Figure~\ref{fig:summary_roznet_medium_nonrep} and figure~\ref{fig:summary_aggregated_roznet_medium_nonrep} contain performance results for predicting non-representative species.
+
+Classification accuracy is far from perfect for all sequences, but classification accuracy is perfect for sequences above roughly 500kb.
+
+\begin{figure}
+  \includegraphics[width=\linewidth]{new_journal/figures/ar122_r89.genomic.medium/chunks_W4000_S4000/roznet/o256_g4_b32_lr0.001_16bit_A4/summary.png}
+  \caption{Summary of chunk taxonomy prediction performance for 41-species dataset}
+  \label{fig:summary_roznet_medium_training}
+\end{figure}
+
+\begin{figure}
+  \includegraphics[width=\linewidth]{new_journal/figures/ar122_r89.genomic.medium/chunks_W4000_S4000/roznet/o256_g4_b32_lr0.001_16bit_A4/summary.aggregated.png}
+  \caption{Summary of sequence taxonomy prediction performance for 41-species dataset}
+  \label{fig:summary_aggregated_roznet_medium_training}
+\end{figure}
+
+\begin{figure}
+  \includegraphics[width=\linewidth]{new_journal/figures/ar122_r89.genomic.medium/chunks_W4000_S4000/roznet/o256_g4_b32_lr0.001_16bit_A4/nonrep/summary.png}
+  \caption{Summary of chunk taxonomy prediction performance for non-representatives of the 41-species dataset}
+  \label{fig:summary_roznet_medium_nonrep}
+\end{figure}
+
+\begin{figure}
+  \includegraphics[width=\linewidth]{new_journal/figures/ar122_r89.genomic.medium/chunks_W4000_S4000/roznet/o256_g4_b32_lr0.001_16bit_A4/nonrep/summary.aggregated.png}
+  \caption{Summary of sequence taxonomy prediction performance for non-representatives of the 41-species dataset}
+  \label{fig:summary_aggregated_roznet_medium_nonrep}
 \end{figure}
 
 \end{document}
