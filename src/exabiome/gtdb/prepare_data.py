@@ -84,14 +84,15 @@ def prepare_data(argv=None):
     from hdmf.common import get_hdf5io
     from hdmf.data_utils import DataChunkIterator
 
-    from .utils import get_taxa_id
+    from ..utils import get_faa_path, get_fna_path, get_genomic_path
     from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator
     from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('fof', type=str, help='file of Fasta files')
-    parser.add_argument('tree', type=str, help='the distances file')
+    parser.add_argument('accessions', type=str, help='file of Fasta files')
+    parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
+    parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('out', type=str, help='output HDF5')
     grp = parser.add_mutually_exclusive_group()
     parser.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
@@ -115,13 +116,21 @@ def prepare_data(argv=None):
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
 
-    logger.info('reading Fasta paths from %s' % args.fof)
-    with open(args.fof, 'r') as f:
-        fapaths = [l[:-1] for l in f.readlines()]
+    # read accessions
+    logger.info('reading accessions %s' % args.accessions)
+    with open(args.accessions, 'r') as f:
+        taxa_ids = [l[:-1] for l in f.readlines()]
 
-    taxa_ids = list(map(get_taxa_id, fapaths))
+    # get paths to Fasta Files
+    fa_path_func = get_genomic_path
+    if args.cds:
+        fa_path_func = get_fna_path
+    elif args.protein:
+        fa_path_func = get_faa_path
+    fapaths = [fa_path_func(acc, args.fadir) for acc in taxa_ids]
 
     di_kwargs = dict()
+    # if a distance matrix file has been given, read and select relevant distances
     if args.dist_h5:
         #############################
         # read and filter distances
@@ -130,7 +139,7 @@ def prepare_data(argv=None):
         with h5py.File(args.dist_h5, 'r') as f:
             dist = f['distances'][:]
             dist_taxa = f['leaf_names'][:].astype('U')
-        logger.info('selecting distances for taxa found in %s' % args.fof)
+        logger.info('selecting distances for taxa found in %s' % args.accessions)
         dist = select_distances(taxa_ids, dist_taxa, dist)
         dist = CondensedDistanceMatrix('distances', data=dist)
         di_kwargs['distances'] = dist
@@ -148,7 +157,7 @@ def prepare_data(argv=None):
         dat['accession'] = row['accession'][3:]
         return pd.Series(data=dat)
 
-    logger.info('selecting GTDB taxonomy for taxa found in %s' % args.fof)
+    logger.info('selecting GTDB taxonomy for taxa found in %s' % args.accessions)
     taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
                         .apply(func, axis=1)\
                         .set_index('accession')\
@@ -164,7 +173,7 @@ def prepare_data(argv=None):
         with h5py.File(args.emb, 'r') as f:
             emb = f['embedding'][:]
             emb_taxa = f['leaf_names'][:]
-        logger.info('selecting embeddings for taxa found in %s' % args.fof)
+        logger.info('selecting embeddings for taxa found in %s' % args.accessions)
         emb = select_embeddings(taxa_ids, emb_taxa, emb)
 
     #############################
@@ -177,7 +186,7 @@ def prepare_data(argv=None):
     for tip in root.tips():
         tip.name = tip.name[3:].replace(' ', '_')
 
-    logger.info('shearing taxa not found in %s' % args.fof)
+    logger.info('shearing taxa not found in %s' % args.accessions)
     rep_ids = taxdf['gtdb_genome_representative'].values
     root = root.shear(rep_ids)
 
@@ -223,6 +232,7 @@ def prepare_data(argv=None):
     elif args.cds:
         seqit_bsize = 2**18
 
+    # set up DataChunkIterators
     packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=seqit_bsize, dtype=np.dtype('uint8'))
     seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
     names = DataChunkIterator.from_iterable(seqit.names_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('U'))
