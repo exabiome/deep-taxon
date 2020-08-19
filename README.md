@@ -39,11 +39,16 @@ Available commands are:
     ncbi-fetch      Retrieve sequence data from NCBI FTP site using rsync
 ```
 
-
 ## Sampling taxa to train with
 This command will sample taxa from a GTDB tree.
 ```bash
 deep-index sample-gtdb
+```
+
+## Downloading data from NCBI
+This command will retrieve sequence files from NCBI. 
+```bash
+deep-index ncbi-fetch
 ```
 
 ## Converting Data
