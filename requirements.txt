@@ -2,6 +2,7 @@ numpy
 scipy
 scikit-learn
 scikit-bio
-./hdmf.git
+hdmf
 umap
+torch
 pytorch_lightning
