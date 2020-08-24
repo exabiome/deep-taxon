@@ -142,7 +142,12 @@ class ResNet(AbstractLit):
         if len(replace_stride_with_dilation) != 3:
             raise ValueError("replace_stride_with_dilation should be None "
                              "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
-        self.conv1 = nn.Conv1d(hparams.input_nc, self.inplanes, kernel_size=7, stride=2, padding=3,
+
+        input_nc = getattr(hparams, 'input_nc', None)
+        n_emb = 8
+        self.embedding = nn.Embedding(input_nc, n_emb)
+
+        self.conv1 = nn.Conv1d(n_emb, self.inplanes, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = norm_layer(self.inplanes)
         self.relu = nn.ReLU(inplace=True)
@@ -200,6 +205,8 @@ class ResNet(AbstractLit):
 
     def _forward_impl(self, x):
         # See note [TorchScript super()]
+        x = self.embedding(x)
+        x = x.permute(0, 2, 1)
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
