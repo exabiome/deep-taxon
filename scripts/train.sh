@@ -45,11 +45,11 @@ function print_help(){
             "    -e:   the number of epochs to run for. default $EPOCHS\n"\
             "    -r:   use reverse complement sequences. use only fwd strand by default\n"\
             "    -u:   the learning rate scheduler to use. default is to use train default\n"\
-            "    -C:   a checkpoint file to restart from\n"\
+            "    -c:   a checkpoint file to restart from\n"\
 
 }
 
-while getopts "hg:b:l:O:A:W:S:L:M:D:E:e:ru:s:C:d" opt; do
+while getopts "hg:b:l:O:A:W:S:L:M:D:E:e:ru:s:c:d" opt; do
   case $opt in
     h) print_help & exit 0;;
     g) G=$OPTARG ;;
@@ -66,7 +66,7 @@ while getopts "hg:b:l:O:A:W:S:L:M:D:E:e:ru:s:C:d" opt; do
     D) DATASET=$OPTARG ;;
     e) EPOCHS=$OPTARG ;;
     r) R="-r";;
-    C) CKPT=$OPTARG;;
+    c) CKPT=$OPTARG;;
     E) EXP=$OPTARG;;
     d) DEBUG="debug";;
   esac
@@ -100,7 +100,7 @@ fi
 
 # Use a checkpoint if its been passed in
 if [[ ! -z "${CKPT}" ]]; then
-    OPTIONS="$OPTIONS -C $CKPT"
+    OPTIONS="$OPTIONS -c $CKPT"
 fi
 
 # Use the experiment if its been given
