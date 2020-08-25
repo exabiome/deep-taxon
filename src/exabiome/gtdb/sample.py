@@ -1,12 +1,12 @@
 import numpy as np
 
-def sample_taxa(taxa_df, n_classes=1, n_genera=1, n_species=1):
+def sample_taxa(taxa_df, n_classes=1, n_genera=1, n_species=1, n_total=None):
     """
     Sample taxa from the given taxonomy data frame.
 
     Sample at a minimum one species from each class. If *n_species*, *n_genera*,
     or *n_classes* are specified, more species/genera will be sampled within
-    the specificed number of classes.
+    the specified number of classes.
 
     For example, if n_classes=1, n_genera=1, and n_species=2, one class will have
     2 species sampled within a single genus.
@@ -20,47 +20,39 @@ def sample_taxa(taxa_df, n_classes=1, n_genera=1, n_species=1):
     """
 
     def get_it(col):
-        """Get taxa sorted by the number of times they occurr"""
+        """Get taxa sorted by the number of times they occur"""
         return sorted(zip(*np.unique(col, return_counts=True)), key=lambda x: -1*x[1])
 
     taxa = list()
-    n_sampled_genera = 0
     n_sampled_classes = 0
-
-    for c, count in get_it(taxdf['class']):
-        #n_sampled_classes += 1
-        ocol = taxdf['genus'][taxdf['class'] == c]
+    for c, count in get_it(taxa_df['class']):
+        if n_sampled_classes == n_classes:
+            break
+        ocol = taxa_df['genus'][taxa_df['class'] == c]
+        n_sampled_genera = 0
 
         # get genera
         for g, g_count in get_it(ocol):
-            scol = taxdf['species'][taxdf['genus'] == g]
+            if n_sampled_genera == n_genera:
+                break
+            scol = taxa_df['species'][taxa_df['genus'] == g]
             n_sampled_species = 0
 
             # get species
             for s, s_count in get_it(scol):
-                taxa.append((c, g, s))
-                n_sampled_species += 1
-                if n_sampled_genera >= n_genera:
-                    break
                 if n_sampled_species == n_species:
                     break
-
-            if n_sampled_species == n_species:   # we found a deep genera
-                n_sampled_genera += 1
-
-            if n_sampled_genera >= n_genera:
-                n_sampled_classes += 1
-                break
-
-        if n_sampled_classes < n_classes:
-            n_sampled_genera = 0
+                taxa.append((c, g, s))
+                n_sampled_species += 1
+            n_sampled_genera += 1
+        n_sampled_classes += 1
 
     # get accessions from (class, genus, species) tuples
     accessions = list()
+    taxa = taxa[:n_total]
     for c, g, s in taxa:
-        accessions.append(taxdf[(taxdf['class'] == c) & (taxdf['genus'] == g) & (taxdf['species'] == s)].index[0])
-
-    return taxdf.filter(accessions, axis=0)
+        accessions.append(taxa_df[(taxa_df['class'] == c) & (taxa_df['genus'] == g) & (taxa_df['species'] == s)].index[0])
+    return taxa_df.filter(accessions, axis=0)
 
 
 from .. import command
@@ -83,6 +75,8 @@ def sample_tree(argv=None):
     parser.add_argument('-c', '--n_classes', type=int, help='the number of classes to sample in depth', default=1)
     parser.add_argument('-g', '--n_genera', type=int, help='the number of genera to sample in depth', default=1)
     parser.add_argument('-s', '--n_species', type=int, help='the number of species to sample in depth', default=1)
+    parser.add_argument('-t', '--n_total', type=int, help='the total number of species to sample')
+
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
@@ -91,8 +85,7 @@ def sample_tree(argv=None):
     args = parser.parse_args(args=argv)
 
     taxdf, tree = read_metadata(args.metadata, args.tree)
-
-    df = sample_taxa(taxdf, args.n_classes, args.n_genera, args.n_species)
+    df = sample_taxa(taxdf, args.n_classes, args.n_genera, args.n_species, args.n_total)
 
     if args.fadir is not None:
         func = get_genomic_path
@@ -105,7 +98,5 @@ def sample_tree(argv=None):
     else:
         for acc in df.index:
             print(acc, file=sys.stdout)
-
-
 if __name__ == '__main__':
     sample_tree()
