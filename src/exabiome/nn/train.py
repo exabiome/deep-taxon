@@ -133,6 +133,9 @@ def process_args(args=None, return_io=False):
     if return_io:
         ret.append(io)
 
+    if args.checkpoint:
+        args.experiment += '_restart'
+
     return tuple(ret)
 
 

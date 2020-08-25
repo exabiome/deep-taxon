@@ -1,6 +1,7 @@
 import numpy as np
 
-def sample_taxa(taxa_df, n_classes=1, n_genera=1, n_species=1, n_total=None):
+
+def sample_taxa(taxdf, n_classes=1, n_genera=1, n_species=1):
     """
     Sample taxa from the given taxonomy data frame.
 

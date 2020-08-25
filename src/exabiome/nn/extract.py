@@ -1,24 +1,29 @@
 from .. import command
+from tensorboard.backend.event_processing import event_accumulator
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
 @command('extract-loss')
 def extract(argv=None):
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import pandas as pd
     import os.path
-    from tensorboard.backend.event_processing import event_accumulator
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('event_file', type=str, help='the TensorBoard event file')
+    parser.add_argument('event_file', type=str, help='the TensorBoard event file', nargs='+')
 
     args = parser.parse_args(argv)
 
-    args.output = os.path.join(os.path.dirname(args.event_file), 'loss.png')
+    for f in args.event_file:
+        output = os.path.join(os.path.dirname(f), 'loss.png')
+        plot(f, output)
 
-    ea = event_accumulator.EventAccumulator(args.event_file, #'events.out.tfevents.x.ip-x-x-x-x',
+
+def plot(event_file, output):
+
+    ea = event_accumulator.EventAccumulator(event_file, #'events.out.tfevents.x.ip-x-x-x-x',
      size_guidance={ # see below regarding this argument
          event_accumulator.COMPRESSED_HISTOGRAMS: 500,
          event_accumulator.IMAGES: 4,
@@ -65,6 +70,8 @@ def extract(argv=None):
     plt.gca().set_yscale('log')
     plt.legend()
 
+    print(f'{event_file}\n - Epoch {epoch[-1]} - training loss = {loss[-1]:0.3f}, validation loss = {val_loss[-1]:0.3f}')
+
     plt.subplot(1,2,2)
     loss_values = loss_values.values
     val_values = val_values.values
@@ -76,4 +83,4 @@ def extract(argv=None):
     plt.gca().set_yscale('log')
     plt.legend()
 
-    plt.savefig(args.output)
+    plt.savefig(output)

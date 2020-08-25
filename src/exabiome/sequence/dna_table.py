@@ -108,8 +108,9 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
                 self.maxlen = np.max(seqlens.data[:])
         else:
             columns.append(VectorData('sequence_name', 'sequence names', data=sequence_name))
-            columns.append(self.get_sequence_data(sequence))
-            columns.append(self.get_sequence_index(index, columns[-1]))
+            seq = self.get_sequence_data(sequence)
+            columns.append(self.get_sequence_index(index, seq))
+            columns.append(seq)
             columns.append(VectorData('length', 'sequence lengths', data=seqlens))
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns

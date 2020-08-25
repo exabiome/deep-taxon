@@ -111,7 +111,7 @@ class Bottleneck(nn.Module):
         return out
 
 
-class ResNet(AbstractLit):
+class ResNetFeat(AbstractLit):
 
     def __init__(self, hparams):
         if not hasattr(hparams, 'zero_init_residual'):
@@ -124,7 +124,7 @@ class ResNet(AbstractLit):
             hparams.replace_stride_with_dilation = None
         if not hasattr(hparams, 'norm_layer'):
             hparams.norm_layer = nn.BatchNorm1d
-        super(ResNet, self).__init__(hparams)
+        super(ResNetFeat, self).__init__(hparams)
 
         replace_stride_with_dilation = hparams.replace_stride_with_dilation
         block = hparams.block
@@ -160,7 +160,6 @@ class ResNet(AbstractLit):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -219,7 +218,6 @@ class ResNet(AbstractLit):
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
-        x = self.fc(x)
 
         return x
 
@@ -227,8 +225,8 @@ class ResNet(AbstractLit):
         return self._forward_impl(x)
 
 
-@model('resnet18')
-class ResNet18(ResNet):
+@model('resnet18_feat')
+class ResNet18Feat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
@@ -237,8 +235,8 @@ class ResNet18(ResNet):
         super().__init__(hparams)
 
 
-@model('resnet34')
-class ResNet34(ResNet):
+@model('resnet34_feat')
+class ResNet34Feat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
@@ -247,8 +245,8 @@ class ResNet34(ResNet):
         super().__init__(hparams)
 
 
-@model('resnet50')
-class ResNet50(ResNet):
+@model('resnet50_feat')
+class ResNet50Feat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
@@ -257,8 +255,8 @@ class ResNet50(ResNet):
         super().__init__(hparams)
 
 
-@model('resnet101')
-class ResNet101(ResNet):
+@model('resnet101_feat')
+class ResNet101Feat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
@@ -267,8 +265,8 @@ class ResNet101(ResNet):
         super().__init__(hparams)
 
 
-@model('resnet152')
-class ResNet152(ResNet):
+@model('resnet152_feat')
+class ResNet152Feat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
@@ -277,8 +275,8 @@ class ResNet152(ResNet):
         super().__init__(hparams)
 
 
-@model('resnext50_32x4d')
-class ResNeXt50_32x4d(ResNet):
+@model('resnext50_32x4d_feat')
+class ResNeXt50_32x4dFeat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
@@ -289,8 +287,8 @@ class ResNeXt50_32x4d(ResNet):
         super().__init__(hparams)
 
 
-@model('resnext101_32x8d')
-class ResNeXt101_32x8d(ResNet):
+@model('resnext101_32x8d_feat')
+class ResNeXt101_32x8dFeat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
@@ -301,8 +299,8 @@ class ResNeXt101_32x8d(ResNet):
         super().__init__(hparams)
 
 
-@model('wide_resnet50_2')
-class Wide_ResNet50_2(ResNet):
+@model('wide_resnet50_2_feat')
+class Wide_ResNet50_2Feat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
@@ -312,8 +310,8 @@ class Wide_ResNet50_2(ResNet):
         super().__init__(hparams)
 
 
-@model('wide_resnet101_2')
-class Wide_ResNet101_2(ResNet):
+@model('wide_resnet101_2_feat')
+class Wide_ResNet101_2Feat(ResNetFeat):
 
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)

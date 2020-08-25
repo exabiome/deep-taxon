@@ -89,7 +89,7 @@ def prepare_data(argv=None):
     from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('accessions', type=str, help='file of Fasta files')
+    parser.add_argument('accessions', type=str, help='file of the NCBI accessions of the genomes to convert')
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('tree', type=str, help='the distances file')
