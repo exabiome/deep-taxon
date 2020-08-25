@@ -270,6 +270,55 @@ def prepare_data(argv=None):
     h5size = os.path.getsize(h5path)
     logger.info("HDF5 size: %d", h5size)
 
+@command('count-sequence')
+def count_sequence(argv=None):
+    import argparse
+    import sys
+    import logging
+    import skbio.io
+    from skbio.sequence import DNA, Protein
+    from ..utils import get_faa_path, get_fna_path, get_genomic_path
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('accessions', type=str, help='file of the NCBI accessions of the genomes to convert')
+    parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-p', '--protein', action='store_true', default=False, help='get paths for protein files')
+    grp.add_argument('-c', '--cds', action='store_true', default=False, help='get paths for CDS files')
+    grp.add_argument('-g', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
+
+    args = parser.parse_args(args=argv)
+
+    # read accessions
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
+    logger = logging.getLogger()
+    logger.info('reading accessions %s' % args.accessions)
+
+    with open(args.accessions, 'r') as f:
+        taxa_ids = [l[:-1] for l in f.readlines()]
+
+    # get paths to Fasta Files
+    fa_path_func = get_genomic_path
+    if args.cds:
+        fa_path_func = get_fna_path
+    elif args.protein:
+        fa_path_func = get_faa_path
+    fapaths = [fa_path_func(acc, args.fadir) for acc in taxa_ids]
+
+    kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
+    total = 0
+    for path in fapaths:
+        size = 0
+        for seq_i, seq in enumerate(skbio.io.read(path, **kwargs)):
+            size += len(seq)
+        logger.info(f'{size} - {path}')
+        total += size
+    logger.info(f'{total} total bases')
+
 if __name__ == '__main__':
     prepare_data()
 
