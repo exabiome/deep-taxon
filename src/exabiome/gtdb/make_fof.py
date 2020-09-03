@@ -24,9 +24,9 @@ def make_fof(argv=None):
     parser.add_argument('accessions', type=str, help='A file containing accessions')
     parser.add_argument('-t', '--tree', action='store_true', default=False, help='accessions are from a tree in Newick format')
     grp = parser.add_mutually_exclusive_group()
-    grp.add_argument('-p', '--protein', action='store_true', default=False, help='get paths for protein files')
-    grp.add_argument('-c', '--cds', action='store_true', default=False, help='get paths for CDS files')
-    grp.add_argument('-g', '--genomic', action='store_true', default=False, help='get paths for genomic files')
+    grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
+    grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
+    grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files')
     parser.add_argument('-v', '--verbose', action='store_true', default=False, help='log to stderr')
 
 

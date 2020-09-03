@@ -117,11 +117,24 @@ downloads in parallel.
 Now that sequence files are downloaded, sequence data can be converted into a input file for training.
 
 ```bash
-$ deep-index prepare-data -V -g my_accessions.txt ncbi_sequences ar122_metadata_r89.tsv ar122_r89.tree my_input.h5
+$ deep-index prepare-data -V -G my_accessions.txt ncbi_sequences ar122_metadata_r89.tsv ar122_r89.tree my_input.h5
 ```
 
-This will convert *genomic* sequence (i.e. `-g` flag) for the accessions you stored in `my_accessions.txt`. Data
+This will convert *genomic* sequence (i.e. `-G` flag) for the accessions you stored in `my_accessions.txt`. Data
 will be read from the directory `ncbi_sequences`. 
 
+## Getting non-representative genomes
+
+The previous workflow will generate an input file for *representative* genomes. You may want to use non-representatives.
+To do this, you can use the command `deep-index sample-nonrep`
+
+```bash
+$ deep-index sample-nonrep my_accessions.txt ar122_metadata_r89.tsv > nonrep_accessions.txt
+```
+
+This will print the accessions of non-representative genomes to the file `nonrep_accessions.txt`. You can also 
+get the paths to the sequence files these for these strains by supplying a directory with the NCBI files. You can use
+the flags `-G`, `-C`, or `-P` to get the genomes, gene coding sequences, or protein sequences, respectively. By default,
+genome paths will be printed if you only provide the path to the NCBI Fasta directory. 
 
 

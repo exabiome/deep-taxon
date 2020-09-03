@@ -17,10 +17,11 @@ def sample_strains(argv=None):
 
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('fof', type=str, help='the file-of-file with representatives')
+    parser.add_argument('accessions', type=str, help='the file-of-file with representatives')
     parser.add_argument('metadata', type=str, default=None, help='the GTDB metadata CSV')
-    parser.add_argument('-F', '--fadir', type=str, default=None, help='the directory with NCBI Fasta files')
+    parser.add_argument('fadir', type=str, nargs='?', default=None, help='the directory with NCBI Fasta files')
     parser.add_argument('-s', '--self', action='store_true', default=False, help='include representative in output')
+    parser.add_argument('-f', '--files', action='store_true', default=False, help='accessions is a file of Fasta files')
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-n', '--n_strains', type=int, default=1, help='the number of strains to get for each representative')
     grp.add_argument('-A', '--all', action='store_true', default=False, help='get all strains for each representative')
@@ -34,11 +35,12 @@ def sample_strains(argv=None):
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
 
-    logger.info('reading Fasta paths from %s' % args.fof)
-    with open(args.fof, 'r') as f:
-        fapaths = [l[:-1] for l in f.readlines()]
+    logger.info('reading Fasta paths from %s' % args.accessions)
+    with open(args.accessions, 'r') as f:
+        taxa_ids = [l[:-1] for l in f.readlines()]
 
-    taxa_ids = list(map(get_taxa_id, fapaths))
+    if args.files:
+        taxa_ids = list(map(get_taxa_id, taxa_ids))
 
     logger.info('reading GTDB representatives from %s' % args.metadata)
     def func(row):
@@ -47,7 +49,7 @@ def sample_strains(argv=None):
         dat['accession'] = row['accession'][3:]
         return pd.Series(data=dat)
 
-    logger.info('selecting GTDB taxonomy for taxa found in %s' % args.fof)
+    logger.info('selecting GTDB taxonomy for taxa found in %s' % args.accessions)
     taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_genome_representative']]\
                         .apply(func, axis=1)\
                         .set_index('accession')\
