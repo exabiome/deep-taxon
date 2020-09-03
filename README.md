@@ -93,14 +93,19 @@ input files from the [Genome Taxonomy Database](https://gtdb.ecogenomic.org/) (G
 Files can be downloaded [here](https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/). You
 will need to download the metadata file (i.e. `*_metadata*`) and the tree file (i.e. `*.tree`)
 
+### Step 1 - Sample the GTDB tree
+
 Once you have a metadata file and a tree file, you can run `sample-gtdb` to generate a list of NCBI accessions.
 
 ```bash
 $ deep-index sample-gtdb ar122_metadata_r89.tsv ar122_r89.tree > my_accessions.txt
 ```
 
+### Step 2 - Download files from NCBI
+
 Next, pass `my_accessions.txt` into `ncbi-fetch` to obtain sequence files for the accessions you
-have chosen.
+have chosen. If you already have files downloaded, you can skip this step. This command calls `rsync`,
+so if you already have the files downloaded, it will not re-download them.
 
 ```bash 
 $ deep-index ncbi-fetch -f my_accessions.txt ncbi_sequences
@@ -113,6 +118,8 @@ preserve the directory structure from the NCBI FTP site. Do not modify this, as 
 `prepare-data` will expect this directory structure.
 If you are downloading many files and would like to speed things up, use `-p` to run
 downloads in parallel.
+
+### Step 3 - Converting to training input file
 
 Now that sequence files are downloaded, sequence data can be converted into a input file for training.
 
@@ -137,4 +144,6 @@ get the paths to the sequence files these for these strains by supplying a direc
 the flags `-G`, `-C`, or `-P` to get the genomes, gene coding sequences, or protein sequences, respectively. By default,
 genome paths will be printed if you only provide the path to the NCBI Fasta directory. 
 
+Once you have a list of accessions, you can run _Steps 2 and 3_ from above to finish building an input file for inference
+on held-out genomes.
 
