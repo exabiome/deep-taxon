@@ -2,7 +2,6 @@ import sys
 import subprocess
 import os.path
 
-from .. import command
 from ..utils import parse_logger
 
 
@@ -26,7 +25,6 @@ def get_ftp_path(accession, sequence_only=True):
     return os.path.join(*path)
 
 
-@command('ncbi-path')
 def ncbi_path(args):
     '''Print path at NCBI FTP site to stdout'''
     import argparse
@@ -84,7 +82,6 @@ def get_accessions(args):
 
 
 
-@command('ncbi-fetch')
 def ncbi_fetch(args):
     '''Retrieve sequence data from NCBI FTP site using rsync'''
     import argparse

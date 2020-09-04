@@ -63,9 +63,6 @@ def sample_taxa(taxdf, n_classes=1, n_genera=1, n_species=1):
     return taxdf.filter(accessions, axis=0)
 
 
-from .. import command
-
-@command('sample-gtdb')
 def sample_tree(argv=None):
     '''Sample taxa from a tree
 
@@ -107,7 +104,6 @@ def sample_tree(argv=None):
             print(acc, file=sys.stdout)
 
 
-@command('sample-nonrep')
 def sample_nonrep(argv=None):
     '''Get test strain genomes
 

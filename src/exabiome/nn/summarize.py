@@ -10,8 +10,6 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score
 import scipy.stats as stats
-from .. import command
-
 
 
 all_colors = sns.color_palette('tab20b')[::4] + sns.color_palette('tab20c')[::4] +\
@@ -261,7 +259,6 @@ def plot_clf_report(y_true, y_pred, ax, pal=None):
     ax.text(np.mean(subplot.get_xlim())*1.4, np.max(subplot.get_ylim())*0.95, 'accuracy: %0.6f' % report['accuracy'])
 
 
-@command('summarize')
 def summarize(argv=None):
     '''Summarize training/inference results'''
     import argparse

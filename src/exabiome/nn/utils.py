@@ -8,8 +8,6 @@ from ..utils import check_directory
 from pytorch_lightning.core.decorators import auto_move_data
 
 
-from .. import command
-@command('show-models')
 def show_models(argv=None):
     '''Summarize what Torch sees in CUDA land'''
     def get_desc(m):

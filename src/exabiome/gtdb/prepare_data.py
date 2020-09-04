@@ -67,9 +67,6 @@ def select_embeddings(ids_to_select, taxa_ids, embeddings):
     return embeddings[indices]
 
 
-from .. import command
-
-@command('prepare-data')
 def prepare_data(argv=None):
     '''Aggregate sequence data GTDB using a file-of-files'''
     import argparse
@@ -270,7 +267,6 @@ def prepare_data(argv=None):
     h5size = os.path.getsize(h5path)
     logger.info("HDF5 size: %d", h5size)
 
-@command('count-sequence')
 def count_sequence(argv=None):
     """Count the length of total sequence length for a set of accessions"""
     import argparse

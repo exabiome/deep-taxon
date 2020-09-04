@@ -4,9 +4,7 @@ def get_taxa_id(path):
     c, n = os.path.basename(path).split('_')[0:2]
     return c + '_' + n
 
-from .. import command
 
-@command('make-fof')
 def make_fof(argv=None):
     '''Find files and print paths for accessions'''
     import argparse
