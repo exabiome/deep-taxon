@@ -1,11 +1,11 @@
-_commands = dict()
+_attr_name = '_command'
 def command(name):
     def dec(func):
-        _commands[name] = func
+        setattr(func, _attr_name, name)
         return func
     return dec
 
-def get_commands():
-    return _commands.copy()
+def get_command(func):
+    return getattr(func, _attr_name, None)
 
 from . import nn, gtdb, tools

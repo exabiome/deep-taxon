@@ -272,6 +272,7 @@ def prepare_data(argv=None):
 
 @command('count-sequence')
 def count_sequence(argv=None):
+    """Count the length of total sequence length for a set of accessions"""
     import argparse
     import sys
     import logging

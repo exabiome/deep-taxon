@@ -8,6 +8,7 @@ import pandas as pd
 
 @command('extract-loss')
 def extract(argv=None):
+    '''Exract loss plots from TensorBoard event file'''
     import os.path
     import argparse
 

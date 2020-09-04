@@ -8,6 +8,7 @@ from .. import command
 
 @command('make-fof')
 def make_fof(argv=None):
+    '''Find files and print paths for accessions'''
     import argparse
     import logging
     import sys

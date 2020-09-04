@@ -262,7 +262,7 @@ def plot_clf_report(y_true, y_pred, ax, pal=None):
 
 
 @command('summarize')
-def main(argv=None):
+def summarize(argv=None):
     '''Summarize training/inference results'''
     import argparse
     import pickle

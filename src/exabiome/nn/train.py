@@ -222,7 +222,7 @@ def lightning_lr_find(argv=None):
     fig.savefig(output('lr_finder_results.png'))
 
 @command('cuda-sum')
-def num_gpus(argv=None):
+def cuda_sum(argv=None):
     '''Summarize what Torch sees in CUDA land'''
     import torch
     print('torch.cuda.is_available:', torch.cuda.is_available())
