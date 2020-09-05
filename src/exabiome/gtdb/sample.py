@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def sample_taxa(taxdf, n_classes=1, n_genera=1, n_species=1):
+def sample_taxa(taxdf, n_classes=1, n_genera=1, n_species=1, n_total=None):
     """
     Sample taxa from the given taxonomy data frame.
 
@@ -26,17 +26,17 @@ def sample_taxa(taxdf, n_classes=1, n_genera=1, n_species=1):
 
     taxa = list()
     n_sampled_classes = 0
-    for c, count in get_it(taxa_df['class']):
+    for c, count in get_it(taxdf['class']):
         if n_sampled_classes == n_classes:
             break
-        ocol = taxa_df['genus'][taxa_df['class'] == c]
+        ocol = taxdf['genus'][taxdf['class'] == c]
         n_sampled_genera = 0
 
         # get genera
         for g, g_count in get_it(ocol):
             if n_sampled_genera == n_genera:
                 break
-            scol = taxa_df['species'][taxa_df['genus'] == g]
+            scol = taxdf['species'][taxdf['genus'] == g]
             n_sampled_species = 0
 
             # get species
@@ -52,8 +52,8 @@ def sample_taxa(taxdf, n_classes=1, n_genera=1, n_species=1):
     accessions = list()
     taxa = taxa[:n_total]
     for c, g, s in taxa:
-        accessions.append(taxa_df[(taxa_df['class'] == c) & (taxa_df['genus'] == g) & (taxa_df['species'] == s)].index[0])
-    return taxa_df.filter(accessions, axis=0)
+        accessions.append(taxdf[(taxdf['class'] == c) & (taxdf['genus'] == g) & (taxdf['species'] == s)].index[0])
+    return taxdf.filter(accessions, axis=0)
 
 
 from .. import command
