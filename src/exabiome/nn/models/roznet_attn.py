@@ -43,66 +43,6 @@ class SelfAttention(nn.Module):
         out = self.gamma*out + x
         return out, attention
 
-class MultiHeadAttention(AbstractLit):
-    """ multi-headed attention Layer """
-    def __init__(self, in_dim, activation, num_heads, hparams):
-        super().__init__(hparams)
-        self.in_channel = in_dim
-        self.activation = activation
-        self.num_attention_heads = num_heads
-        assert in_dim % self.num_attention_heads == 0, "The input size is not a multiple of the number of attention heads"
-        self.attention_head_size = int(in_dim / self.num_attention_heads)
-        self.all_head_size = self.num_attention_heads * self.attention_head_size
-
-        self.query = nn.Conv1d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
-        self.key = nn.Conv1d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
-        self.value = nn.Conv1d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
-        self.gamma = nn.Parameter(torch.zeros(1))
-
-        self.softmax = nn.Softmax(dim=-1)
-
-        self.conv_out = nn.Conv1d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
-
-    def forward(self, x):
-        """
-            inputs :
-                x : input feature maps(B X C X W)
-            returns :
-                out : self attention value + input feature (B x C x W)
-                attention: softmax scores (B X W X W)
-            steps:
-
-        """
-        batch_size, conv, width = x.size()
-
-        proj_query = self.query(x).permute(0, 2, 1)
-        proj_key = self.key(x).permute(0, 2, 1)
-        proj_value = self.value(x).permute(0, 2, 1)
-
-        query_layer_size = proj_query.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        proj_query = proj_query.view(query_layer_size)
-        query_layer = proj_query.permute(0, 2, 1, 3)
-        key_layer_size = proj_key.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        proj_key = proj_key.view(key_layer_size)
-        key_layer = proj_key.permute(0, 2, 1, 3)
-        value_layer_size = proj_value.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        proj_value = proj_value.view(value_layer_size)
-        value_layer = proj_value.permute(0, 2, 1, 3)
-
-        scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        scores = scores / math.sqrt(self.attention_head_size)
-        attention_probs = nn.Softmax(dim=-1)(scores)
-
-        context_layer = torch.matmul(attention_probs, value_layer)
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(new_context_layer_shape)
-
-        context_layer = context_layer.view(batch_size, conv, width)
-        out = self.conv_out(context_layer)
-        return out
-
 
 @model('roznet_attn')
 class RozNetAttn(AbstractLit):
