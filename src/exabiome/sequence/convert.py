@@ -240,6 +240,7 @@ class DNASeqIterator(AbstractSeqIterator):
         return packed
 
 
+
 class UnrecognizedCharacter(Exception):
 
     def __init__(self, c):
@@ -360,6 +361,17 @@ class DNAVocabIterator(VocabIterator):
 
     chars, basemap = _get_DNA_map()
 
+class DNAVocabGeneIterator(VocabIterator):
+
+    chars, basemap = _get_DNA_map()
+
+    def _read_seq(self, path):
+        self.logger.info('reading %s', path)
+        kwargs = {'format': 'fasta', 'constructor': self.skbio_cls, 'validate': False}
+        for seq in skbio.io.read(path, **kwargs):
+            description = re.findall("\[([^[\]]*)\]", seq.metadata['description'])
+            ltag = [s.lstrip("locus_tag=") for s in description if "locus_tag=" in s]
+            yield seq, ltag
 
 def _get_AA_map():
     chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
