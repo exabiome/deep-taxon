@@ -67,9 +67,6 @@ def select_embeddings(ids_to_select, taxa_ids, embeddings):
     return embeddings[indices]
 
 
-from .. import command
-
-@command('prepare-data')
 def prepare_data(argv=None):
     '''Aggregate sequence data GTDB using a file-of-files'''
     import argparse
@@ -96,9 +93,9 @@ def prepare_data(argv=None):
     parser.add_argument('out', type=str, help='output HDF5')
     grp = parser.add_mutually_exclusive_group()
     parser.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
-    grp.add_argument('-p', '--protein', action='store_true', default=False, help='get paths for protein files')
-    grp.add_argument('-c', '--cds', action='store_true', default=False, help='get paths for CDS files')
-    grp.add_argument('-g', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
+    grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
+    grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
+    grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
     parser.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
@@ -273,6 +270,55 @@ def prepare_data(argv=None):
     logger.info("reading %s" % (h5path))
     h5size = os.path.getsize(h5path)
     logger.info("HDF5 size: %d", h5size)
+
+def count_sequence(argv=None):
+    """Count the length of total sequence length for a set of accessions"""
+    import argparse
+    import sys
+    import logging
+    import skbio.io
+    from skbio.sequence import DNA, Protein
+    from ..utils import get_faa_path, get_fna_path, get_genomic_path
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('accessions', type=str, help='file of the NCBI accessions of the genomes to convert')
+    parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
+    grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
+    grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
+
+    args = parser.parse_args(args=argv)
+
+    # read accessions
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
+    logger = logging.getLogger()
+    logger.info('reading accessions %s' % args.accessions)
+
+    with open(args.accessions, 'r') as f:
+        taxa_ids = [l[:-1] for l in f.readlines()]
+
+    # get paths to Fasta Files
+    fa_path_func = get_genomic_path
+    if args.cds:
+        fa_path_func = get_fna_path
+    elif args.protein:
+        fa_path_func = get_faa_path
+    fapaths = [fa_path_func(acc, args.fadir) for acc in taxa_ids]
+
+    kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
+    total = 0
+    for path in fapaths:
+        size = 0
+        for seq_i, seq in enumerate(skbio.io.read(path, **kwargs)):
+            size += len(seq)
+        logger.info(f'{size} - {path}')
+        total += size
+    logger.info(f'{total} total bases')
 
 if __name__ == '__main__':
     prepare_data()

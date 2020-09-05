@@ -93,14 +93,19 @@ input files from the [Genome Taxonomy Database](https://gtdb.ecogenomic.org/) (G
 Files can be downloaded [here](https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/). You
 will need to download the metadata file (i.e. `*_metadata*`) and the tree file (i.e. `*.tree`)
 
+### Step 1 - Sample the GTDB tree
+
 Once you have a metadata file and a tree file, you can run `sample-gtdb` to generate a list of NCBI accessions.
 
 ```bash
 $ deep-index sample-gtdb ar122_metadata_r89.tsv ar122_r89.tree > my_accessions.txt
 ```
 
+### Step 2 - Download files from NCBI
+
 Next, pass `my_accessions.txt` into `ncbi-fetch` to obtain sequence files for the accessions you
-have chosen.
+have chosen. If you already have files downloaded, you can skip this step. This command calls `rsync`,
+so if you already have the files downloaded, it will not re-download them.
 
 ```bash 
 $ deep-index ncbi-fetch -f my_accessions.txt ncbi_sequences
@@ -114,14 +119,31 @@ preserve the directory structure from the NCBI FTP site. Do not modify this, as 
 If you are downloading many files and would like to speed things up, use `-p` to run
 downloads in parallel.
 
+### Step 3 - Converting to training input file
+
 Now that sequence files are downloaded, sequence data can be converted into a input file for training.
 
 ```bash
-$ deep-index prepare-data -V -g my_accessions.txt ncbi_sequences ar122_metadata_r89.tsv ar122_r89.tree my_input.h5
+$ deep-index prepare-data -V -G my_accessions.txt ncbi_sequences ar122_metadata_r89.tsv ar122_r89.tree my_input.h5
 ```
 
-This will convert *genomic* sequence (i.e. `-g` flag) for the accessions you stored in `my_accessions.txt`. Data
+This will convert *genomic* sequence (i.e. `-G` flag) for the accessions you stored in `my_accessions.txt`. Data
 will be read from the directory `ncbi_sequences`. 
 
+## Getting non-representative genomes
 
+The previous workflow will generate an input file for *representative* genomes. You may want to use non-representatives.
+To do this, you can use the command `deep-index sample-nonrep`
+
+```bash
+$ deep-index sample-nonrep my_accessions.txt ar122_metadata_r89.tsv > nonrep_accessions.txt
+```
+
+This will print the accessions of non-representative genomes to the file `nonrep_accessions.txt`. You can also 
+get the paths to the sequence files these for these strains by supplying a directory with the NCBI files. You can use
+the flags `-G`, `-C`, or `-P` to get the genomes, gene coding sequences, or protein sequences, respectively. By default,
+genome paths will be printed if you only provide the path to the NCBI Fasta directory. 
+
+Once you have a list of accessions, you can run _Steps 2 and 3_ from above to finish building an input file for inference
+on held-out genomes.
 

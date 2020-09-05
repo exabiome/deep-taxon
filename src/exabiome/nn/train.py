@@ -143,8 +143,7 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-from .. import command
-@command('train')
+
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
     model, args, addl_targs = process_args(parse_args(argv=argv))
@@ -187,7 +186,7 @@ def run_lightning(argv=None):
 
     print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds))
 
-@command('lr-find')
+
 def lightning_lr_find(argv=None):
     '''Run Lightning Learning Rate finder'''
     import matplotlib.pyplot as plt
@@ -221,8 +220,7 @@ def lightning_lr_find(argv=None):
     fig = lr_finder.plot(suggest=True)
     fig.savefig(output('lr_finder_results.png'))
 
-@command('cuda-sum')
-def num_gpus(argv=None):
+def cuda_sum(argv=None):
     '''Summarize what Torch sees in CUDA land'''
     import torch
     print('torch.cuda.is_available:', torch.cuda.is_available())
