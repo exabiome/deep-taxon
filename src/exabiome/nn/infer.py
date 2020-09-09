@@ -155,9 +155,6 @@ def process_args(argv=None):
 
     return tuple(ret)
 
-from .. import command
-
-@command('infer')
 def run_inference(argv=None):
     """Run inference using PyTorch
 
