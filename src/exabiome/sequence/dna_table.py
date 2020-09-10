@@ -496,20 +496,34 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
         chunk_end = list()
         labels = list()
 
-        # lengths = difile.seq_table['length'][:]
-        # seqlabels = difile.labels
+        #lengths = difile.seq_table['length'][:]
+        #seqlabels = difile.labels
         for i in range(len(difile)):
             row = difile[i]
             label = row['label'] # seqlabels[i]
             #for start in range(0, lengths[i], step):
             seqlen = row['length']
-            for start in range(0, seqlen, step):
-                end = min(seqlen, start+step)
-                if (end - start) >= self.min_seq_len:
-                    labels.append(label)
-                    seq_idx.append(i)
-                    chunk_start.append(start)
-                    chunk_end.append(end)
+            start = np.arange(0, seqlen, step)
+            end = start + step
+            end[-1] = seqlen
+            if end[-1] - start[-1] < self.min_seq_len:
+                start = start[:-1]
+                end = end[:-1]
+            labels.append(np.full(start.shape[0], label))
+            seq_idx.append(np.full(start.shape[0], i))
+            chunk_start.append(start)
+            chunk_end.append(end)
+            #for start in range(0, seqlen, step):
+            #    end = min(seqlen, start+step)
+            #    if (end - start) >= self.min_seq_len:
+            #        labels.append(label)
+            #        seq_idx.append(i)
+            #        chunk_start.append(start)
+            #        chunk_end.append(end)
+        chunk_start = np.concatenate(chunk_start)
+        chunk_end = np.concatenate(chunk_end)
+        seq_idx = np.concatenate(seq_idx)
+        labels = np.concatenate(labels)
         super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
 
 

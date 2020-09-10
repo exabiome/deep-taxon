@@ -26,7 +26,7 @@ reqs = [
     'numpy',
     'scipy',
     'scikit-learn',
-    'scikit-bio',
+    #'scikit-bio',
     'hdmf',
 ]
 

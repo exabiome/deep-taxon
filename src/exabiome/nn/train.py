@@ -48,6 +48,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
+    parser.add_argument('-n', '--num_nodes', default=1, help='the number of nodes to run on')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
@@ -55,7 +56,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--half', action='store_true', default=False, help='use 16-bit (i.e. half-precision) training')
     parser.add_argument('--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
-    parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
+    parser.add_argument('-l', '--logger', type=parse_logger, default=None, help='path to logger [stdout]')
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
     parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
@@ -65,6 +66,9 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
+    grp = parser.add_mutually_exclusive_group()
+    parser.add_argument('--summit', default=False, action='store_true', help='running on Summit system')
+
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -84,15 +88,6 @@ def process_args(args=None, return_io=False):
     """
     if not isinstance(args, argparse.Namespace):
         args = parse_args(args)
-
-    logger = args.logger
-    # set up logger
-    if logger is None:
-        logger = logging.getLogger()
-        logger.setLevel(logging.INFO)
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-    args.logger = logger
 
     # determing number of input channels:
     # 18 for DNA, 26 for protein
@@ -136,6 +131,21 @@ def process_args(args=None, return_io=False):
     if args.checkpoint:
         args.experiment += '_restart'
 
+    logger = args.logger
+    # set up logger
+    if logger is None:
+        logger = logging.getLogger()
+        logger.setLevel(logging.INFO)
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+    args.logger = logger
+
+    args.loader_kwargs = dict()
+
+    if args.summit:
+        args.loader_kwargs['num_workers'] = 6
+        args.loader_kwargs['multiprocessing_context'] = 'forkserver'
+
     return tuple(ret)
 
 
@@ -164,12 +174,15 @@ def run_lightning(argv=None):
 
     targs = dict(
         checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False),
-        logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
+        #logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
+        logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs')),
         row_log_interval=10,
         log_save_interval=100
     )
     targs.update(addl_targs)
 
+    import pdb
+    pdb.set_trace()
     trainer = Trainer(**targs)
 
     if args.debug:

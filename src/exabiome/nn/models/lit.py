@@ -53,13 +53,16 @@ class AbstractLit(LightningModule):
         Load dataset if it has not been loaded yet
         """
         if not hasattr(self, 'loaders'):
+            print('processing dataset')
             dataset, io = process_dataset(self.hparams, inference=self._inference)
             if self.hparams.load:
+                print('loading dataset')
                 dataset.load()
             kwargs = dict(random_state=self.hparams.seed,
                           batch_size=self.hparams.batch_size,
                           distances=self.hparams.manifold,
                           downsample=self.hparams.downsample)
+            kwargs.update(self.hparams.loader_kwargs)
             if self._inference:
                 kwargs['distances'] = False
             tr, te, va = train_test_loaders(dataset, **kwargs)

@@ -20,7 +20,9 @@ def check_window(window, step):
 
 def read_dataset(path):
     hdmfio = get_hdf5io(path, 'r')
+    print('hdmfio.read')
     difile = hdmfio.read()
+    print('SeqDataset')
     dataset = SeqDataset(difile)
     return dataset, hdmfio
 
@@ -34,6 +36,8 @@ def process_dataset(args, path=None, inference=False):
         inference (bool):       load data for inference
     """
     dataset, io = read_dataset(path or args.input)
+    import pdb
+    pdb.set_trace()
 
     if not hasattr(args, 'classify'):
         raise ValueError('Parser must check for classify/regression/manifold '
