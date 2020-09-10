@@ -369,7 +369,7 @@ class DNAVocabGeneIterator(VocabIterator):
         self.logger.info('reading %s', path)
         kwargs = {'format': 'fasta', 'constructor': self.skbio_cls, 'validate': False}
         for seq in skbio.io.read(path, **kwargs):
-            ltag = re.findall("\[locus_tag=([^[\]]*)\]", seq.metadata['description'])
+            ltag = re.findall("\[locus_tag=([^[\]]*)\]", seq.metadata['description'])[0]
             yield seq, ltag
 
 def _get_AA_map():
