@@ -362,7 +362,9 @@ class DNAVocabIterator(VocabIterator):
     chars, basemap = _get_DNA_map()
 
 class DNAVocabGeneIterator(VocabIterator):
-
+    def __init__(self, paths, locus_ids=None, logger=None, min_seq_len=None):
+        super().__init__(paths, logger=logger, min_seq_len=min_seq_len)
+        self.locus_ids = locus_ids
     chars, basemap = _get_DNA_map()
 
     def _read_seq(self, path):
@@ -370,7 +372,8 @@ class DNAVocabGeneIterator(VocabIterator):
         kwargs = {'format': 'fasta', 'constructor': self.skbio_cls, 'validate': False}
         for seq in skbio.io.read(path, **kwargs):
             ltag = re.findall("\[locus_tag=([^[\]]*)\]", seq.metadata['description'])[0]
-            yield seq, ltag
+            if ltag in self.locus_ids:
+                yield seq, ltag
 
 def _get_AA_map():
     chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
