@@ -12,6 +12,7 @@ class SlurmJob(AbstractJob):
     nodes_flag = 'n'
     submit_cmd = 'sbatch'
     job_var = 'SLURM_JOB_ID'
+    job_fmt_var = 'j'
 
     debug_queue = 'debug'
 

@@ -12,6 +12,8 @@ class LSFJob(AbstractJob):
     nodes_flag = 'nnodes'
     submit_cmd = 'bsub'
     job_var = 'LSB_JOBID'
+    job_fmt_var = 'J'
+    job_id_re = 'Job <(\d+)>'
 
     debug_queue = 'debug'
 

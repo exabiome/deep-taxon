@@ -1,11 +1,13 @@
 import sys
 import os.path
 import argparse
+import shutil
 
 from .summit import LSFJob
 from .cori import SlurmJob
 
-from ..utils import get_seed
+from ..utils import get_seed, check_argv
+
 
 def check_summit(args):
     if args.gpus is None:
@@ -13,7 +15,9 @@ def check_summit(args):
     if args.nodes is None:
         args.nodes = 2
     if args.outdir is None:
-        args.outdir = os.path.abspath("$PROJWORK/bif115/../scratch/ajtritt/deep-index")
+        args.outdir = os.path.realpath(os.path.expandvars("$PROJWORK/bif115/../scratch/$USER/deep-index"))
+    if args.conda_env is None:
+        args.conda_env = 'exabiome-wml'
 
 
 def check_cori(args):
@@ -24,13 +28,15 @@ def check_cori(args):
     if args.outdir is None:
         args.outdir = os.path.abspath("$CSCRATCH/exabiome/deep-index")
 
+
 def run_train(argv=None):
+    argv = check_argv(argv)
 
     parser = argparse.ArgumentParser()
     parser.add_argument('input', help='the input file to use')
     parser.add_argument('sh', nargs='?', help='the input file to use')
 
-    parser.add_argument('-q', '--submit',         help="submit job to queue", action='store_true', default=False)
+    parser.add_argument('-q', '--submit',      help="submit job to queue", action='store_true', default=False)
     parser.add_argument('-O', '--outdir',      help="the output directory", default=None)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
@@ -38,11 +44,12 @@ def run_train(argv=None):
     rsc_grp.add_argument('-n', '--nodes',      help="the number of nodes to use", default=None)
     rsc_grp.add_argument('-g', '--gpus',       help="the number of GPUs to use", default=None)
 
-    grp = parser.add_mutually_exclusive_group()
+    system_grp = parser.add_argument_group('Compute system')
+    grp = system_grp.add_mutually_exclusive_group()
     grp.add_argument('--cori',   help='make script for running on NERSC Cori',  action='store_true', default=False)
     grp.add_argument('--summit', help='make script for running on OLCF Summit', action='store_true', default=False)
 
-    parser.add_argument('-r', '--rate',           help="the learning rate to use for training", default=0.001)
+    parser.add_argument('-r', '--rate',         help="the learning rate to use for training", default=0.001)
     parser.add_argument('-o', '--output_dims',  help="the number of dimensions to output", default=256)
     parser.add_argument('-A', '--accum',        help="the number of batches to accumulate", default=1)
     parser.add_argument('-b', '--batch_size',   help="the number of batches to accumulate", default=64)
@@ -61,10 +68,7 @@ def run_train(argv=None):
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help="the conda environment ot use", default=None)
 
-    summit_grp = parser.add_argument_group("Summit arguments")
-    summit_grp.add_argument('--bb', help="use burst buffer", action='store_true', default=False)
-
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.seed is None:
         args.seed = get_seed()
@@ -73,7 +77,7 @@ def run_train(argv=None):
     if args.summit:
         check_summit(args)
         job = LSFJob()
-        job.set_conda_env('exabiome_wml')
+        job.set_conda_env(args.conda_env)
         job.add_modules('ibm-wml-ce/1.7.1.a0-0')
         if not args.load:
             job.set_use_bb(True)
@@ -84,7 +88,6 @@ def run_train(argv=None):
     job.nodes = args.nodes
     job.time = args.time
     job.gpus = args.gpus
-
 
     args.input = os.path.abspath(args.input)
 
@@ -120,8 +123,15 @@ def run_train(argv=None):
 
     options += f' -E {exp}'
 
+    expdir = f'{args.outdir}/train/datasets/{args.dataset}/{chunks}/{args.model}/{args.loss}/{exp}'
+    if not os.path.exists(expdir):
+        os.makedirs(expdir)
+
+    job.output = f'{expdir}/train.%{job.job_fmt_var}.log'
+    job.error = job.output
+
     job.set_env_var('OPTIONS', options)
-    job.set_env_var('OUTDIR', f'{args.outdir}/train/datasets/{args.dataset}/{chunks}/{args.model}/{args.loss}/{exp}/$JOB')
+    job.set_env_var('OUTDIR', f'{expdir}/$JOB')
     job.set_env_var('INPUT', args.input)
     job.set_env_var('LOG', '$OUTDIR/log')
 
@@ -130,13 +140,13 @@ def run_train(argv=None):
     train_cmd = 'deep-index train'
     if args.summit:
         train_cmd += ' --summit'
-        if args.bb:
+        if job.use_bb:
             job.set_env_var('BB_INPUT', '/mnt/bb/$USER/`basename $INPUT`')
             input_var = 'BB_INPUT'
 
     train_cmd += f' $OPTIONS {args.model} ${input_var} $OUTDIR'
 
-    if args.summit and args.bb:
+    if args.summit and job.use_bb:
         job.add_command('echo "$INPUT to $BB_INPUT"')
         job.add_command('cp $INPUT $BB_INPUT')
 
@@ -150,6 +160,10 @@ def run_train(argv=None):
         with open(args.sh, 'w') as out:
             job.write(out)
         if args.submit:
-            job.submit(args.sh)
+            job_id = job.submit_job(args.sh)
+            dest = f'{expdir}/train.{job_id}.sh'
+            print(f'copying submission script to {dest}')
+            shutil.copyfile(args.sh, dest)
+
     else:
         job.write(sys.stdout)

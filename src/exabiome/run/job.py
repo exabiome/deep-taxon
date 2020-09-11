@@ -1,7 +1,72 @@
-import abc
+import re
+import subprocess
+from abc import abstractmethod, ABCMeta
 from collections import OrderedDict
 
-class AbstractJob(metaclass=abc.ABCMeta):
+class AbstractJob(metaclass=ABCMeta):
+
+    @property
+    @abstractmethod
+    def directive(self):
+        pass
+
+    @property
+    @abstractmethod
+    def queue_flag(self):
+        pass
+
+    @property
+    @abstractmethod
+    def project_flag(self):
+        pass
+
+    @property
+    @abstractmethod
+    def time_flag(self):
+        pass
+
+    @property
+    @abstractmethod
+    def output_flag(self):
+        pass
+
+    @property
+    @abstractmethod
+    def error_flag(self):
+        pass
+
+    @property
+    @abstractmethod
+    def jobname_flag(self):
+        pass
+
+    @property
+    @abstractmethod
+    def nodes_flag(self):
+        pass
+
+    @property
+    @abstractmethod
+    def submit_cmd(self):
+        pass
+
+    @property
+    @abstractmethod
+    def job_var(self):
+        pass
+
+    @property
+    @abstractmethod
+    def job_fmt_var(self):
+        pass
+
+    @property
+    @abstractmethod
+    def job_id_re(self):
+        pass
+
+    debug_queue = 'debug'
+
 
     def __init__(self, **kwargs):
         self.queue = kwargs.get('queue')
@@ -40,15 +105,24 @@ class AbstractJob(metaclass=abc.ABCMeta):
         self.addl_job_flags[flag] = val
 
     def submit_job(self, path):
-        subprocess.check_output(
-            f'{self.submit_cmd} {path}',
-            stderr=subprocess.STDOUT,
-            shell=True)
+        output = subprocess.check_output(
+                    f'{self.submit_cmd} {path}',
+                    stderr=subprocess.STDOUT,
+                    shell=True).decode('utf-8')
+
+        return self.extract_job_id(output)
+
+    def extract_job_id(self, output):
+        '''
+        Example output:
+        Job <338648> is submitted to queue <debug>.
+        '''
+        return int(re.search(self.job_id_re, output).groups(0)[0])
 
     def write_additional(self, f, options):
         pass
 
-    @abc.abstractmethod
+    @abstractmethod
     def write_run(self, f, command, command_options, options):
         pass
 
@@ -83,7 +157,7 @@ class AbstractJob(metaclass=abc.ABCMeta):
             print(f'conda activate {self.conda_env}', file=f)
         print(file=f)
         for k, v in self.env_vars.items():
-            print(f'{k}="{v}"')
+            print(f'{k}="{v}"', file=f)
         print(file=f)
         for c in self.commands:
             if isinstance(c, dict):
