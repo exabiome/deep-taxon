@@ -60,7 +60,7 @@ def process_dataset(args, path=None, inference=False):
     if args.window is not None:
         dataset.set_chunks(args.window, args.step)
         #dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
-    if getattr(args, 'revcomp', False):
+    if not getattr(args, 'fwd_only', False):
         dataset.set_revcomp()
     if args.load:
         dataset.load()

@@ -56,14 +56,13 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--half', action='store_true', default=False, help='use 16-bit (i.e. half-precision) training')
     parser.add_argument('--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
-    parser.add_argument('-l', '--logger', type=parse_logger, default=None, help='path to logger [stdout]')
     parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
-    parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+    parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
-    parser.add_argument('-r', '--revcomp', default=False, action='store_true', help='use reverse strand of sequences')
-    parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
+    parser.add_argument('-F', '--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
+    parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
     grp = parser.add_mutually_exclusive_group()
@@ -131,15 +130,6 @@ def process_args(args=None, return_io=False):
     if args.checkpoint:
         args.experiment += '_restart'
 
-    logger = args.logger
-    # set up logger
-    if logger is None:
-        logger = logging.getLogger()
-        logger.setLevel(logging.INFO)
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-    args.logger = logger
-
     args.loader_kwargs = dict()
 
     if args.summit:
@@ -161,7 +151,6 @@ def run_lightning(argv=None):
     outbase, output = process_output(args)
     check_directory(outbase)
     print(args)
-    del args.logger
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
