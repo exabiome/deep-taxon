@@ -6,3 +6,4 @@ hdmf
 umap
 torch
 pytorch_lightning
+seaborn

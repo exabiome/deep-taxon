@@ -10,8 +10,6 @@ class MultiHeadAttention(AbstractLit):
         super().__init__(hparams)
         self.in_channel = in_dim
         self.activation = activation
-        print("====", num_heads)
-        # add to config later
         self.num_attention_heads = num_heads
         assert in_dim % self.num_attention_heads == 0, "The input size is not a multiple of the number of attention heads"
         self.attention_head_size = int(in_dim / self.num_attention_heads)

@@ -28,7 +28,6 @@ def read_dataset(path):
 def process_dataset(args, path=None, inference=False):
     """
     Process *input* argument and return dataset and HDMFIO object
-
     Args:
         args (Namespace):       command-line arguments passed by parser
         inference (bool):       load data for inference
@@ -195,11 +194,8 @@ def train_test_validate_split(data, stratify=None, random_state=None,
                               test_size=0.1, train_size=0.8, validation_size=0.1):
     """
     Return train test validation split of given data
-
-
     test_size, train_size, validation_size will all be normalized before subsequent
     calls to train_test_split
-
     Args:
         data (str): the path to the DeepIndex file
         kwargs    : any additional arguments to pass into torch.DataLoader
@@ -257,7 +253,6 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
                        **kwargs):
     """
     Return DataLoaders for training and test datasets.
-
     Args:
         path (str):                  the path to the DeepIndex file
         distances (str):             return distances for the

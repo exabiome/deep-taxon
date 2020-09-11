@@ -5,16 +5,15 @@ import torch.nn.functional as F
 
 from . import model, AbstractLit
 
-class Self_Attention(nn.Module):
+class SelfAttention(nn.Module):
     """ Self attention Layer """
-    def __init__(self, in_dim, activation):
+    def __init__(self, in_dim):
         super().__init__()
         self.in_channel = in_dim
-        self.activation = activation
 
-        self.query = nn.Conv1d(in_channels = in_dim, out_channels = in_dim//8, kernel_size= 1)
-        self.key = nn.Conv1d(in_channels = in_dim, out_channels = in_dim//8, kernel_size= 1)
-        self.value = nn.Conv1d(in_channels = in_dim, out_channels = in_dim, kernel_size= 1)
+        self.query = nn.Conv1d(in_channels=in_dim, out_channels=in_dim//8, kernel_size= 1)
+        self.key = nn.Conv1d(in_channels=in_dim, out_channels=in_dim//8, kernel_size= 1)
+        self.value = nn.Conv1d(in_channels=in_dim, out_channels=in_dim, kernel_size= 1)
         self.gamma = nn.Parameter(torch.zeros(1))
 
         self.softmax = nn.Softmax(dim=-1)
@@ -31,13 +30,11 @@ class Self_Attention(nn.Module):
             2. matmul transposed query (B x W x C/8) by key (B x C/8 x W) = scores (B x W x W)
             3. normalize to sum to 1 with softmax
             4. matmul value (B x C x W) by scores (B x W x W) = out (B x C x W)
-            
-
         """
         batch_size, conv, width = x.size()
-        proj_query  = self.query(x).view(batch_size, -1, width).permute(0, 2, 1) 
-        proj_key =  self.key(x).view(batch_size, -1, width) 
-        scores =  torch.bmm(proj_query, proj_key) 
+        proj_query = self.query(x).view(batch_size, -1, width).permute(0, 2, 1)
+        proj_key = self.key(x).view(batch_size, -1, width)
+        scores = torch.bmm(proj_query, proj_key)
         attention = self.softmax(scores) 
         proj_value = self.value(x).view(batch_size, -1, width)
         out = torch.bmm(proj_value, attention)
@@ -45,7 +42,7 @@ class Self_Attention(nn.Module):
 
         out = self.gamma*out + x
         return out, attention
-    
+
 
 @model('roznet_attn')
 class RozNetAttn(AbstractLit):
@@ -63,8 +60,10 @@ class RozNetAttn(AbstractLit):
         n_outputs = getattr(hparams, 'n_outputs', 2)
         first_kernel_size = getattr(hparams, 'first_kernel_size', 7)
         maxpool = getattr(hparams, 'maxpool', True)
+        emb_dim = 8
+        self.embedding = nn.Embedding(input_nc, emb_dim)
         self.features = nn.Sequential(
-            nn.Conv1d(input_nc, 64, kernel_size=first_kernel_size, stride=1, padding=2),
+            nn.Conv1d(emb_dim, 64, kernel_size=first_kernel_size, stride=1, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3, stride=1),
@@ -100,9 +99,10 @@ class RozNetAttn(AbstractLit):
             #nn.BatchNorm1d(n_outputs)
         )
 
-        self.attention = Self_Attention(256, 'relu')
+        self.attention = SelfAttention(256)
 
     def forward(self, x, **kwargs):
+        x = self.embedding(x).permute(0, 2, 1)
         x = self.features(x)
         x = self.attention(x)[0]
         x = self.pool(x)

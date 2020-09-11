@@ -82,7 +82,7 @@ def prepare_data(argv=None):
     from hdmf.data_utils import DataChunkIterator
 
     from ..utils import get_faa_path, get_fna_path, get_genomic_path
-    from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator
+    from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator, DNAVocabGeneIterator
     from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
 
     parser = argparse.ArgumentParser()
@@ -212,7 +212,11 @@ def prepare_data(argv=None):
             seqit = AAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
         else:
             SeqTable = DNATable
-            seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+            if args.cds:
+                logger.info("reading and writing CDS sequences")
+                seqit = DNAVocabGeneIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+            else:
+                seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
     else:
         if args.protein:
             logger.info("reading and writing protein sequences")
