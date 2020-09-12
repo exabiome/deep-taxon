@@ -98,6 +98,11 @@ def process_args(args=None, return_io=False):
         input_nc = 5
     args.input_nc = input_nc
 
+    args.loader_kwargs = dict()
+    if args.summit:
+        args.loader_kwargs['num_workers'] = 6
+        args.loader_kwargs['multiprocessing_context'] = 'forkserver'
+
     model = process_model(args)
 
     targs = dict(
@@ -134,12 +139,6 @@ def process_args(args=None, return_io=False):
 
     if args.checkpoint:
         args.experiment += '_restart'
-
-    args.loader_kwargs = dict()
-
-    if args.summit:
-        args.loader_kwargs['num_workers'] = 6
-        args.loader_kwargs['multiprocessing_context'] = 'forkserver'
 
     return tuple(ret)
 

@@ -160,11 +160,14 @@ def run_train(argv=None):
 
     if args.summit:
         #job.add_command('$CMD > $LOG 2>&1', run='horovodrun -np %d' % (args.gpus * args.nodes))
-        jsrun = 'jsrun -n {nrs} -a {tasks_per_rs} -c {cpu_per_rs} -g {gpu_per_rs}'
-        jsrun = jsrun.format(nrs=args.gpus * args.nodes,
-                             tasks_per_rs=1,
-                             cpu_per_rs=7,
-                             gpu_per_rs=1)
+        #jsrun = 'jsrun -n {nrs} -a {tasks_per_rs} -c {cpu_per_rs} -g {gpu_per_rs}'
+        # when using regular DDP, jsrun should be called with one rank per node
+        # to work with PyTorch Lightning
+        jsrun = 'jsrun -n {nrs} -g {gpu_per_rs}'
+        jsrun = jsrun.format(nrs=args.nodes,
+                             #tasks_per_rs=1,
+                             #cpu_per_rs=7,
+                             gpu_per_rs=args.gpus)
 
         job.add_command('$CMD > $LOG 2>&1', run=jsrun)
     else:

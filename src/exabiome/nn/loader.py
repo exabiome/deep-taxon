@@ -20,9 +20,7 @@ def check_window(window, step):
 
 def read_dataset(path):
     hdmfio = get_hdf5io(path, 'r')
-    print('hdmfio.read')
     difile = hdmfio.read()
-    print('SeqDataset')
     dataset = SeqDataset(difile)
     return dataset, hdmfio
 
