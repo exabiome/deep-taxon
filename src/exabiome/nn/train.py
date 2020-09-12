@@ -109,6 +109,11 @@ def process_args(args=None, return_io=False):
     targs['gpus'] = process_gpus(args.gpus)
     if targs['gpus'] != 1:
         targs['distributed_backend'] = 'ddp'
+        #if args.summit:
+        #    targs['distributed_backend'] = 'horovod'
+        #    targs['gpus'] = 1
+        #else:
+        #    targs['distributed_backend'] = 'ddp'
     del args.gpus
 
     if args.debug:
@@ -170,8 +175,6 @@ def run_lightning(argv=None):
     )
     targs.update(addl_targs)
 
-    import pdb
-    pdb.set_trace()
     trainer = Trainer(**targs)
 
     if args.debug:

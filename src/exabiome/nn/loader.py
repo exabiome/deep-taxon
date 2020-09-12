@@ -36,8 +36,6 @@ def process_dataset(args, path=None, inference=False):
         inference (bool):       load data for inference
     """
     dataset, io = read_dataset(path or args.input)
-    import pdb
-    pdb.set_trace()
 
     if not hasattr(args, 'classify'):
         raise ValueError('Parser must check for classify/regression/manifold '

@@ -95,7 +95,9 @@ class AbstractJob(metaclass=ABCMeta):
     def set_env_var(self, var, value):
         self.env_vars[var] = value
 
-    def add_command(self, cmd):
+    def add_command(self, cmd, run=None):
+        if run is not None:
+            cmd = f'{run} {cmd}'
         self.commands.append(cmd)
 
     def set_debug(self, debug):
@@ -160,12 +162,13 @@ class AbstractJob(metaclass=ABCMeta):
             print(f'{k}="{v}"', file=f)
         print(file=f)
         for c in self.commands:
-            if isinstance(c, dict):
-                try:
-                    command = c['run']
-                    cmd_options = c.get('options')
-                    self.write_run(f, command, cmd_options, options)
-                except KeyError as e:
-                    raise Exception("if using a dict as a command, it must have the key 'run' to indicate this is a resourced command")
-            else:
-                print(c, file=f)
+            #if isinstance(c, dict):
+            #    try:
+            #        command = c['run']
+            #        cmd_options = c.get('options')
+            #        self.write_run(f, command, cmd_options, options)
+            #    except KeyError as e:
+            #        raise Exception("if using a dict as a command, it must have the key 'run' to indicate this is a resourced command")
+            #else:
+            #    print(c, file=f)
+            print(c, file=f)

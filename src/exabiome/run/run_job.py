@@ -103,6 +103,9 @@ def run_train(argv=None):
 
     exp = f'n{args.nodes}_g{args.gpus}_A{args.accum}_b{args.batch_size}_r{args.rate}_o{args.output_dims}'
 
+    if args.load:
+        options += f' -l'
+
     if args.fwd_only:
         options += ' -F'
         chunks += '_fwd-only'
@@ -148,13 +151,24 @@ def run_train(argv=None):
 
     if args.summit and job.use_bb:
         job.add_command('echo "$INPUT to $BB_INPUT"')
-        job.add_command('cp $INPUT $BB_INPUT')
+        job.add_command('cp $INPUT $BB_INPUT', run='jsrun -n 1')
+        job.add_command('/mnt/bb/$USER', run='jsrun -n 1')
 
     job.set_env_var('CMD', train_cmd)
 
     job.add_command('mkdir -p $OUTDIR')
 
-    job.add_command({'run': '$CMD > $LOG 2>&1'})
+    if args.summit:
+        #job.add_command('$CMD > $LOG 2>&1', run='horovodrun -np %d' % (args.gpus * args.nodes))
+        jsrun = 'jsrun -n {nrs} -a {tasks_per_rs} -c {cpu_per_rs} -g {gpu_per_rs}'
+        jsrun = jsrun.format(nrs=args.gpus * args.nodes,
+                             tasks_per_rs=1,
+                             cpu_per_rs=7,
+                             gpu_per_rs=1)
+
+        job.add_command('$CMD > $LOG 2>&1', run=jsrun)
+    else:
+        job.add_command('$CMD > $LOG 2>&1', run='srun')
 
     if args.sh is not None:
         with open(args.sh, 'w') as out:
