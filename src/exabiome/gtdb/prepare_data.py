@@ -123,7 +123,7 @@ def prepare_data(argv=None):
     # read locus tags
     logger.info('reading locus tags %s' % args.locus_tags)
     with open(args.locus_tags, 'r') as f:
-        locus_ids = [l[:-1] for l in f.readlines()]
+        locus_ids = set([l[:-1] for l in f.readlines()])
 
     # get paths to Fasta Files
     fa_path_func = get_genomic_path
