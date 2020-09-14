@@ -87,11 +87,13 @@ def prepare_data(argv=None):
 
     parser = argparse.ArgumentParser()
     parser.add_argument('accessions', type=str, help='file of the NCBI accessions of the genomes to convert')
+
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('out', type=str, help='output HDF5')
     grp = parser.add_mutually_exclusive_group()
+    parser.add_argument('--locus_tags', type=str, help='file of the NCBI locus tags of the genes to convert', default=None)
     parser.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
@@ -117,6 +119,11 @@ def prepare_data(argv=None):
     logger.info('reading accessions %s' % args.accessions)
     with open(args.accessions, 'r') as f:
         taxa_ids = [l[:-1] for l in f.readlines()]
+
+    # read locus tags
+    logger.info('reading locus tags %s' % args.locus_tags)
+    with open(args.locus_tags, 'r') as f:
+        locus_ids = set([l[:-1] for l in f.readlines()])
 
     # get paths to Fasta Files
     fa_path_func = get_genomic_path
@@ -214,7 +221,7 @@ def prepare_data(argv=None):
             SeqTable = DNATable
             if args.cds:
                 logger.info("reading and writing CDS sequences")
-                seqit = DNAVocabGeneIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+                seqit = DNAVocabGeneIterator(fapaths, locus_ids=locus_ids, logger=logger, min_seq_len=args.min_len)
             else:
                 seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
     else:
