@@ -38,11 +38,13 @@ def run_train(argv=None):
 
     parser.add_argument('-q', '--submit',      help="submit job to queue", action='store_true', default=False)
     parser.add_argument('-O', '--outdir',      help="the output directory", default=None)
+    parser.add_argument('--profile',           help="use PTL profiling", action='store_true', default=False)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
     rsc_grp.add_argument('-t', '--time',       help='the time to run the job for', default='01:00:00')
     rsc_grp.add_argument('-n', '--nodes',      help="the number of nodes to use", default=None)
     rsc_grp.add_argument('-g', '--gpus',       help="the number of GPUs to use", default=None)
+    rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
@@ -88,6 +90,7 @@ def run_train(argv=None):
     job.nodes = args.nodes
     job.time = args.time
     job.gpus = args.gpus
+    job.jobname = args.jobname
 
     args.input = os.path.abspath(args.input)
 
@@ -95,6 +98,9 @@ def run_train(argv=None):
     if args.debug:
         job.set_debug(True)
         options = '-d'
+
+    if args.profile:
+        options += f' --profile'
 
     chunks = f'chunks_W{args.window}_S{args.step}'
 
@@ -130,13 +136,13 @@ def run_train(argv=None):
     if not os.path.exists(expdir):
         os.makedirs(expdir)
 
-    job.output = f'{expdir}/train.%{job.job_fmt_var}.log'
+    job.output = f'{expdir}/train.%{job.job_fmt_var}.lfs_log'
     job.error = job.output
 
     job.set_env_var('OPTIONS', options)
-    job.set_env_var('OUTDIR', f'{expdir}/$JOB')
+    job.set_env_var('OUTDIR', f'{expdir}/train.$JOB')
     job.set_env_var('INPUT', args.input)
-    job.set_env_var('LOG', '$OUTDIR/log')
+    job.set_env_var('LOG', '$OUTDIR.log')
 
     input_var = 'INPUT'
 
@@ -168,7 +174,7 @@ def run_train(argv=None):
                              #tasks_per_rs=1,
                              #cpu_per_rs=7,
                              gpu_per_rs=args.gpus)
-
+        jsrun = 'ddlrun'
         job.add_command('$CMD > $LOG 2>&1', run=jsrun)
     else:
         job.add_command('$CMD > $LOG 2>&1', run='srun')
@@ -179,7 +185,9 @@ def run_train(argv=None):
         if args.submit:
             job_id = job.submit_job(args.sh)
             dest = f'{expdir}/train.{job_id}.sh'
-            print(f'copying submission script to {dest}')
+            print(f'copying submission script to {os.path.relpath(dest)}')
+            logpath = os.path.relpath(f'{expdir}/train.{job_id}.log')
+            print(f'logging to {logpath}')
             shutil.copyfile(args.sh, dest)
 
     else:

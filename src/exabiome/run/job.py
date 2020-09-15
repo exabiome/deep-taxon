@@ -141,6 +141,7 @@ class AbstractJob(metaclass=ABCMeta):
         self.write_line(f, self.nodes_flag, self.nodes)
         self.write_line(f, self.output_flag, self.output)
         self.write_line(f, self.error_flag, self.error)
+        self.write_line(f, self.jobname_flag, self.jobname)
         for k, v in self.addl_job_flags.items():
             self.write_line(f, k, v)
 

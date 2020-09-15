@@ -24,9 +24,9 @@ class LSFJob(AbstractJob):
         self.time = time
         self.nodes = nodes
         self.jobname = jobname
-        if self.jobname is not None:
-            self.output = f'{self.jobname}.%J'
-            self.error = f'{self.jobname}.%J'
+        #if self.jobname is not None:
+        #    self.output = f'{self.jobname}.%J'
+        #    self.error = f'{self.jobname}.%J'
         self.use_bb = False
 
     def set_use_bb(self, use_bb=True):
@@ -35,7 +35,8 @@ class LSFJob(AbstractJob):
     def write_additional(self, f, options=None):
         if options is None:
             options = dict()
-        alloc_flags = ['gpumps']
+        #alloc_flags = ['gpumps']
+        alloc_flags = list()
         if self.use_bb:
             alloc_flags.append('NVME')
         if len(alloc_flags):

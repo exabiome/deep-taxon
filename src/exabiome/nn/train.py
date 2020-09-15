@@ -53,10 +53,10 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
-    parser.add_argument('--half', action='store_true', default=False, help='use 16-bit (i.e. half-precision) training')
+    parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
-    parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
+    parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
@@ -109,6 +109,9 @@ def process_args(args=None, return_io=False):
         max_epochs=args.epochs,
     )
 
+    if args.profile:
+        targs['profiler'] = True
+
     targs['accumulate_grad_batches'] = args.accumulate
 
     targs['gpus'] = process_gpus(args.gpus)
@@ -128,10 +131,10 @@ def process_args(args=None, return_io=False):
         targs['auto_lr_find'] = True
     del args.lr_find
 
-    if args.half:
+    if args.fp16:
         targs['amp_level'] = 'O2'
         targs['precision'] = 16
-    del args.half
+    del args.fp16
 
     ret = [model, args, targs]
     if return_io:
@@ -150,6 +153,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
+    print(argv)
     model, args, addl_targs = process_args(parse_args(argv=argv))
 
     outbase, output = process_output(args)
@@ -188,7 +192,8 @@ def run_lightning(argv=None):
     hours, seconds = divmod(td.seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
 
-    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds))
+    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
+    print("Total seconds:", td.total_seconds(), file=sys.stderr)
 
 
 def lightning_lr_find(argv=None):
