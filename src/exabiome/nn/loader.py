@@ -169,11 +169,26 @@ class SeqDataset(Dataset):
                 data.transform(tfm)
 
     def load(self, device=None):
+        def _load(data):
+            return data[:]
+
         tfm = self._to_torch(device)
         def to_sint(data):
             return data[:].astype(np.int16)
         self._check_load(self.difile.seq_table['sequence'].target, [to_sint, tfm])
         self._check_load(self.difile.taxa_table[self._label_key], tfm)
+        self._check_load(self.difile.distances, tfm)
+
+        for col in self.difile.seq_table.children:
+            if col.name == 'sequence':
+                continue
+            col.transform(_load)
+
+        for col in self.difile.taxa_table.children:
+            if col.name == self._label_key:
+                continue
+            col.transform(_load)
+
 
     def __getitem__(self, i):
         # get sequence
@@ -277,6 +292,9 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
     collater = collate
     if distances:
         collater = DistanceCollater(dataset.difile.distances.data[:])
+
+    print('-------- Pinning memory')
+    kwargs['pin_memory'] = True
 
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)

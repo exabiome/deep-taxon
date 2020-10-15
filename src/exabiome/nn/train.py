@@ -48,7 +48,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
-    parser.add_argument('-n', '--num_nodes', default=1, help='the number of nodes to run on')
+    parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
@@ -65,6 +65,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
+    parser.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
     grp = parser.add_mutually_exclusive_group()
     parser.add_argument('--summit', default=False, action='store_true', help='running on Summit system')
 
@@ -101,12 +102,13 @@ def process_args(args=None, return_io=False):
     args.loader_kwargs = dict()
     if args.summit:
         args.loader_kwargs['num_workers'] = 6
-        args.loader_kwargs['multiprocessing_context'] = 'forkserver'
+        args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
     model = process_model(args)
 
     targs = dict(
         max_epochs=args.epochs,
+        num_nodes=args.num_nodes,
     )
 
     if args.profile:
@@ -114,14 +116,24 @@ def process_args(args=None, return_io=False):
 
     targs['accumulate_grad_batches'] = args.accumulate
 
-    targs['gpus'] = process_gpus(args.gpus)
-    if targs['gpus'] != 1:
-        targs['distributed_backend'] = 'ddp'
-        #if args.summit:
-        #    targs['distributed_backend'] = 'horovod'
-        #    targs['gpus'] = 1
-        #else:
-        #    targs['distributed_backend'] = 'ddp'
+    #if args.gpus is not None:
+    #    targs['gpus'] = 1
+    #targs['distributed_backend'] = 'horovod'
+
+    if args.horovod:
+        targs['distributed_backend'] = 'horovod'
+        if args.gpus:
+            targs['gpus'] = 1
+    else:
+        targs['gpus'] = process_gpus(args.gpus)
+        targs['num_nodes'] = args.num_nodes
+        if targs['gpus'] != 1 or targs['num_nodes'] > 1:
+            targs['distributed_backend'] = 'ddp'
+            #if args.summit:
+            #    targs['distributed_backend'] = 'horovod'
+            #    targs['gpus'] = 1
+            #else:
+            #    targs['distributed_backend'] = 'ddp'
     del args.gpus
 
     if args.debug:
@@ -170,7 +182,7 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False),
+        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False, save_last=True, save_top_k=1),
         #logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
         logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs')),
         row_log_interval=10,
@@ -178,6 +190,7 @@ def run_lightning(argv=None):
     )
     targs.update(addl_targs)
 
+    print('Trainer args:', targs, file=sys.stderr)
     trainer = Trainer(**targs)
 
     if args.debug:
