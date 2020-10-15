@@ -44,22 +44,6 @@ class TorchableMixin:
                 return torch.as_tensor(x, dtype=dtype, device=device)
         return func
 
-    def get_numpy_conversion(self, **kwargs):
-        """
-        Args:
-            maxlen (int):        the maximum sequence length to pad to
-        """
-        maxlen = kwargs.get('maxlen')
-        if np.issubdtype(type(maxlen), np.integer):
-            def func(x):
-                ret = np.zeros((maxlen, x.shape[1]))
-                ret[0:x.shape[0]] = x
-                return ret
-        else:
-            def func(x):
-                return x
-        return func
-
     def set_raw(self):
         self.convert = lambda x: x
 
@@ -115,7 +99,6 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
-        self.convert = self.get_numpy_conversion(maxlen=self.maxlen)
 
     def __getitem__(self, key):
         if isinstance(key, str):
@@ -201,24 +184,6 @@ class AATable(SequenceTable):
                         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
                         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
                        dtype='<U1')
-
-    def get_numpy_conversion(self, **kwargs):
-        """
-        Args:
-            maxlen (int):        the maximum sequence length to pad to
-        """
-        maxlen = kwargs.get('maxlen', None)
-        if np.issubdtype(type(maxlen), np.integer):
-            def func(x):
-                ret = np.zeros([maxlen, 26], dtype=float)
-                ret[np.arange(x.shape[0]), x] = 1.0
-                return ret
-        else:
-            def func(x):
-                ret = np.zeros([x.shape[0], 26], dtype=float)
-                ret[np.arange(x.shape[0]), x] = 1.0
-                return ret
-        return func
 
     def get_torch_conversion(self, **kwargs):
         """
@@ -313,7 +278,6 @@ class TaxaTable(DynamicTable, TorchableMixin):
                 columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
-        self.convert = self.get_numpy_conversion()
 
 
     def taxid_torch_conversion(self, num_classes, device=None):
