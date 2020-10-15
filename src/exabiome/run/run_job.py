@@ -18,6 +18,7 @@ def check_summit(args):
         args.outdir = os.path.realpath(os.path.expandvars("$PROJWORK/bif115/../scratch/$USER/deep-index"))
     if args.conda_env is None:
         args.conda_env = 'exabiome-wml'
+        #args.conda_env = 'exabiome-wml-1.7.0-3'
 
 
 def check_cori(args):
@@ -36,15 +37,16 @@ def run_train(argv=None):
     parser.add_argument('input', help='the input file to use')
     parser.add_argument('sh', nargs='?', help='the input file to use')
 
-    parser.add_argument('-q', '--submit',      help="submit job to queue", action='store_true', default=False)
+    parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
     parser.add_argument('-O', '--outdir',      help="the output directory", default=None)
     parser.add_argument('--profile',           help="use PTL profiling", action='store_true', default=False)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
     rsc_grp.add_argument('-t', '--time',       help='the time to run the job for', default='01:00:00')
-    rsc_grp.add_argument('-n', '--nodes',      help="the number of nodes to use", default=None)
-    rsc_grp.add_argument('-g', '--gpus',       help="the number of GPUs to use", default=None)
+    rsc_grp.add_argument('-n', '--nodes',      help="the number of nodes to use", default=None, type=int)
+    rsc_grp.add_argument('-g', '--gpus',       help="the number of GPUs to use", default=None, type=int)
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
+    rsc_grp.add_argument('-q', '--queue',      help="the queue to submit to", default=None)
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
@@ -81,6 +83,7 @@ def run_train(argv=None):
         job = LSFJob()
         job.set_conda_env(args.conda_env)
         job.add_modules('ibm-wml-ce/1.7.1.a0-0')
+        #job.add_modules('ibm-wml-ce/1.7.0-3')
         if not args.load:
             job.set_use_bb(True)
     else:
@@ -91,6 +94,9 @@ def run_train(argv=None):
     job.time = args.time
     job.gpus = args.gpus
     job.jobname = args.jobname
+
+    if args.queue is not None:
+        job.queue = args.queue
 
     args.input = os.path.abspath(args.input)
 
@@ -136,8 +142,12 @@ def run_train(argv=None):
     if not os.path.exists(expdir):
         os.makedirs(expdir)
 
-    job.output = f'{expdir}/train.%{job.job_fmt_var}.lfs_log'
+    job.output = f'{expdir}/train.%{job.job_fmt_var}.lsf_log'
     job.error = job.output
+
+    if args.nodes > 1:
+        job.set_env_var('OMP_NUM_THREADS', 1)
+        job.set_env_var('NCCL_DEBUG', 'INFO')
 
     job.set_env_var('OPTIONS', options)
     job.set_env_var('OUTDIR', f'{expdir}/train.$JOB')
@@ -162,19 +172,18 @@ def run_train(argv=None):
 
     job.set_env_var('CMD', train_cmd)
 
+    cp_run = None
+    if args.summit:
+        cp_run = 'jsrun -n 1'
+    job.add_command('cp $0 $OUTDIR.sh', run=cp_run)
+
+
     job.add_command('mkdir -p $OUTDIR')
 
     if args.summit:
-        #job.add_command('$CMD > $LOG 2>&1', run='horovodrun -np %d' % (args.gpus * args.nodes))
-        #jsrun = 'jsrun -n {nrs} -a {tasks_per_rs} -c {cpu_per_rs} -g {gpu_per_rs}'
-        # when using regular DDP, jsrun should be called with one rank per node
-        # to work with PyTorch Lightning
-        jsrun = 'jsrun -n {nrs} -g {gpu_per_rs}'
-        jsrun = jsrun.format(nrs=args.nodes,
-                             #tasks_per_rs=1,
-                             #cpu_per_rs=7,
-                             gpu_per_rs=args.gpus)
-        jsrun = 'ddlrun'
+        # when using regular DDP, jsrun should be called with one resource per node (-r) and
+        # one rank per GPU (-a) to work with PyTorch Lightning
+        jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c 42'
         job.add_command('$CMD > $LOG 2>&1', run=jsrun)
     else:
         job.add_command('$CMD > $LOG 2>&1', run='srun')

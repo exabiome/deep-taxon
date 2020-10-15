@@ -38,7 +38,8 @@ class LSFJob(AbstractJob):
         #alloc_flags = ['gpumps']
         alloc_flags = list()
         if self.use_bb:
-            alloc_flags.append('NVME')
+            alloc_flags.append('nvme')
+        alloc_flags.append('smt4')
         if len(alloc_flags):
             self.write_line(f, 'alloc_flags', '"%s"' % ' '.join(alloc_flags))
 

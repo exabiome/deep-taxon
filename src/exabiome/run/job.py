@@ -160,7 +160,10 @@ class AbstractJob(metaclass=ABCMeta):
             print(f'conda activate {self.conda_env}', file=f)
         print(file=f)
         for k, v in self.env_vars.items():
-            print(f'{k}="{v}"', file=f)
+            if isinstance(v, str):
+                print(f'{k}="{v}"', file=f)
+            else:
+                print(f'{k}={v}', file=f)
         print(file=f)
         for c in self.commands:
             #if isinstance(c, dict):
