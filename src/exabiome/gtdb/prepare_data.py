@@ -77,6 +77,8 @@ def prepare_data(argv=None):
     import pandas as pd
 
     from skbio import TreeNode
+    import skbio.io
+    from skbio.sequence import DNA, Protein
 
     from hdmf.common import get_hdf5io
     from hdmf.data_utils import DataChunkIterator
@@ -100,6 +102,7 @@ def prepare_data(argv=None):
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('-V', '--vocab', action='store_true', default=False, help='store sequences as vocabulary data')
+    parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -206,36 +209,64 @@ def prepare_data(argv=None):
     logger.info("reading %d Fasta files" % len(fapaths))
     logger.info("Total size: %d", sum(os.path.getsize(f) for f in fapaths))
 
-    if args.vocab:
-        if args.protein:
-            SeqTable = SequenceTable
-            seqit = AAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+    if args.iter:
+        if args.vocab:
+            if args.protein:
+                SeqTable = SequenceTable
+                seqit = AAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+            else:
+                SeqTable = DNATable
+                seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
         else:
-            SeqTable = DNATable
-            seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+            if args.protein:
+                logger.info("reading and writing protein sequences")
+                seqit = AASeqIterator(fapaths, logger=logger, max_degenerate=args.max_deg, min_seq_len=args.min_len)
+                SeqTable = AATable
+            else:
+                logger.info("reading and writing DNA sequences")
+                seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+                SeqTable = DNATable
+
+        seqit_bsize = 2**25
+        if args.protein:
+            seqit_bsize = 2**15
+        elif args.cds:
+            seqit_bsize = 2**18
+
+        # set up DataChunkIterators
+        sequence = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=seqit_bsize, dtype=np.dtype('uint8'))
+        seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
+        names = DataChunkIterator.from_iterable(seqit.names_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('U'))
+        ids = DataChunkIterator.from_iterable(seqit.id_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
+        taxa = DataChunkIterator.from_iterable(seqit.taxon_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint16'))
+        seqlens = DataChunkIterator.from_iterable(seqit.seqlens_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint32'))
     else:
-        if args.protein:
-            logger.info("reading and writing protein sequences")
-            seqit = AASeqIterator(fapaths, logger=logger, max_degenerate=args.max_deg, min_seq_len=args.min_len)
-            SeqTable = AATable
+        if args.vocab:
+            if args.protein:
+                vocab_it = AAVocabIterator
+                SeqTable = SequenceTable
+            else:
+                vocab_it = DNAVocabIterator
+                SeqTable = DNATable
+
+            sequence = list()
+            names = list()
+            taxa = list()
+            seqlens = list()
+
+            for taxa_i, fa in enumerate(fapaths):
+                kwargs = {'format': 'fasta', 'constructor': self.skbio_cls, 'validate': False}
+                for seq_i, seq in skbio.io.read(path, **kwargs):
+                    sequence.append(vocab_it.encode(seq))
+                    names.append(vocab_it.get_seqname(seq))
+                    taxa.append(taxa_i)
+            ids = np.arange(len(sequence))
+            seqlens = np.array([len(s) for s in sequence])
+            seqindex = np.cumsum(seqlens).astype(int)
+            sequence = np.concatenate(sequence)
         else:
-            logger.info("reading and writing DNA sequences")
-            seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
-            SeqTable = DNATable
+            raise NotImplementedError('cannot load all data into memory unless using vocab encoding')
 
-    seqit_bsize = 2**25
-    if args.protein:
-        seqit_bsize = 2**15
-    elif args.cds:
-        seqit_bsize = 2**18
-
-    # set up DataChunkIterators
-    packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=seqit_bsize, dtype=np.dtype('uint8'))
-    seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
-    names = DataChunkIterator.from_iterable(seqit.names_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('U'))
-    ids = DataChunkIterator.from_iterable(seqit.id_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
-    taxa = DataChunkIterator.from_iterable(seqit.taxon_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint16'))
-    seqlens = DataChunkIterator.from_iterable(seqit.seqlens_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint32'))
 
     io = get_hdf5io(h5path, 'w')
 
@@ -251,7 +282,7 @@ def prepare_data(argv=None):
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
                          io.set_dataio(names,    compression='gzip', chunks=(2**15,)),
-                         io.set_dataio(packed,   compression='gzip', maxshape=(None,), chunks=(2**15,)),
+                         io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=(2**15,)),
                          io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=(2**15,)),
                          io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=(2**15,)),
                          io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=(2**15,)),
