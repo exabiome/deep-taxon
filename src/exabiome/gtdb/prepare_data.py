@@ -1,7 +1,16 @@
 import math
 import numpy as np
 import skbio.stats.distance as ssd
+from skbio.sequence import DNA, Protein
+import skbio.io
 import os
+
+def seqlen(path):
+    kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
+    l = 0
+    for seq in skbio.io.read(path, **kwargs):
+        l += len(seq)
+    return l
 
 def duplicate_dmat_samples(dist, dupes):
     """
@@ -76,8 +85,11 @@ def prepare_data(argv=None):
     import h5py
     import pandas as pd
 
+    from datetime import datetime
+
+    from tqdm import tqdm
+
     from skbio import TreeNode
-    import skbio.io
     from skbio.sequence import DNA, Protein
 
     from hdmf.common import get_hdf5io
@@ -88,11 +100,11 @@ def prepare_data(argv=None):
     from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('accessions', type=str, help='file of the NCBI accessions of the genomes to convert')
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('out', type=str, help='output HDF5')
+    parser.add_argument('-a', '--accessions', type=str, help='file of the NCBI accessions of the genomes to convert')
     grp = parser.add_mutually_exclusive_group()
     parser.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
@@ -103,6 +115,7 @@ def prepare_data(argv=None):
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('-V', '--vocab', action='store_true', default=False, help='store sequences as vocabulary data')
     parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
+    parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -116,10 +129,35 @@ def prepare_data(argv=None):
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
 
+    #############################
+    # read and filter taxonomies
+    #############################
+    logger.info('reading taxonomies from %s' % args.metadata)
+    taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    def func(row):
+        dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
+        dat['species'] = dat['species'].split(' ')[1]
+        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
+        dat['accession'] = row['accession'][3:]
+        return pd.Series(data=dat)
+
+    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
+                        .apply(func, axis=1)
+
+    taxdf = taxdf[taxdf['accession'] == taxdf['gtdb_genome_representative']]
+    taxdf = taxdf.set_index('accession')
+
     # read accessions
-    logger.info('reading accessions %s' % args.accessions)
-    with open(args.accessions, 'r') as f:
-        taxa_ids = [l[:-1] for l in f.readlines()]
+    if args.accessions:
+        logger.info('reading accessions %s' % args.accessions)
+        with open(args.accessions, 'r') as f:
+            taxa_ids = [l[:-1] for l in f.readlines()]
+
+        logger.info('selecting GTDB taxonomy for taxa found in %s' % args.accessions)
+        taxdf = taxdf.filter(items=taxa_ids, axis=0)
+    else:
+        taxa_ids = taxdf.index.values
+
 
     # get paths to Fasta Files
     fa_path_func = get_genomic_path
@@ -144,24 +182,6 @@ def prepare_data(argv=None):
         dist = CondensedDistanceMatrix('distances', data=dist)
         di_kwargs['distances'] = dist
 
-
-    #############################
-    # read and filter taxonomies
-    #############################
-    logger.info('reading taxonomies from %s' % args.metadata)
-    taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
-    def func(row):
-        dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
-        dat['species'] = dat['species'].split(' ')[1]
-        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
-        dat['accession'] = row['accession'][3:]
-        return pd.Series(data=dat)
-
-    logger.info('selecting GTDB taxonomy for taxa found in %s' % args.accessions)
-    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
-                        .apply(func, axis=1)\
-                        .set_index('accession')\
-                        .filter(items=taxa_ids, axis=0)
 
 
     #############################
@@ -245,28 +265,50 @@ def prepare_data(argv=None):
             if args.protein:
                 vocab_it = AAVocabIterator
                 SeqTable = SequenceTable
+                skbio_cls = Protein
             else:
                 vocab_it = DNAVocabIterator
                 SeqTable = DNATable
+                skbio_cls = DNA
 
             sequence = list()
             names = list()
             taxa = list()
             seqlens = list()
 
-            for taxa_i, fa in enumerate(fapaths):
-                kwargs = {'format': 'fasta', 'constructor': self.skbio_cls, 'validate': False}
-                for seq_i, seq in skbio.io.read(path, **kwargs):
-                    sequence.append(vocab_it.encode(seq))
+            logger.info('counting total number of sqeuences')
+
+            map_func = map
+            if args.num_procs > 1:
+                import multiprocessing as mp
+                map_func = mp.Pool(processes=30).imap
+
+            lengths = list(map_func(seqlen, fapaths))
+            total_seq_len = sum(lengths)
+            logger.info(f'found {total_seq_len} bases across {len(lengths)} genomes')
+
+            total_sequence_bytes = 0.0
+            b = 0
+            sequence = np.zeros(total_seq_len, dtype=np.uint8)
+            seqlens = list()
+            for taxa_i, fa in tqdm(list(enumerate(fapaths))):
+                kwargs = {'format': 'fasta', 'constructor': skbio_cls, 'validate': False}
+                for seq in skbio.io.read(fa, **kwargs):
+                    enc_seq = vocab_it.encode(seq)
+                    seqlens.append(len(enc_seq))
+                    e = b + seqlens[-1]
+                    sequence[b:e] = enc_seq
+                    b = e
+                    total_sequence_bytes += sequence[-1].nbytes
                     names.append(vocab_it.get_seqname(seq))
                     taxa.append(taxa_i)
-            ids = np.arange(len(sequence))
-            seqlens = np.array([len(s) for s in sequence])
+            logger.info(f'total sequence bytes: {total_sequence_bytes}')
+            #seqlens = np.array([len(s) for s in sequence])
             seqindex = np.cumsum(seqlens).astype(int)
-            sequence = np.concatenate(sequence)
+            #sequence = np.concatenate(sequence)
+            ids = np.arange(len(seqlens))
         else:
             raise NotImplementedError('cannot load all data into memory unless using vocab encoding')
-
 
     io = get_hdf5io(h5path, 'w')
 
@@ -281,18 +323,23 @@ def prepare_data(argv=None):
     taxa_table = TaxaTable(*tt_args, **tt_kwargs)
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
-                         io.set_dataio(names,    compression='gzip', chunks=(2**15,)),
-                         io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=(2**15,)),
-                         io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=(2**15,)),
-                         io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=(2**15,)),
-                         io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=(2**15,)),
+                         io.set_dataio(names,    compression='gzip', chunks=True),
+                         io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=True),
+                         io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=True),
+                         io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=True),
+                         io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=True),
                          taxon_table=taxa_table,
-                         id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=(2**15,)))
+                         id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=True))
 
     difile = DeepIndexFile(seq_table, taxa_table, tree, **di_kwargs)
 
+    logger.info(f'Sequence totals {sequence.nbytes} bytes')
+    before = datetime.now()
     io.write(difile, exhaust_dci=False)
     io.close()
+    after = datetime.now()
+    delta = (after - before).total_seconds()
+    logger.info(f'Took {delta} seconds to write after read')
 
     logger.info("reading %s" % (h5path))
     h5size = os.path.getsize(h5path)
