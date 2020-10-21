@@ -4,6 +4,7 @@ import glob
 import os
 import sys
 import logging
+import warnings
 
 
 def check_argv(argv=None):
@@ -77,10 +78,12 @@ def get_genomic_path(acc, directory):
         acc = acc[3:]
     l = [directory, 'all', acc[:3], acc[4:7], acc[7:10], acc[10:13], "%s*"%acc, "%s*_genomic.fna.gz" % acc]
     glob_str = os.path.join(*l)
-    result = [s for s in glob.glob(glob_str) if not 'cds' in s and 'rna' not in s]
+    result = [s for s in glob.glob(glob_str) if not 'cds_from' in s and 'rna_from' not in s]
     if len(result) > 1:
-        breakpoint()
-        raise ValueError(f'more than one file matching {glob_str}')
+        warnings.warn(f'more than one file matching {glob_str}, using most recently modified file')
+        tmp = [(os.path.getmtime(f), f) for f in result]
+        tmp.sort(key=lambda x: x[0])
+        result = [tmp[-1][1]]
     if len(result) == 0:
         raise ValueError(f'no file matching {glob_str}')
     return result[0]
