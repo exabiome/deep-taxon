@@ -280,14 +280,15 @@ def prepare_data(argv=None):
 
             map_func = map
             if args.num_procs > 1:
+                logger.info(f'using {args.num_procs} to count sequences')
                 import multiprocessing as mp
-                map_func = mp.Pool(processes=30).imap
+                map_func = mp.Pool(processes=args.num_procs).imap
 
             lengths = list(map_func(seqlen, fapaths))
             total_seq_len = sum(lengths)
+            del map_func
             logger.info(f'found {total_seq_len} bases across {len(lengths)} genomes')
 
-            total_sequence_bytes = 0.0
             b = 0
             sequence = np.zeros(total_seq_len, dtype=np.uint8)
             seqlens = list()
@@ -299,10 +300,8 @@ def prepare_data(argv=None):
                     e = b + seqlens[-1]
                     sequence[b:e] = enc_seq
                     b = e
-                    total_sequence_bytes += sequence[-1].nbytes
                     names.append(vocab_it.get_seqname(seq))
                     taxa.append(taxa_i)
-            logger.info(f'total sequence bytes: {total_sequence_bytes}')
             #seqlens = np.array([len(s) for s in sequence])
             seqindex = np.cumsum(seqlens).astype(int)
             #sequence = np.concatenate(sequence)
