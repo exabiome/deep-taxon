@@ -165,10 +165,7 @@ class DNAData(VocabData):
 class DNATable(SequenceTable):
 
     def get_sequence_data(self, data):
-        if isinstance(data, DataIO):
-            vocab = data.data.data.encoded_vocab
-        else:
-            vocab = self.vocab
+        vocab = self.vocab
         return DNAData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=vocab)
 
     def get_sequence_index(self, data, target):
