@@ -100,14 +100,6 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
 
-    def __getitem__(self, key):
-        if isinstance(key, str):
-            return super().__getitem__(key)
-        else:
-            ret = list(super().__getitem__(key))
-            # sequence data will come from the third column
-            return tuple(ret)
-
 
 @register_class('SequenceTable', NS)
 class SequenceTable(AbstractSequenceTable):
@@ -157,8 +149,7 @@ class SequenceTable(AbstractSequenceTable):
 class DNAData(VocabData):
 
     def get(self, key, **kwargs):
-        idx = self.data[key]
-        return super()._get_helper(idx, **kwargs)
+        return super().get(key, **kwargs)
 
 
 @register_class('DNATable', NS)

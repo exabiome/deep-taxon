@@ -229,6 +229,8 @@ def prepare_data(argv=None):
     logger.info("reading %d Fasta files" % len(fapaths))
     logger.info("Total size: %d", sum(os.path.getsize(f) for f in fapaths))
 
+
+    vocab = None
     if args.iter:
         if args.vocab:
             if args.protein:
@@ -237,6 +239,7 @@ def prepare_data(argv=None):
             else:
                 SeqTable = DNATable
                 seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+            vocab = np.array(list(seqit.characters()))
         else:
             if args.protein:
                 logger.info("reading and writing protein sequences")
@@ -270,6 +273,8 @@ def prepare_data(argv=None):
                 vocab_it = DNAVocabIterator
                 SeqTable = DNATable
                 skbio_cls = DNA
+
+            vocab = np.array(list(vocab_it.characters()))
 
             sequence = list()
             names = list()
@@ -328,7 +333,8 @@ def prepare_data(argv=None):
                          io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=True),
                          io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=True),
                          taxon_table=taxa_table,
-                         id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=True))
+                         id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=True),
+                         vocab=vocab)
 
     difile = DeepIndexFile(seq_table, taxa_table, tree, **di_kwargs)
 
