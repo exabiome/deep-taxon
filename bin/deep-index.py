@@ -30,6 +30,7 @@ command_dict = {
     'show-models': Command('nn.utils.show_models', 'Show available models'),
     'train-job': Command('run.run_job.run_train', 'Run a training job'),
     'probe': Command('nn.probe.probe', 'Probe the environment of the system'),
+    'test-input': Command('testing.dataset.check_sequences', 'Test input file against original fasta files'),
 }
 
 
