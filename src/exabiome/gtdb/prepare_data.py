@@ -76,6 +76,85 @@ def select_embeddings(ids_to_select, taxa_ids, embeddings):
     return embeddings[indices]
 
 
+def check_tree_metadata(argv=None):
+    import argparse
+    from skbio import TreeNode
+    import logging
+    import sys
+    import pandas as pd
+    import numpy as np
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('metadata', type=str, help='metadata file from GTDB')
+    parser.add_argument('tree', type=str, help='the distances file')
+    parser.add_argument('-a', '--accessions', type=str, default=None, help='file of the NCBI accessions of the genomes to convert')
+    rep_grp = parser.add_mutually_exclusive_group()
+    rep_grp.add_argument('-n', '--nonrep', action='store_true', default=False, help='keep non-representative genomes only. keep representatives only by default')
+    rep_grp.add_argument('-r', '--rep', action='store_true', default=False, help='keep non-representative genomes only. keep representatives only by default')
+    args = parser.parse_args(args=argv)
+
+
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format='%(asctime)s - %(message)s')
+    logger = logging.getLogger()
+
+    #############################
+    # read and filter taxonomies
+    #############################
+    logger.info('Reading taxonomies from %s' % args.metadata)
+    taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    def func(row):
+        dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
+        dat['species'] = dat['species'].split(' ')[1]
+        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
+        dat['accession'] = row['accession'][3:]
+        return pd.Series(data=dat)
+
+    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
+                        .apply(func, axis=1)
+
+    taxdf = taxdf.set_index('accession')
+    dflen = len(taxdf)
+    logger.info('Found %d total genomes' % dflen)
+    taxdf = taxdf[taxdf['gtdb_genome_representative'].str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+    logger.info('Discarded %d non-NCBI genomes' % (dflen - len(taxdf)))
+
+    if args.accessions is not None:
+        logger.info('reading accessions %s' % args.accessions)
+        with open(args.accessions, 'r') as f:
+            accessions = [l[:-1] for l in f.readlines()]
+        dflen = len(taxdf)
+        taxdf = taxdf[taxdf.index.isin(accessions)]
+        logger.info('Discarded %d genomes not found in %s' % (dflen - len(taxdf), args.accessions))
+
+    dflen = len(taxdf)
+    if args.nonrep:
+        taxdf = taxdf[taxdf.index != taxdf['gtdb_genome_representative']]
+        logger.info('Discarded %d representative genomes' % (dflen - len(taxdf)))
+    elif args.rep:
+        taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
+        logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
+
+    dflen = len(taxdf)
+    logger.info('%d remaining genomes' % dflen)
+
+    #############################
+    # read and trim tree
+    #############################
+    logger.info('Reading tree from %s' % args.tree)
+    root = TreeNode.read(args.tree, format='newick')
+
+    logger.info('Found %d tips' % len(list(root.tips())))
+
+    logger.info('Transforming leaf names for shearing')
+    for tip in root.tips():
+        tip.name = tip.name[3:].replace(' ', '_')
+
+    logger.info('Shearing filtered accession from tree')
+    rep_ids = taxdf['gtdb_genome_representative'].values
+    root = root.shear(rep_ids)
+    logger.info('%d tips remaning' % len(list(root.tips())))
+
+
 def prepare_data(argv=None):
     '''Aggregate sequence data GTDB using a file-of-files'''
     import argparse
@@ -104,18 +183,22 @@ def prepare_data(argv=None):
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('out', type=str, help='output HDF5')
-    parser.add_argument('-a', '--accessions', type=str, help='file of the NCBI accessions of the genomes to convert')
+    parser.add_argument('-a', '--accessions', type=str, default=None, help='file of the NCBI accessions of the genomes to convert')
+    parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
+    parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
+    parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
+    parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
+    rep_grp = parser.add_mutually_exclusive_group()
+    rep_grp.add_argument('-n', '--nonrep', action='store_true', default=False, help='keep non-representative genomes only. keep both by default')
+    rep_grp.add_argument('-r', '--rep', action='store_true', default=False, help='keep representative genomes only. keep both by default')
     grp = parser.add_mutually_exclusive_group()
-    parser.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
-    parser.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
-    parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
-    parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
-    parser.add_argument('-V', '--vocab', action='store_true', default=False, help='store sequences as vocabulary data')
-    parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
-    parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
+    dep_grp = parser.add_argument_group(title="Legacy options you probably do not need")
+    dep_grp.add_argument('-N', '--non_vocab', action='store_false', dest='vocab', default=True, help='bitpack sequences -- it is unlikely this works')
+    dep_grp.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
+    dep_grp.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -126,13 +209,13 @@ def prepare_data(argv=None):
     if not any([args.protein, args.cds, args.genomic]):
         args.genomic = True
 
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
 
     #############################
     # read and filter taxonomies
     #############################
-    logger.info('reading taxonomies from %s' % args.metadata)
+    logger.info('Reading taxonomies from %s' % args.metadata)
     taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
     def func(row):
         dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
@@ -144,20 +227,53 @@ def prepare_data(argv=None):
     taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
                         .apply(func, axis=1)
 
-    taxdf = taxdf[taxdf['accession'] == taxdf['gtdb_genome_representative']]
     taxdf = taxdf.set_index('accession')
+    dflen = len(taxdf)
+    logger.info('Found %d total genomes' % dflen)
+    taxdf = taxdf[taxdf['gtdb_genome_representative'].str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+    taxdf = taxdf[taxdf.index.str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+    logger.info('Discarded %d non-NCBI genomes' % (dflen - len(taxdf)))
 
-    # read accessions
-    if args.accessions:
+    if args.accessions is not None:
         logger.info('reading accessions %s' % args.accessions)
         with open(args.accessions, 'r') as f:
-            taxa_ids = [l[:-1] for l in f.readlines()]
+            accessions = [l[:-1] for l in f.readlines()]
+        dflen = len(taxdf)
+        taxdf = taxdf[taxdf.index.isin(accessions)]
+        logger.info('Discarded %d genomes not found in %s' % (dflen - len(taxdf), args.accessions))
 
-        logger.info('selecting GTDB taxonomy for taxa found in %s' % args.accessions)
-        taxdf = taxdf.filter(items=taxa_ids, axis=0)
-    else:
-        taxa_ids = taxdf.index.values
+    dflen = len(taxdf)
+    if args.nonrep:
+        taxdf = taxdf[taxdf.index != taxdf['gtdb_genome_representative']]
+        logger.info('Discarded %d representative genomes' % (dflen - len(taxdf)))
+    elif args.rep:
+        taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
+        logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
 
+    dflen = len(taxdf)
+    logger.info('%d remaining genomes' % dflen)
+
+    #############################
+    # read and trim tree
+    #############################
+    logger.info('Reading tree from %s' % args.tree)
+    root = TreeNode.read(args.tree, format='newick')
+
+    logger.info('Found %d tips' % len(list(root.tips())))
+
+    logger.info('Transforming leaf names for shearing')
+    for tip in root.tips():
+        tip.name = tip.name[3:].replace(' ', '_')
+
+
+    logger.info('Shearing filtered accession from tree')
+    rep_ids = taxdf['gtdb_genome_representative'].values
+    for rid in rep_ids:
+        print(rid)
+    root = root.shear(rep_ids)
+    logger.info('%d tips remaning' % len(list(root.tips())))
+
+    taxa_ids = taxdf.index.values
 
     # get paths to Fasta Files
     fa_path_func = get_genomic_path
@@ -167,7 +283,13 @@ def prepare_data(argv=None):
         fa_path_func = get_faa_path
     fapaths = [fa_path_func(acc, args.fadir) for acc in taxa_ids]
 
+    logger.info('Found Fasta files for all accessions')
+
+    ###############################
+    # Arguments for constructing the DeepIndexFile object
+    ###############################
     di_kwargs = dict()
+
     # if a distance matrix file has been given, read and select relevant distances
     if args.dist_h5:
         #############################
@@ -183,7 +305,6 @@ def prepare_data(argv=None):
         di_kwargs['distances'] = dist
 
 
-
     #############################
     # read and filter embeddings
     #############################
@@ -196,19 +317,6 @@ def prepare_data(argv=None):
         logger.info('selecting embeddings for taxa found in %s' % args.accessions)
         emb = select_embeddings(taxa_ids, emb_taxa, emb)
 
-    #############################
-    # read and trim tree
-    #############################
-    logger.info('reading tree from %s' % args.tree)
-    root = TreeNode.read(args.tree, format='newick')
-
-    logger.info('transforming leaf names for shearing')
-    for tip in root.tips():
-        tip.name = tip.name[3:].replace(' ', '_')
-
-    logger.info('shearing taxa not found in %s' % args.accessions)
-    rep_ids = taxdf['gtdb_genome_representative'].values
-    root = root.shear(rep_ids)
 
     logger.info('converting tree to Newick string')
     bytes_io = io.BytesIO()
@@ -216,6 +324,7 @@ def prepare_data(argv=None):
     tree_str = bytes_io.getvalue()
     tree = NewickString('tree', data=tree_str)
 
+    # get distances from tree if they are not provided
     if di_kwargs.get('distances') is None:
         from scipy.spatial.distance import squareform
         tt_dmat = root.tip_tip_distances()
@@ -228,7 +337,6 @@ def prepare_data(argv=None):
 
     logger.info("reading %d Fasta files" % len(fapaths))
     logger.info("Total size: %d", sum(os.path.getsize(f) for f in fapaths))
-
 
     vocab = None
     if args.iter:
