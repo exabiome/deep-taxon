@@ -28,6 +28,9 @@ command_dict = {
     'infer': Command('nn.infer.run_inference', 'Run inference using PyTorch'),
     'summarize': Command('nn.summarize.summarize', 'Summarize training/inference results'),
     'show-models': Command('nn.utils.show_models', 'Show available models'),
+    'train-job': Command('run.run_job.run_train', 'Run a training job'),
+    'probe': Command('nn.probe.probe', 'Probe the environment of the system'),
+    'test-input': Command('testing.dataset.check_sequences', 'Test input file against original fasta files'),
 }
 
 

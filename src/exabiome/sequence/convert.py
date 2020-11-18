@@ -320,14 +320,17 @@ class VocabIterator(AbstractSeqIterator):
     def characters(cls):
         return cls.chars
 
+    @classmethod
+    def encode(cls, seq):
+        charar = seq.values.view(np.uint8)
+        return cls.basemap[charar]
+
     def __init__(self, paths, logger=None, min_seq_len=None):
         super().__init__(paths, logger=logger, min_seq_len=min_seq_len)
         self._enc_vocab = np.array(list(self.characters()))
 
     def pack(self, seq):
-        charar = seq.values.view(np.uint8)
-        charar = self.basemap[charar]
-        return charar
+        return self.encode(pack)
 
     @property
     def encoded_vocab(self):

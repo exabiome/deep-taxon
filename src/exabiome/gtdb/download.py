@@ -1,6 +1,8 @@
 import sys
 import subprocess
 import os.path
+import pandas as pd
+from skbio import TreeNode
 
 from ..utils import parse_logger
 
@@ -76,6 +78,12 @@ def get_accessions(args):
         if args.file:
             with open(args.accession, 'r') as f:
                 accessions = [l[:-1] for l in f]
+        elif args.tree:
+            root = TreeNode.read(args.accession, format='newick')
+            accessions = [tip.name[3:].replace(' ', '_') for tip in root.tips()]
+        elif args.metadata:
+            accessions = pd.read_csv(args.accession, header=0, sep='\t').accession
+            accessions = [acc[3:] for acc in accessions]
         else:
             accessions = [args.accession]
     return accessions
@@ -91,9 +99,14 @@ def ncbi_fetch(args):
     parser  = argparse.ArgumentParser(description=desc, epilog=epi)
     parser.add_argument('accession', type=str, help='the accession of the genome to retreive')
     parser.add_argument('dest', type=str, help='the destination directory save the downloaded files to')
-    parser.add_argument('-f', '--file', action='store_true', default=False, help='accession is a file with a list of accessions, one per line')
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-f', '--file', action='store_true', default=False, help='accession is a file with a list of accessions, one per line')
+    grp.add_argument('-t', '--tree', action='store_true', default=False, help='accessions is a tree file with accessions')
+    grp.add_argument('-m', '--metadata', action='store_true', default=False, help='accession is a file with a list of accessions, one per line')
+
     parser.add_argument('-p', '--processes', type=int, help='the number of rsync subprocesses to run', default=1)
     parser.add_argument('-q', '--quiet', action='store_true', default=False, help='print less information to log file')
+    parser.add_argument('-d', '--debug', action='store_true', default=False, help='print accessions and exit. do not download')
 
     args = parser.parse_args(args)
 
@@ -104,6 +117,11 @@ def ncbi_fetch(args):
             raise ValueError(f'{args.dest} already exists as file')
     else:
         os.mkdir(args.dest)
+
+    if args.debug:
+        for acc in accessions:
+            print(acc)
+        return
 
     rsync = Rsync(args.dest, quiet=args.quiet)
 

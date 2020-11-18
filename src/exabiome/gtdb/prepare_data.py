@@ -1,7 +1,16 @@
 import math
 import numpy as np
 import skbio.stats.distance as ssd
+from skbio.sequence import DNA, Protein
+import skbio.io
 import os
+
+def seqlen(path):
+    kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
+    l = 0
+    for seq in skbio.io.read(path, **kwargs):
+        l += len(seq)
+    return l
 
 def duplicate_dmat_samples(dist, dupes):
     """
@@ -76,7 +85,12 @@ def prepare_data(argv=None):
     import h5py
     import pandas as pd
 
+    from datetime import datetime
+
+    from tqdm import tqdm
+
     from skbio import TreeNode
+    from skbio.sequence import DNA, Protein
 
     from hdmf.common import get_hdf5io
     from hdmf.data_utils import DataChunkIterator
@@ -86,20 +100,26 @@ def prepare_data(argv=None):
     from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('accessions', type=str, help='file of the NCBI accessions of the genomes to convert')
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('out', type=str, help='output HDF5')
+    parser.add_argument('-a', '--accessions', type=str, default=None, help='file of the NCBI accessions of the genomes to convert')
+    parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
+    parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
+    parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
+    parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
+    rep_grp = parser.add_mutually_exclusive_group()
+    rep_grp.add_argument('-n', '--nonrep', action='store_true', default=False, help='keep non-representative genomes only. keep both by default')
+    rep_grp.add_argument('-r', '--rep', action='store_true', default=False, help='keep representative genomes only. keep both by default')
     grp = parser.add_mutually_exclusive_group()
-    parser.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
-    parser.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
-    parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
-    parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
-    parser.add_argument('-V', '--vocab', action='store_true', default=False, help='store sequences as vocabulary data')
+    dep_grp = parser.add_argument_group(title="Legacy options you probably do not need")
+    dep_grp.add_argument('-N', '--non_vocab', action='store_false', dest='vocab', default=True, help='bitpack sequences -- it is unlikely this works')
+    dep_grp.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
+    dep_grp.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -110,13 +130,71 @@ def prepare_data(argv=None):
     if not any([args.protein, args.cds, args.genomic]):
         args.genomic = True
 
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format='%(asctime)s - %(message)s')
     logger = logging.getLogger()
 
-    # read accessions
-    logger.info('reading accessions %s' % args.accessions)
-    with open(args.accessions, 'r') as f:
-        taxa_ids = [l[:-1] for l in f.readlines()]
+    #############################
+    # read and filter taxonomies
+    #############################
+    logger.info('Reading taxonomies from %s' % args.metadata)
+    taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    def func(row):
+        dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
+        dat['species'] = dat['species'].split(' ')[1]
+        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
+        dat['accession'] = row['accession'][3:]
+        return pd.Series(data=dat)
+
+    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
+                        .apply(func, axis=1)
+
+    taxdf = taxdf.set_index('accession')
+    dflen = len(taxdf)
+    logger.info('Found %d total genomes' % dflen)
+    taxdf = taxdf[taxdf['gtdb_genome_representative'].str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+    taxdf = taxdf[taxdf.index.str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+    logger.info('Discarded %d non-NCBI genomes' % (dflen - len(taxdf)))
+
+    if args.accessions is not None:
+        logger.info('reading accessions %s' % args.accessions)
+        with open(args.accessions, 'r') as f:
+            accessions = [l[:-1] for l in f.readlines()]
+        dflen = len(taxdf)
+        taxdf = taxdf[taxdf.index.isin(accessions)]
+        logger.info('Discarded %d genomes not found in %s' % (dflen - len(taxdf), args.accessions))
+
+    dflen = len(taxdf)
+    if args.nonrep:
+        taxdf = taxdf[taxdf.index != taxdf['gtdb_genome_representative']]
+        logger.info('Discarded %d representative genomes' % (dflen - len(taxdf)))
+    elif args.rep:
+        taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
+        logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
+
+    dflen = len(taxdf)
+    logger.info('%d remaining genomes' % dflen)
+
+    #############################
+    # read and trim tree
+    #############################
+    logger.info('Reading tree from %s' % args.tree)
+    root = TreeNode.read(args.tree, format='newick')
+
+    logger.info('Found %d tips' % len(list(root.tips())))
+
+    logger.info('Transforming leaf names for shearing')
+    for tip in root.tips():
+        tip.name = tip.name[3:].replace(' ', '_')
+
+
+    logger.info('Shearing filtered accession from tree')
+    rep_ids = taxdf['gtdb_genome_representative'].values
+    for rid in rep_ids:
+        print(rid)
+    root = root.shear(rep_ids)
+    logger.info('%d tips remaning' % len(list(root.tips())))
+
+    taxa_ids = taxdf.index.values
 
     # get paths to Fasta Files
     fa_path_func = get_genomic_path
@@ -126,7 +204,13 @@ def prepare_data(argv=None):
         fa_path_func = get_faa_path
     fapaths = [fa_path_func(acc, args.fadir) for acc in taxa_ids]
 
+    logger.info('Found Fasta files for all accessions')
+
+    ###############################
+    # Arguments for constructing the DeepIndexFile object
+    ###############################
     di_kwargs = dict()
+
     # if a distance matrix file has been given, read and select relevant distances
     if args.dist_h5:
         #############################
@@ -143,25 +227,6 @@ def prepare_data(argv=None):
 
 
     #############################
-    # read and filter taxonomies
-    #############################
-    logger.info('reading taxonomies from %s' % args.metadata)
-    taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
-    def func(row):
-        dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
-        dat['species'] = dat['species'].split(' ')[1]
-        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
-        dat['accession'] = row['accession'][3:]
-        return pd.Series(data=dat)
-
-    logger.info('selecting GTDB taxonomy for taxa found in %s' % args.accessions)
-    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
-                        .apply(func, axis=1)\
-                        .set_index('accession')\
-                        .filter(items=taxa_ids, axis=0)
-
-
-    #############################
     # read and filter embeddings
     #############################
     emb = None
@@ -173,19 +238,6 @@ def prepare_data(argv=None):
         logger.info('selecting embeddings for taxa found in %s' % args.accessions)
         emb = select_embeddings(taxa_ids, emb_taxa, emb)
 
-    #############################
-    # read and trim tree
-    #############################
-    logger.info('reading tree from %s' % args.tree)
-    root = TreeNode.read(args.tree, format='newick')
-
-    logger.info('transforming leaf names for shearing')
-    for tip in root.tips():
-        tip.name = tip.name[3:].replace(' ', '_')
-
-    logger.info('shearing taxa not found in %s' % args.accessions)
-    rep_ids = taxdf['gtdb_genome_representative'].values
-    root = root.shear(rep_ids)
 
     logger.info('converting tree to Newick string')
     bytes_io = io.BytesIO()
@@ -193,6 +245,7 @@ def prepare_data(argv=None):
     tree_str = bytes_io.getvalue()
     tree = NewickString('tree', data=tree_str)
 
+    # get distances from tree if they are not provided
     if di_kwargs.get('distances') is None:
         from scipy.spatial.distance import squareform
         tt_dmat = root.tip_tip_distances()
@@ -206,40 +259,89 @@ def prepare_data(argv=None):
     logger.info("reading %d Fasta files" % len(fapaths))
     logger.info("Total size: %d", sum(os.path.getsize(f) for f in fapaths))
 
-    if args.vocab:
-        if args.protein:
-            SeqTable = SequenceTable
-            seqit = AAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
-        else:
-            SeqTable = DNATable
-            if args.cds:
-                logger.info("reading and writing CDS sequences")
-                seqit = DNAVocabGeneIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+    vocab = None
+    if args.iter:
+        if args.vocab:
+            if args.protein:
+                SeqTable = SequenceTable
+                seqit = AAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
             else:
+                SeqTable = DNATable
                 seqit = DNAVocabIterator(fapaths, logger=logger, min_seq_len=args.min_len)
-    else:
-        if args.protein:
-            logger.info("reading and writing protein sequences")
-            seqit = AASeqIterator(fapaths, logger=logger, max_degenerate=args.max_deg, min_seq_len=args.min_len)
-            SeqTable = AATable
+            vocab = np.array(list(seqit.characters()))
         else:
-            logger.info("reading and writing DNA sequences")
-            seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
-            SeqTable = DNATable
+            if args.protein:
+                logger.info("reading and writing protein sequences")
+                seqit = AASeqIterator(fapaths, logger=logger, max_degenerate=args.max_deg, min_seq_len=args.min_len)
+                SeqTable = AATable
+            else:
+                logger.info("reading and writing DNA sequences")
+                seqit = DNASeqIterator(fapaths, logger=logger, min_seq_len=args.min_len)
+                SeqTable = DNATable
 
-    seqit_bsize = 2**25
-    if args.protein:
-        seqit_bsize = 2**15
-    elif args.cds:
-        seqit_bsize = 2**18
+        seqit_bsize = 2**25
+        if args.protein:
+            seqit_bsize = 2**15
+        elif args.cds:
+            seqit_bsize = 2**18
 
-    # set up DataChunkIterators
-    packed = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=seqit_bsize, dtype=np.dtype('uint8'))
-    seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
-    names = DataChunkIterator.from_iterable(seqit.names_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('U'))
-    ids = DataChunkIterator.from_iterable(seqit.id_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
-    taxa = DataChunkIterator.from_iterable(seqit.taxon_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint16'))
-    seqlens = DataChunkIterator.from_iterable(seqit.seqlens_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint32'))
+        # set up DataChunkIterators
+        sequence = DataChunkIterator.from_iterable(iter(seqit), maxshape=(None,), buffer_size=seqit_bsize, dtype=np.dtype('uint8'))
+        seqindex = DataChunkIterator.from_iterable(seqit.index_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
+        names = DataChunkIterator.from_iterable(seqit.names_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('U'))
+        ids = DataChunkIterator.from_iterable(seqit.id_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('int'))
+        taxa = DataChunkIterator.from_iterable(seqit.taxon_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint16'))
+        seqlens = DataChunkIterator.from_iterable(seqit.seqlens_iter, maxshape=(None,), buffer_size=2**0, dtype=np.dtype('uint32'))
+    else:
+        if args.vocab:
+            if args.protein:
+                vocab_it = AAVocabIterator
+                SeqTable = SequenceTable
+                skbio_cls = Protein
+            else:
+                vocab_it = DNAVocabIterator
+                SeqTable = DNATable
+                skbio_cls = DNA
+
+            vocab = np.array(list(vocab_it.characters()))
+
+            sequence = list()
+            names = list()
+            taxa = list()
+            seqlens = list()
+
+            logger.info('counting total number of sqeuences')
+
+            map_func = map
+            if args.num_procs > 1:
+                logger.info(f'using {args.num_procs} to count sequences')
+                import multiprocessing as mp
+                map_func = mp.Pool(processes=args.num_procs).imap
+
+            lengths = list(map_func(seqlen, fapaths))
+            total_seq_len = sum(lengths)
+            del map_func
+            logger.info(f'found {total_seq_len} bases across {len(lengths)} genomes')
+
+            b = 0
+            sequence = np.zeros(total_seq_len, dtype=np.uint8)
+            seqlens = list()
+            for taxa_i, fa in tqdm(list(enumerate(fapaths))):
+                kwargs = {'format': 'fasta', 'constructor': skbio_cls, 'validate': False}
+                for seq in skbio.io.read(fa, **kwargs):
+                    enc_seq = vocab_it.encode(seq)
+                    seqlens.append(len(enc_seq))
+                    e = b + seqlens[-1]
+                    sequence[b:e] = enc_seq
+                    b = e
+                    names.append(vocab_it.get_seqname(seq))
+                    taxa.append(taxa_i)
+            #seqlens = np.array([len(s) for s in sequence])
+            seqindex = np.cumsum(seqlens).astype(int)
+            #sequence = np.concatenate(sequence)
+            ids = np.arange(len(seqlens))
+        else:
+            raise NotImplementedError('cannot load all data into memory unless using vocab encoding')
 
     io = get_hdf5io(h5path, 'w')
 
@@ -254,18 +356,24 @@ def prepare_data(argv=None):
     taxa_table = TaxaTable(*tt_args, **tt_kwargs)
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
-                         io.set_dataio(names,    compression='gzip', chunks=(2**15,)),
-                         io.set_dataio(packed,   compression='gzip', maxshape=(None,), chunks=(2**15,)),
-                         io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=(2**15,)),
-                         io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=(2**15,)),
-                         io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=(2**15,)),
+                         io.set_dataio(names,    compression='gzip', chunks=True),
+                         io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=True),
+                         io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=True),
+                         io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=True),
+                         io.set_dataio(taxa, compression='gzip', maxshape=(None,), chunks=True),
                          taxon_table=taxa_table,
-                         id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=(2**15,)))
+                         id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=True),
+                         vocab=vocab)
 
     difile = DeepIndexFile(seq_table, taxa_table, tree, **di_kwargs)
 
+    logger.info(f'Sequence totals {sequence.nbytes} bytes')
+    before = datetime.now()
     io.write(difile, exhaust_dci=False)
     io.close()
+    after = datetime.now()
+    delta = (after - before).total_seconds()
+    logger.info(f'Took {delta} seconds to write after read')
 
     logger.info("reading %s" % (h5path))
     h5size = os.path.getsize(h5path)

@@ -48,23 +48,27 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
+    parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
-    parser.add_argument('--half', action='store_true', default=False, help='use 16-bit (i.e. half-precision) training')
+    parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
-    parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
-    parser.add_argument('--prof', type=str, default=None, metavar='PATH', help='profile training loop dump results to PATH')
+    parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
-    parser.add_argument('-L', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+    parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
-    parser.add_argument('-r', '--revcomp', default=False, action='store_true', help='use reverse strand of sequences')
-    parser.add_argument('--lr', type=float, default=0.01, help='the learning rate for Adam')
+    parser.add_argument('-F', '--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
+    parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
+    parser.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
+    grp = parser.add_mutually_exclusive_group()
+    parser.add_argument('--summit', default=False, action='store_true', help='running on Summit system')
+
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -85,15 +89,6 @@ def process_args(args=None, return_io=False):
     if not isinstance(args, argparse.Namespace):
         args = parse_args(args)
 
-    logger = args.logger
-    # set up logger
-    if logger is None:
-        logger = logging.getLogger()
-        logger.setLevel(logging.INFO)
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-    args.logger = logger
-
     # determing number of input channels:
     # 18 for DNA, 26 for protein
     # 5 for sanity check (this probably doesn't work anymore)
@@ -104,17 +99,41 @@ def process_args(args=None, return_io=False):
         input_nc = 5
     args.input_nc = input_nc
 
+    args.loader_kwargs = dict()
+    if args.summit:
+        args.loader_kwargs['num_workers'] = 6
+        args.loader_kwargs['multiprocessing_context'] = 'spawn'
+
     model = process_model(args)
 
     targs = dict(
         max_epochs=args.epochs,
+        num_nodes=args.num_nodes,
     )
+
+    if args.profile:
+        targs['profiler'] = True
 
     targs['accumulate_grad_batches'] = args.accumulate
 
-    targs['gpus'] = process_gpus(args.gpus)
-    if targs['gpus'] != 1:
-        targs['distributed_backend'] = 'ddp'
+    #if args.gpus is not None:
+    #    targs['gpus'] = 1
+    #targs['distributed_backend'] = 'horovod'
+
+    if args.horovod:
+        targs['distributed_backend'] = 'horovod'
+        if args.gpus:
+            targs['gpus'] = 1
+    else:
+        targs['gpus'] = process_gpus(args.gpus)
+        targs['num_nodes'] = args.num_nodes
+        if targs['gpus'] != 1 or targs['num_nodes'] > 1:
+            targs['distributed_backend'] = 'ddp'
+            #if args.summit:
+            #    targs['distributed_backend'] = 'horovod'
+            #    targs['gpus'] = 1
+            #else:
+            #    targs['distributed_backend'] = 'ddp'
     del args.gpus
 
     if args.debug:
@@ -124,10 +143,10 @@ def process_args(args=None, return_io=False):
         targs['auto_lr_find'] = True
     del args.lr_find
 
-    if args.half:
+    if args.fp16:
         targs['amp_level'] = 'O2'
         targs['precision'] = 16
-    del args.half
+    del args.fp16
 
     ret = [model, args, targs]
     if return_io:
@@ -146,12 +165,12 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
+    print(argv)
     model, args, addl_targs = process_args(parse_args(argv=argv))
 
     outbase, output = process_output(args)
     check_directory(outbase)
     print(args)
-    del args.logger
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -163,13 +182,15 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False),
-        logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
+        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False, save_last=True, save_top_k=1),
+        #logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
+        logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs')),
         row_log_interval=10,
         log_save_interval=100
     )
     targs.update(addl_targs)
 
+    print('Trainer args:', targs, file=sys.stderr)
     trainer = Trainer(**targs)
 
     if args.debug:
@@ -184,7 +205,8 @@ def run_lightning(argv=None):
     hours, seconds = divmod(td.seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
 
-    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds))
+    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
+    print("Total seconds:", td.total_seconds(), file=sys.stderr)
 
 
 def lightning_lr_find(argv=None):

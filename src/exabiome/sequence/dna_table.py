@@ -44,22 +44,6 @@ class TorchableMixin:
                 return torch.as_tensor(x, dtype=dtype, device=device)
         return func
 
-    def get_numpy_conversion(self, **kwargs):
-        """
-        Args:
-            maxlen (int):        the maximum sequence length to pad to
-        """
-        maxlen = kwargs.get('maxlen')
-        if np.issubdtype(type(maxlen), np.integer):
-            def func(x):
-                ret = np.zeros((maxlen, x.shape[1]))
-                ret[0:x.shape[0]] = x
-                return ret
-        else:
-            def func(x):
-                return x
-        return func
-
     def set_raw(self):
         self.convert = lambda x: x
 
@@ -115,15 +99,6 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
-        self.convert = self.get_numpy_conversion(maxlen=self.maxlen)
-
-    def __getitem__(self, key):
-        if isinstance(key, str):
-            return super().__getitem__(key)
-        else:
-            ret = list(super().__getitem__(key))
-            # sequence data will come from the third column
-            return tuple(ret)
 
 
 @register_class('SequenceTable', NS)
@@ -174,18 +149,14 @@ class SequenceTable(AbstractSequenceTable):
 class DNAData(VocabData):
 
     def get(self, key, **kwargs):
-        idx = self.data[key]
-        return super()._get_helper(idx, **kwargs)
+        return super().get(key, **kwargs)
 
 
 @register_class('DNATable', NS)
 class DNATable(SequenceTable):
 
     def get_sequence_data(self, data):
-        if isinstance(data, DataIO):
-            vocab = data.data.data.encoded_vocab
-        else:
-            vocab = self.vocab
+        vocab = self.vocab
         return DNAData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=vocab)
 
     def get_sequence_index(self, data, target):
@@ -201,24 +172,6 @@ class AATable(SequenceTable):
                         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
                         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
                        dtype='<U1')
-
-    def get_numpy_conversion(self, **kwargs):
-        """
-        Args:
-            maxlen (int):        the maximum sequence length to pad to
-        """
-        maxlen = kwargs.get('maxlen', None)
-        if np.issubdtype(type(maxlen), np.integer):
-            def func(x):
-                ret = np.zeros([maxlen, 26], dtype=float)
-                ret[np.arange(x.shape[0]), x] = 1.0
-                return ret
-        else:
-            def func(x):
-                ret = np.zeros([x.shape[0], 26], dtype=float)
-                ret[np.arange(x.shape[0]), x] = 1.0
-                return ret
-        return func
 
     def get_torch_conversion(self, **kwargs):
         """
@@ -313,7 +266,6 @@ class TaxaTable(DynamicTable, TorchableMixin):
                 columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
-        self.convert = self.get_numpy_conversion()
 
 
     def taxid_torch_conversion(self, num_classes, device=None):
@@ -496,20 +448,34 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
         chunk_end = list()
         labels = list()
 
-        # lengths = difile.seq_table['length'][:]
-        # seqlabels = difile.labels
+        #lengths = difile.seq_table['length'][:]
+        #seqlabels = difile.labels
         for i in range(len(difile)):
             row = difile[i]
             label = row['label'] # seqlabels[i]
             #for start in range(0, lengths[i], step):
             seqlen = row['length']
-            for start in range(0, seqlen, step):
-                end = min(seqlen, start+step)
-                if (end - start) >= self.min_seq_len:
-                    labels.append(label)
-                    seq_idx.append(i)
-                    chunk_start.append(start)
-                    chunk_end.append(end)
+            start = np.arange(0, seqlen, step)
+            end = start + step
+            end[-1] = seqlen
+            if end[-1] - start[-1] < self.min_seq_len:
+                start = start[:-1]
+                end = end[:-1]
+            labels.append(np.full(start.shape[0], label))
+            seq_idx.append(np.full(start.shape[0], i))
+            chunk_start.append(start)
+            chunk_end.append(end)
+            #for start in range(0, seqlen, step):
+            #    end = min(seqlen, start+step)
+            #    if (end - start) >= self.min_seq_len:
+            #        labels.append(label)
+            #        seq_idx.append(i)
+            #        chunk_start.append(start)
+            #        chunk_end.append(end)
+        chunk_start = np.concatenate(chunk_start)
+        chunk_end = np.concatenate(chunk_end)
+        seq_idx = np.concatenate(seq_idx)
+        labels = np.concatenate(labels)
         super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
 
 

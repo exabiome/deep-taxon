@@ -56,16 +56,17 @@ class AbstractLit(LightningModule):
             dataset, io = process_dataset(self.hparams, inference=self._inference)
             if self.hparams.load:
                 dataset.load()
+
             kwargs = dict(random_state=self.hparams.seed,
                           batch_size=self.hparams.batch_size,
                           distances=self.hparams.manifold,
                           downsample=self.hparams.downsample)
+            kwargs.update(self.hparams.loader_kwargs)
             if self._inference:
                 kwargs['distances'] = False
             tr, te, va = train_test_loaders(dataset, **kwargs)
             self.loaders = {'train': tr, 'test': te, 'validate': va}
             self.dataset = dataset
-            self.io = io
 
     def configure_optimizers(self):
         if self.hparams.lr_scheduler == 'adam':

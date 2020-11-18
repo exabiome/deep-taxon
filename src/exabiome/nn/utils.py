@@ -94,8 +94,9 @@ def process_output(args, subdir='training_results'):
     Process dataset arguments
     """
     outbase = args.output
-    if args.experiment:
-        outbase = os.path.join(outbase, subdir, args.experiment)
+    #if args.experiment:
+    #    #outbase = os.path.join(outbase, subdir, args.experiment)
+    #    outbase = os.path.join(outbase, args.experiment)
 
     def output(fname):
         return os.path.join(outbase, fname)
