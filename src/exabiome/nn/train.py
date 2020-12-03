@@ -258,6 +258,19 @@ def overall_metric(model, loader, metric):
         val += metric(target, output)
     return val
 
+def print_args(argv=None):
+    '''Run Lightning Learning Rate finder'''
+    import pickle
+    import ruamel.yaml as yaml
+    parser = argparse.ArgumentParser()
+    parser.add_argument('pkl', type=str, help='the args.pkl file')
+    args = parser.parse_args(argv)
+    with open(args.pkl, 'rb') as f:
+        namespace = pickle.load(f)
+    yaml.main.safe_dump(vars(namespace), sys.stdout, default_flow_style=False)
+
+
+
 
 from . import models
 from .models.lit import AbstractLit

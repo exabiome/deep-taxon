@@ -1,9 +1,3 @@
-numpy
-scipy
-scikit-learn
-scikit-bio
-hdmf
-umap
-torch
-pytorch_lightning
-seaborn
+hdmf==2.2.0
+seaborn==0.11.0
+git+https://github.com/ajtritt/pytorch-lightning.git@99d2503373fe1b966cf7014c4ce7e7183766d48a
