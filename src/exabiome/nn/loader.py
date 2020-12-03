@@ -87,6 +87,8 @@ def collate(samples):
     """
     maxlen = 0
     l_idx = -1
+    if isinstance(samples, tuple):
+        samples = [samples]
     for i, X, y, seq_id in samples:
         if maxlen < X.shape[l_idx]:
             maxlen = X.shape[l_idx]

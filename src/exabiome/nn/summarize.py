@@ -12,13 +12,11 @@ from sklearn.metrics import classification_report, accuracy_score
 import scipy.stats as stats
 
 
-all_colors = sns.color_palette('tab20b')[::4] + sns.color_palette('tab20c')[::4] +\
-sns.color_palette('tab20b')[1::4] + sns.color_palette('tab20c')[1::4] +\
-sns.color_palette('tab20b')[2::4] + sns.color_palette('tab20c')[2::4] +\
-sns.color_palette('tab20b')[3::4] + sns.color_palette('tab20c')[3::4]
-
-
 def get_color_markers(n):
+    all_colors = sns.color_palette('tab20b')[::4] + sns.color_palette('tab20c')[::4] +\
+    sns.color_palette('tab20b')[1::4] + sns.color_palette('tab20c')[1::4] +\
+    sns.color_palette('tab20b')[2::4] + sns.color_palette('tab20c')[2::4] +\
+    sns.color_palette('tab20b')[3::4] + sns.color_palette('tab20c')[3::4]
     ret = []
     c = n
     while c > 0:

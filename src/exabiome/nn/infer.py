@@ -36,7 +36,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-d', '--debug', action='store_true', default=False,
                         help='run in debug mode i.e. only run two batches')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
-    parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=None)
+    parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-I', '--input', type=str, help='the HDF5 DeepIndex file used to train the model', default=None)
     parser.add_argument('-R', '--train', action='append_const', const='train', dest='loaders',
                         help='do inference on training data')
@@ -221,7 +221,7 @@ def get_outputs(model, loader, device, debug=False):
     idx = 1
     from tqdm import tqdm
     if debug:
-        it = tqdm([next(loader[0])])
+        it = tqdm([next(iter(loader))])
     else:
         it = tqdm(loader)
     for i, X, y, olen, seq_i in it:
