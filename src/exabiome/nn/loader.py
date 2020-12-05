@@ -290,8 +290,8 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
     if distances:
         collater = DistanceCollater(dataset.difile.distances.data[:])
 
-    print('-------- Pinning memory')
     kwargs['pin_memory'] = True
+    print(kwargs)
 
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)

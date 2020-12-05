@@ -89,7 +89,7 @@ def process_args(argv=None):
         dev = "cuda:0"
     else:
         dev = "cpu"
-    print(f'using {dev} device')
+    args.logger.info(f'using {dev} device')
     args.device = torch.device(dev)
     del args.gpus
     args.input_nc = 5
@@ -165,6 +165,7 @@ def run_inference(argv=None):
     model, args, addl_targs = process_args(argv=argv)
     import h5py
     import numpy as np
+    import os
     model.to(args.device)
     model.eval()
     n_outputs = model.hparams.n_outputs
@@ -220,10 +221,11 @@ def get_outputs(model, loader, device, debug=False):
     seq_ids = list()
     idx = 1
     from tqdm import tqdm
+    file = sys.stdout
     if debug:
-        it = tqdm([next(iter(loader))])
+        it = tqdm([next(iter(loader))], file=sys.stdout)
     else:
-        it = tqdm(loader)
+        it = tqdm(loader, file=sys.stdout)
     for i, X, y, olen, seq_i in it:
         idx += 1
         ret.append(model(X.to(device)).to('cpu').detach())

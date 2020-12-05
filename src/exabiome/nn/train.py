@@ -65,9 +65,10 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
-    parser.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
-    grp = parser.add_mutually_exclusive_group()
-    parser.add_argument('--summit', default=False, action='store_true', help='running on Summit system')
+    grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
+    grp.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
+    grp.add_argument('--lsf', default=False, action='store_true', help='running on LSF system')
+    grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
 
 
     for a in addl_args:
@@ -81,6 +82,24 @@ def parse_args(*addl_args, argv=None):
 
     return args
 
+def which(program):
+    """
+    Use to check for resource managers
+    """
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+    fpath, fname = os.path.split(program)
+    if fpath:
+        if is_exe(program):
+            return program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
+
+    return None
 
 def process_args(args=None, return_io=False):
     """
@@ -100,7 +119,7 @@ def process_args(args=None, return_io=False):
     args.input_nc = input_nc
 
     args.loader_kwargs = dict()
-    if args.summit:
+    if args.lsf:
         args.loader_kwargs['num_workers'] = 6
         args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
@@ -118,22 +137,27 @@ def process_args(args=None, return_io=False):
 
     #if args.gpus is not None:
     #    targs['gpus'] = 1
-    #targs['distributed_backend'] = 'horovod'
+    #targs['accelerator'] = 'horovod'
 
     if args.horovod:
-        targs['distributed_backend'] = 'horovod'
+        targs['accelerator'] = 'horovod'
         if args.gpus:
             targs['gpus'] = 1
     else:
         targs['gpus'] = process_gpus(args.gpus)
         targs['num_nodes'] = args.num_nodes
         if targs['gpus'] != 1 or targs['num_nodes'] > 1:
-            targs['distributed_backend'] = 'ddp'
-            #if args.summit:
-            #    targs['distributed_backend'] = 'horovod'
-            #    targs['gpus'] = 1
-            #else:
-            #    targs['distributed_backend'] = 'ddp'
+            targs['accelerator'] = 'ddp'
+            env = None
+            if args.lsf:
+                env = cenv.LSFEnvironment()
+            elif args.slurm:
+                env = cenv.SLURMEnvironment()
+            else:
+                print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
+                      file=sys.stderr)
+                sys.exit(1)
+            targs.setdefault('plugins', list()).append(env)
     del args.gpus
 
     if args.debug:

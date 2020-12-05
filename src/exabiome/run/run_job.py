@@ -82,8 +82,7 @@ def run_train(argv=None):
         check_summit(args)
         job = LSFJob()
         job.set_conda_env(args.conda_env)
-        job.add_modules('ibm-wml-ce/1.7.1.a0-0')
-        #job.add_modules('ibm-wml-ce/1.7.0-3')
+        job.add_modules('open-ce')
         if not args.load:
             job.set_use_bb(True)
     else:
@@ -158,17 +157,20 @@ def run_train(argv=None):
 
     train_cmd = 'deep-index train'
     if args.summit:
-        train_cmd += ' --summit'
+        train_cmd += ' --lsf'
         if job.use_bb:
             job.set_env_var('BB_INPUT', '/mnt/bb/$USER/`basename $INPUT`')
             input_var = 'BB_INPUT'
+    elif args.cori:
+        train_cmd += ' --slurm'
 
     train_cmd += f' $OPTIONS {args.model} ${input_var} $OUTDIR'
 
     if args.summit and job.use_bb:
         job.add_command('echo "$INPUT to $BB_INPUT"')
         job.add_command('cp $INPUT $BB_INPUT', run='jsrun -n 1')
-        job.add_command('/mnt/bb/$USER', run='jsrun -n 1')
+        job.add_command('ls /mnt/bb/$USER', run='jsrun -n 1')
+        job.add_command('ls $BB_INPUT', run='jsrun -n 1')
 
     job.set_env_var('CMD', train_cmd)
 

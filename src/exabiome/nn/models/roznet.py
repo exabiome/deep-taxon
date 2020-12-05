@@ -66,12 +66,9 @@ class RozNet(AbstractLit):
         x = self.embedding(x)
         x = x.permute(0, 2, 1)
         x = self.features(x)
-        print("===3", x.shape)
         x = self.pool(x)
         x = torch.flatten(x, 1)
-        print("===4", x.shape)
         x = self.classifier(x)
-        print("====5", x.shape)
         return x
 
 

@@ -64,6 +64,8 @@ class AbstractLit(LightningModule):
             kwargs.update(self.hparams.loader_kwargs)
             if self._inference:
                 kwargs['distances'] = False
+                kwargs.pop('num_workers', None)
+                kwargs.pop('multiprocessing_context', None)
             tr, te, va = train_test_loaders(dataset, **kwargs)
             self.loaders = {'train': tr, 'test': te, 'validate': va}
             self.dataset = dataset
