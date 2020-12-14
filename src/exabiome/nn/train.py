@@ -8,6 +8,12 @@ import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
 from hdmf.utils import docval
+from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+import pytorch_lightning.cluster_environments as cenv
+
+
 
 import argparse
 import logging
@@ -121,7 +127,6 @@ def process_args(args=None, return_io=False):
     args.loader_kwargs = dict()
     if args.lsf:
         args.loader_kwargs['num_workers'] = 6
-        args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
     model = process_model(args)
 
@@ -182,19 +187,13 @@ def process_args(args=None, return_io=False):
     return tuple(ret)
 
 
-from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
-
-
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
-    print(argv)
     model, args, addl_targs = process_args(parse_args(argv=argv))
 
     outbase, output = process_output(args)
     check_directory(outbase)
-    print(args)
+    print("processed_args: ", args, file=sys.stderr)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -206,21 +205,21 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False, save_last=True, save_top_k=1),
+        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False, save_last=True, save_top_k=None),
         #logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
         logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs')),
-        row_log_interval=10,
-        log_save_interval=100
+        log_every_n_steps=100
     )
     targs.update(addl_targs)
+
 
     print('Trainer args:', targs, file=sys.stderr)
     trainer = Trainer(**targs)
 
     if args.debug:
-        print_dataloader(model.test_dataloader())
-        print_dataloader(model.train_dataloader())
-        print_dataloader(model.val_dataloader())
+        print_dataloaders(test=model.test_dataloader(),
+                          train=model.train_dataloader(),
+                          val=model.val_dataloader())
 
     s = datetime.now()
     trainer.fit(model)
@@ -272,8 +271,11 @@ def cuda_sum(argv=None):
     print('torch.cuda.is_available:', torch.cuda.is_available())
     print('torch.cuda.device_count:', torch.cuda.device_count())
 
-def print_dataloader(dl):
-    print(dl.dataset.index[0], dl.dataset.index[-1])
+def print_dataloaders(**loaders):
+    msg = list()
+    for k, v in loaders.items():
+        msg.append("%s=(%s, %s)" % (k, v.dataset.index[0], v.dataset.index[-1]))
+    print(" ".join(msg), file=sys.stderr)
 
 def overall_metric(model, loader, metric):
     val = 0.0

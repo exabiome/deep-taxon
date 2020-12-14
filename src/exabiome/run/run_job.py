@@ -146,7 +146,8 @@ def run_train(argv=None):
 
     if args.nodes > 1:
         job.set_env_var('OMP_NUM_THREADS', 1)
-        job.set_env_var('NCCL_DEBUG', 'INFO')
+        job.set_env_var('NCCL_SOCKET_IFNAME', 'ib0')
+        job.set_env_var('NCCL_DEBUG', 'WARN')
 
     job.set_env_var('OPTIONS', options)
     job.set_env_var('OUTDIR', f'{expdir}/train.$JOB')
@@ -168,7 +169,7 @@ def run_train(argv=None):
 
     if args.summit and job.use_bb:
         job.add_command('echo "$INPUT to $BB_INPUT"')
-        job.add_command('cp $INPUT $BB_INPUT', run='jsrun -n 1')
+        job.add_command(f'cp $INPUT $BB_INPUT', run='jsrun -n {args.nodes}')
         job.add_command('ls /mnt/bb/$USER', run='jsrun -n 1')
         job.add_command('ls $BB_INPUT', run='jsrun -n 1')
 
@@ -186,6 +187,7 @@ def run_train(argv=None):
         # when using regular DDP, jsrun should be called with one resource per node (-r) and
         # one rank per GPU (-a) to work with PyTorch Lightning
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c 42'
+        #jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a 1 -r 1 -c 42'
         job.add_command('$CMD > $LOG 2>&1', run=jsrun)
     else:
         job.add_command('$CMD > $LOG 2>&1', run='srun')

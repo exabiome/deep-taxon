@@ -93,9 +93,6 @@ class AbstractLit(LightningModule):
         loss = self._loss(output, target)
         return {'loss': loss}
 
-    def training_epoch_end(self, outputs):
-        return {'log': outputs[0]}
-
     # VALIDATION
     def val_dataloader(self):
         self._check_loaders()
@@ -108,7 +105,8 @@ class AbstractLit(LightningModule):
 
     def validation_epoch_end(self, outputs):
         val_loss_mean = torch.stack([x['val_loss'] for x in outputs]).mean()
-        return {'log': {'val_loss': val_loss_mean}}
+        #return {'log': {'val_loss': val_loss_mean}}
+        self.log('val_loss', val_loss_mean)
 
     # TEST
     def test_dataloader(self):

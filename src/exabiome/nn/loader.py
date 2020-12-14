@@ -1,5 +1,8 @@
+import os
+
 import torch.nn.functional as F
 import torch
+import pytorch_lightning as pl
 import numpy as np
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 from sklearn.model_selection import train_test_split
@@ -19,6 +22,9 @@ def check_window(window, step):
 
 
 def read_dataset(path):
+    for root, dirs, files in os.walk("/mnt/bb/ajtritt/"):
+        for filename in files:
+            print(rank, '-', filename)
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
     dataset = SeqDataset(difile)
@@ -314,4 +320,46 @@ def get_loader(dataset, distances=False, **kwargs):
             raise ValueError('DeepIndexFile {dataset.difile} does not contain distances')
         collater = DistanceCollater(dataset.difile.distances.data[:])
     return DataLoader(dataset, collate_fn=collater, **kwargs)
+
+
+class DIDataModule(pl.LightningDataModule):
+
+    def __init__(self, hparams, inference=False):
+        self.hparams = hparams
+        self.inference = inference
+
+    def train_dataloader(self):
+        self._check_loaders()
+        return self.loaders['train']
+
+    def val_dataloader(self):
+        self._check_loaders()
+        return self.loaders['validate']
+
+    def test_dataloader(self):
+        self._check_loaders()
+        return self.loaders['test']
+
+
+
+    def _check_loaders(self):
+        """
+        Load dataset if it has not been loaded yet
+        """
+        dataset, io = process_dataset(self.hparams, inference=self._inference)
+        if self.hparams.load:
+            dataset.load()
+
+        kwargs = dict(random_state=self.hparams.seed,
+                      batch_size=self.hparams.batch_size,
+                      distances=self.hparams.manifold,
+                      downsample=self.hparams.downsample)
+        kwargs.update(self.hparams.loader_kwargs)
+        if self._inference:
+            kwargs['distances'] = False
+            kwargs.pop('num_workers', None)
+            kwargs.pop('multiprocessing_context', None)
+        tr, te, va = train_test_loaders(dataset, **kwargs)
+        self.loaders = {'train': tr, 'test': te, 'validate': va}
+        self.dataset = dataset
 
