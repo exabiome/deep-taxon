@@ -12,7 +12,7 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning.cluster_environments as cenv
-
+from pytorch_lightning.accelerators.cpu_accelerator import CPUAccelerator
 
 
 import argparse
@@ -152,7 +152,6 @@ def process_args(args=None, return_io=False):
         targs['gpus'] = process_gpus(args.gpus)
         targs['num_nodes'] = args.num_nodes
         if targs['gpus'] != 1 or targs['num_nodes'] > 1:
-            targs['accelerator'] = 'ddp'
             env = None
             if args.lsf:
                 env = cenv.LSFEnvironment()
@@ -163,6 +162,10 @@ def process_args(args=None, return_io=False):
                       file=sys.stderr)
                 sys.exit(1)
             targs.setdefault('plugins', list()).append(env)
+            if targs['gpus'] is not None:
+                targs['accelerator'] = 'ddp'
+            else:
+                targs['accelerator'] = CPUAccelerator(trainer=None, cluster_environment=env)
     del args.gpus
 
     if args.debug:
