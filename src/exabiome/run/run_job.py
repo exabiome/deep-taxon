@@ -89,7 +89,7 @@ def run_train(argv=None):
             job.set_use_bb(True)
     else:
         check_cori(args)
-        job = SlurmJob(args.arch)
+        job = SlurmJob(arch=args.arch)
 
     job.nodes = args.nodes
     job.time = args.time
