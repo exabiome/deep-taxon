@@ -27,7 +27,7 @@ def check_cori(args):
     if args.nodes is None:
         args.nodes = 1
     if args.outdir is None:
-        args.outdir = os.path.abspath("$CSCRATCH/exabiome/deep-index")
+        args.outdir = os.path.abspath(os.path.expandvars("$CSCRATCH/exabiome/deep-index"))
 
 
 def run_train(argv=None):
