@@ -13,6 +13,7 @@ class SlurmJob(AbstractJob):
     submit_cmd = 'sbatch'
     job_var = 'SLURM_JOB_ID'
     job_fmt_var = 'j'
+    job_id_re = 'Submitted batch job (\d+)'
 
     debug_queue = 'debug'
 

@@ -47,6 +47,7 @@ def run_train(argv=None):
     rsc_grp.add_argument('-g', '--gpus',       help="the number of GPUs to use", default=None, type=int)
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
     rsc_grp.add_argument('-q', '--queue',      help="the queue to submit to", default=None)
+    rsc_grp.add_argument('-P', '--project',    help="the project/account to submit under", default=None)
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
@@ -96,6 +97,9 @@ def run_train(argv=None):
 
     if args.queue is not None:
         job.queue = args.queue
+        
+    if args.project is not None:
+        job.project = args.project
 
     args.input = os.path.abspath(args.input)
 
