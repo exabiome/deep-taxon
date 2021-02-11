@@ -14,11 +14,10 @@ class SlurmJob(AbstractJob):
     job_var = 'SLURM_JOB_ID'
     job_fmt_var = 'j'
     job_id_re = 'Submitted batch job (\d+)'
-    architecture = 'haswell'
 
     debug_queue = 'debug'
 
-    def __init__(self, queue='batch', project='m2865', time='1:00:00', nodes=1, jobname=None, output=None, error=None):
+    def __init__(self, queue='batch', project='m2865', time='1:00:00', nodes=1, jobname=None, output=None, error=None, architecture='gpu'):
         super().__init__()
         self.queue = queue
         self.project = project
@@ -29,7 +28,7 @@ class SlurmJob(AbstractJob):
             self.output = f'{self.jobname}.%J'
             self.error = f'{self.jobname}.%J'
 
-        self.add_addl_jobflag('C', 'gpu')
+        self.add_addl_jobflag('C', architecture)
 
     def write_run(self, f, command, command_options, options):
         print(f'srun -u {command}', file=f)
