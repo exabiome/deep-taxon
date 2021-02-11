@@ -83,13 +83,14 @@ def run_train(argv=None):
     if args.summit:
         check_summit(args)
         job = LSFJob()
-        job.set_conda_env(args.conda_env)
         job.add_modules('open-ce')
         if not args.load:
             job.set_use_bb(True)
     else:
         check_cori(args)
         job = SlurmJob(arch=args.arch)
+
+    job.set_conda_env(args.conda_env)
 
     job.nodes = args.nodes
     job.time = args.time
