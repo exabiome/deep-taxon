@@ -17,7 +17,7 @@ class SlurmJob(AbstractJob):
 
     debug_queue = 'debug'
 
-    def __init__(self, queue='batch', project='m2865', time='1:00:00', nodes=1, jobname=None, output=None, error=None):
+    def __init__(self, queue='batch', project='m2865', time='1:00:00', nodes=1, jobname=None, output=None, error=None, arch='gpu'):
         super().__init__()
         self.queue = queue
         self.project = project
@@ -28,7 +28,7 @@ class SlurmJob(AbstractJob):
             self.output = f'{self.jobname}.%J'
             self.error = f'{self.jobname}.%J'
 
-        self.add_addl_jobflag('C', 'gpu')
+        self.add_addl_jobflag('C', arch)
 
     def write_run(self, f, command, command_options, options):
         print(f'srun -u {command}', file=f)
