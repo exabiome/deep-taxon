@@ -443,39 +443,27 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
         self.step = step
         self.min_seq_len = min_seq_len
 
-        seq_idx = list()
+        lengths = difile.seq_table['length'][:]
+        # compute the number of chunks proced by each sequecne by adding
+        # the number of full chunks in each sequence to the number of incomplete chunks
+        n_chunks = ((lengths // self.step) +
+                    (lengths % self.step > 0)).astype(int)     # the number of chunks each sequence will produce
+        labels = np.repeat(difile.labels, n_chunks)             # the labels for each chunks
+        seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
         chunk_start = list()
-        chunk_end = list()
-        labels = list()
-
-        #lengths = difile.seq_table['length'][:]
-        #seqlabels = difile.labels
         for i in range(len(difile)):
-            row = difile[i]
-            label = row['label'] # seqlabels[i]
-            #for start in range(0, lengths[i], step):
-            seqlen = row['length']
-            start = np.arange(0, seqlen, step)
-            end = start + step
-            end[-1] = seqlen
-            if end[-1] - start[-1] < self.min_seq_len:
-                start = start[:-1]
-                end = end[:-1]
-            labels.append(np.full(start.shape[0], label))
-            seq_idx.append(np.full(start.shape[0], i))
-            chunk_start.append(start)
-            chunk_end.append(end)
-            #for start in range(0, seqlen, step):
-            #    end = min(seqlen, start+step)
-            #    if (end - start) >= self.min_seq_len:
-            #        labels.append(label)
-            #        seq_idx.append(i)
-            #        chunk_start.append(start)
-            #        chunk_end.append(end)
-        chunk_start = np.concatenate(chunk_start)
-        chunk_end = np.concatenate(chunk_end)
-        seq_idx = np.concatenate(seq_idx)
-        labels = np.concatenate(labels)
+            chunk_start.append(np.arange(0, lengths[i], self.step))
+        chunk_start = np.concatenate(chunk_start)               # the start of each chunk in it's respective sequence
+        chunk_end = chunk_start + self.wlen                     # the end of each chunk in it's respective sequence
+        chunk_end = np.min(np.array([chunk_end,                 # trim any ends that go over the end of a sequence
+                                     np.repeat(lengths, n_chunks)]), axis=0)
+
+        mask = (chunk_end - chunk_start) >= self.min_seq_len    # get rid of any sequences that are less than the minimum length
+        labels = labels[mask]
+        seq_idx = seq_idx[mask]
+        chunk_start = chunk_start[mask]
+        chunk_end = chunk_end[mask]
+
         super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
 
 
