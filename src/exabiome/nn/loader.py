@@ -18,6 +18,36 @@ def check_window(window, step):
         return window, step
 
 
+def add_dataset_arguments(parser):
+    group = parser.add_argument_group("Dataset options")
+
+    group.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
+    group.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
+    group.add_argument('-F', '--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
+    type_group = group.add_mutually_exclusive_group()
+    type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
+    type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
+    type_group.add_argument('-R', '--regression', action='store_true', help='run a regression problem', default=False)
+
+    return None
+
+
+def dataset_stats(argv=None):
+    """Read a dataset and print the number of samples to stdout"""
+
+    import argparse
+    parser =  argparse.ArgumentParser()
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    add_dataset_arguments(parser)
+
+    args = parser.parse_args(argv)
+    args.load = False
+    dataset, io = process_dataset(args)
+
+    n_samples = len(dataset)
+
+    print("Found %d samples in %s" % (n_samples, args.input))
+
 def read_dataset(path):
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()

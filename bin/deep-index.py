@@ -32,6 +32,7 @@ command_dict = {
     'train-job': Command('run.run_job.run_train', 'Run a training job'),
     'probe': Command('nn.probe.probe', 'Probe the environment of the system'),
     'test-input': Command('testing.dataset.check_sequences', 'Test input file against original fasta files'),
+    'dset-info': Command('nn.loader.dataset_stats', 'Read a dataset and print the number of samples to stdout'),
 }
 
 
