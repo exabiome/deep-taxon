@@ -44,8 +44,7 @@ class AbstractLit(LightningModule):
     def set_dataset(self, dataset, load=True, inference=False):
         kwargs = dict(random_state=self.hparams.seed,
                       batch_size=self.hparams.batch_size,
-                      distances=self.hparams.manifold,
-                      downsample=self.hparams.downsample)
+                      distances=self.hparams.manifold)
 
         if inference:
             kwargs['distances'] = False
@@ -63,8 +62,7 @@ class AbstractLit(LightningModule):
 
             kwargs = dict(random_state=self.hparams.seed,
                           batch_size=self.hparams.batch_size,
-                          distances=self.hparams.manifold,
-                          downsample=self.hparams.downsample)
+                          distances=self.hparams.manifold)
             kwargs.update(self.hparams.loader_kwargs)
             if self._inference:
                 kwargs['distances'] = False
