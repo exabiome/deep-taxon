@@ -7,6 +7,7 @@ from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
 from ..sequence import WindowChunkedDIFile, RevCompFilter
+from ..utils import parse_seed
 
 
 def check_window(window, step):
@@ -27,7 +28,6 @@ def add_dataset_arguments(parser):
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
-    type_group.add_argument('-R', '--regression', action='store_true', help='run a regression problem', default=False)
 
     return None
 
@@ -39,14 +39,39 @@ def dataset_stats(argv=None):
     parser =  argparse.ArgumentParser()
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     add_dataset_arguments(parser)
+    test_group = parser.add_argument_group('Test reading')
+    test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
+    test_group.add_argument('-s', '--seed', type=parse_seed, default=None, help='seed for an 80/10/10 split before reading an element')
+    test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
 
     args = parser.parse_args(argv)
-    args.load = False
     dataset, io = process_dataset(args)
+    difile = io.read()
+
+    n_taxa = len(difile.taxa_table)
+    n_seqs = len(difile.seq_table)
 
     n_samples = len(dataset)
+    wlen = args.window
+    step = args.step
+    if wlen is not None:
+        print(("Splitting %d sequences (from %d species) into %d "
+               "bp windows every %d bps produces %d samples") % (n_seqs, n_taxa, wlen, step, n_samples))
+    else:
+        print(("Found %d sequences across %d species. %d total samples") % (n_seqs, n_taxa, n_samples))
 
-    print("Found %d samples in %s" % (n_samples, args.input))
+    if args.test_read:
+        print("Attempting to read training data")
+        tr, va, te = train_test_loaders(dataset, random_state=args.seed, downsample=None, distances=args.manifold)
+        from tqdm import tqdm
+        for i in tqdm(tr):
+            continue
+        print("Attempting to read validation data")
+        for i in tqdm(va):
+            continue
+        print("Attempting to read testing data")
+        for i in tqdm(te):
+            continue
 
 def read_dataset(path):
     hdmfio = get_hdf5io(path, 'r')
@@ -321,7 +346,6 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
         collater = DistanceCollater(dataset.difile.distances.data[:])
 
     kwargs['pin_memory'] = True
-    print(kwargs)
 
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)
