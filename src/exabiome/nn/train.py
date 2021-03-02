@@ -33,11 +33,13 @@ def parse_args(*addl_args, argv=None):
     """
     desc = "Run network training"
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
-    parser.add_argument('model', type=str, help='the model to run', choices=list(models._models.keys()))
+    parser.add_argument('model', type=str, help='the model to run. see show-models for a list of available models',
+                        metavar="model", choices=list(models._models.keys()))
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
 
     add_dataset_arguments(parser)
+    parser.add_argument('--add_clf', default=False, action='store_true', help='add a classifier to a pretrained model')
 
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
 
@@ -189,6 +191,7 @@ def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
     print(argv)
     model, args, addl_targs = process_args(parse_args(argv=argv))
+    breakpoint()
 
     outbase, output = process_output(args)
     check_directory(outbase)
