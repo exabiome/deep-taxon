@@ -187,15 +187,21 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 
+def print0(*msg, **kwargs):
+    rank = 0
+    if rank == 0:
+        print(*msg, **kwargs)
+
+
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
-    print(argv)
+
+    print0(argv)
     model, args, addl_targs = process_args(parse_args(argv=argv))
-    breakpoint()
 
     outbase, output = process_output(args)
     check_directory(outbase)
-    print(args)
+    print0(args)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -215,7 +221,7 @@ def run_lightning(argv=None):
     if args.debug:
         targs['log_every_n_steps'] = 1
 
-    print('Trainer args:', targs, file=sys.stderr)
+    print0('Trainer args:', targs, file=sys.stderr)
     trainer = Trainer(**targs)
 
     if args.debug:
@@ -230,8 +236,8 @@ def run_lightning(argv=None):
     hours, seconds = divmod(td.seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
 
-    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
-    print("Total seconds:", td.total_seconds(), file=sys.stderr)
+    print0("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
+    print0("Total seconds:", td.total_seconds(), file=sys.stderr)
 
 
 def lightning_lr_find(argv=None):

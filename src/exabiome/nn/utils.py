@@ -77,7 +77,10 @@ def process_model(args, inference=False):
             args.classify = True
             _check_hparams(args)
             args.features = model
+            dataset, io = read_dataset(args.input)
+            args.n_outputs = len(dataset.difile.taxa_table)
             model = ResNetClassifier(args)
+            io.close()
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
