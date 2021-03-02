@@ -515,10 +515,10 @@ class RevCompFilter(DIFileFilter):
         oarg = arg
         arg, rev = divmod(arg, 2)
         item = self.difile[arg]
-        if rev:
-            item['seq'] = self.rcmap[item['seq'].long()]
-            # item['seq_name'] += '|rev'
-        # else:
-            # item['seq_name'] += '|fwd'
+        try:
+            if rev:
+                item['seq'] = self.rcmap[item['seq'].long()]
+        except AttributeError as e:
+            raise ValueError("Cannot run without loading data. Use -l to load data") from e
         item['id'] = oarg
         return item
