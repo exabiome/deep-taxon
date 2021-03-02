@@ -43,6 +43,13 @@ def process_gpus(gpus):
     return ret
 
 
+def _check_hparams(args):
+    if args.hparams is not None:
+        for k, v in args.hparams.items():
+            setattr(args, k, v)
+    del args.hparams
+
+
 def process_model(args, inference=False):
     """
     Process a model argument
@@ -59,7 +66,18 @@ def process_model(args, inference=False):
         model.forward = auto_move_data(model.forward)
 
     if args.checkpoint is not None:
-        model = model.load_from_checkpoint(args.checkpoint)
+        model = model.load_from_checkpoint(args.checkpoint, hparams=args)
+
+        # if we pretrained a feature extracter, like a resnet*_feat model
+        # load the pretrained model and add a classifier
+        if args.add_clf:
+            from .models.ssl import ResNetClassifier
+            if not (args.model.startswith('resnet') and args.model.endswith('feat')):
+                raise ValueError("Cannot add classifier to model %s -- must be a ResNet feature model (i.e. resnet*_feat)" % model)
+            args.classify = True
+            _check_hparams(args)
+            args.features = model
+            model = ResNetClassifier(args)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
@@ -77,10 +95,7 @@ def process_model(args, inference=False):
             n_outputs = dataset.difile.n_emb_components
         args.n_outputs = n_outputs
 
-        if args.hparams is not None:
-            for k, v in args.hparams.items():
-                setattr(args, k, v)
-        del args.hparams
+        _check_hparams(args)
 
         model = model(args)
 
