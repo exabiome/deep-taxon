@@ -74,6 +74,7 @@ def run_train(argv=None):
     parser.add_argument('-F', '--fwd_only',     help="use only fwd strand", action='store_true', default=False)
     parser.add_argument('-u', '--scheduler',    help="the learning rate scheduler to use", default=None)
     parser.add_argument('-c', '--checkpoint',   help="a checkpoint file to restart from", default=None)
+    parser.add_argument('--add_clf',            help="add classifier layer to ResNet features model", action='store_true', default=False)
     parser.add_argument('-E', '--experiment',   help="the experiment name to use", default=None)
     parser.add_argument('-d', '--debug',        help="run in debug mode", action='store_true', default=False)
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
@@ -146,7 +147,10 @@ def run_train(argv=None):
         exp += f'_{args.scheduler}'
 
     if args.checkpoint:
-        options += f' -c {args.checkpoint}'
+        job.set_env_var('CKPT', args.checkpoint)
+        options += f' -c $CKPT'
+        if args.add_clf:
+            options += f' --add_clf'
 
 
     if args.experiment:
