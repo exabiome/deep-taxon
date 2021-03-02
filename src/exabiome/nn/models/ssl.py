@@ -1,3 +1,5 @@
+import torch.nn as nn
+
 from . import model, AbstractLit
 
 from .resnet_feat import ResNetFeat
@@ -21,10 +23,10 @@ class ResNetClassifier(AbstractLit):
             raise ValueError("features must be an instance of ResNetFeat")
 
         n_inputs = 512 * self.features.layer4[-1].expansion
-        n_outputs = len(self.hparams.dataset.difile.taxa_table)
+        n_outputs = self.hparams.n_outputs
 
         sizes = [n_inputs]
-        sizes.extend(self.hparams.hidden_layers)
+        sizes.extend(getattr(self.hparams, 'hidden_layers', list()))
         sizes.append(n_outputs)
 
         layers = list()
