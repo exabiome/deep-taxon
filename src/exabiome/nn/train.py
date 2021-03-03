@@ -7,7 +7,7 @@ from datetime import datetime
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
-from .loader import add_dataset_arguments
+from .loader import add_dataset_arguments, DeepIndexDataModule
 from hdmf.utils import docval
 
 import argparse
@@ -122,6 +122,21 @@ def process_args(args=None, return_io=False):
         args.loader_kwargs['num_workers'] = 6
         args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
+    # classify by default
+    if args.manifold == args.classify == False:
+        args.classify = True
+
+    # make sure we are classifying if we are using adding classifier layers
+    # to a resnet features model
+    if args.add_clf:
+        if args.manifold:
+            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. --add_clf)')
+        args.classify = True
+
+    data_mod = DeepIndexDataModule(args)
+
+    args.n_outputs = data_mod.n_outputs
+
     model = process_model(args)
 
     targs = dict(
@@ -179,6 +194,8 @@ def process_args(args=None, return_io=False):
     if args.checkpoint:
         args.experiment += '_restart'
 
+    ret.append(data_mod)
+
     return tuple(ret)
 
 
@@ -197,7 +214,7 @@ def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
 
     print0(argv)
-    model, args, addl_targs = process_args(parse_args(argv=argv))
+    model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
 
     outbase, output = process_output(args)
     check_directory(outbase)
@@ -225,12 +242,12 @@ def run_lightning(argv=None):
     trainer = Trainer(**targs)
 
     if args.debug:
-        print_dataloader(model.test_dataloader())
-        print_dataloader(model.train_dataloader())
-        print_dataloader(model.val_dataloader())
+        print_dataloader(data_mod.test_dataloader())
+        print_dataloader(data_mod.train_dataloader())
+        print_dataloader(data_mod.val_dataloader())
 
     s = datetime.now()
-    trainer.fit(model)
+    trainer.fit(model, data_mod)
     e = datetime.now()
     td = e - s
     hours, seconds = divmod(td.seconds, 3600)

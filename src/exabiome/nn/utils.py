@@ -66,7 +66,13 @@ def process_model(args, inference=False):
         model.forward = auto_move_data(model.forward)
 
     if args.checkpoint is not None:
-        model = model.load_from_checkpoint(args.checkpoint, hparams=args)
+        try:
+            model = model.load_from_checkpoint(args.checkpoint , hparams=args)
+        except RuntimeError as e:
+            if 'Missing key(s)' in e.args[0]:
+                raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
+            else:
+                raise e
 
         # if we pretrained a feature extracter, like a resnet*_feat model
         # load the pretrained model and add a classifier
@@ -74,13 +80,8 @@ def process_model(args, inference=False):
             from .models.ssl import ResNetClassifier
             if not (args.model.startswith('resnet') and args.model.endswith('feat')):
                 raise ValueError("Cannot add classifier to model %s -- must be a ResNet feature model (i.e. resnet*_feat)" % model)
-            args.classify = True
             _check_hparams(args)
-            args.features = model
-            dataset, io = read_dataset(args.input)
-            args.n_outputs = len(dataset.difile.taxa_table)
-            model = ResNetClassifier(args)
-            io.close()
+            model = ResNetClassifier(args, model)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
