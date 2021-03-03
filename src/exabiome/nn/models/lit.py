@@ -51,27 +51,6 @@ class AbstractLit(LightningModule):
         tr, te, va = train_test_loaders(dataset, **kwargs)
         self.loaders = {'train': tr, 'test': te, 'validate': va}
 
-    def _check_loaders(self):
-        """
-        Load dataset if it has not been loaded yet
-        """
-        if not hasattr(self, 'loaders'):
-            dataset, io = process_dataset(self.hparams, inference=self._inference)
-            if self.hparams.load:
-                dataset.load()
-
-            kwargs = dict(random_state=self.hparams.seed,
-                          batch_size=self.hparams.batch_size,
-                          distances=self.hparams.manifold)
-            kwargs.update(self.hparams.loader_kwargs)
-            if self._inference:
-                kwargs['distances'] = False
-                kwargs.pop('num_workers', None)
-                kwargs.pop('multiprocessing_context', None)
-            tr, te, va = train_test_loaders(dataset, **kwargs)
-            self.loaders = {'train': tr, 'test': te, 'validate': va}
-            self.dataset = dataset
-
     def configure_optimizers(self):
         if self.hparams.lr_scheduler == 'adam':
             return optim.Adam(self.parameters(), lr=self.hparams.lr)
@@ -85,10 +64,6 @@ class AbstractLit(LightningModule):
             return [optimizer], [scheduler]
 
     # TRAIN
-    def train_dataloader(self):
-        self._check_loaders()
-        return self.loaders['train']
-
     def training_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self.forward(seqs)
@@ -100,10 +75,6 @@ class AbstractLit(LightningModule):
         return None
 
     # VALIDATION
-    def val_dataloader(self):
-        self._check_loaders()
-        return self.loaders['validate']
-
     def validation_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
@@ -115,10 +86,6 @@ class AbstractLit(LightningModule):
         return None
 
     # TEST
-    def test_dataloader(self):
-        self._check_loaders()
-        return self.loaders['test']
-
     def test_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
