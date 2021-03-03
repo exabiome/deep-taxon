@@ -158,7 +158,10 @@ def run_train(argv=None):
 
     options += f' -E {exp}'
 
-    expdir = f'{args.outdir}/train/datasets/{args.dataset}/{chunks}/{args.model}/{args.loss}/{exp}'
+    model_subdir = args.model
+    if args.add_clf:
+        model_subdir = 'resnet_clf'
+    expdir = f'{args.outdir}/train/datasets/{args.dataset}/{chunks}/{model_subdir}/{args.loss}/{exp}'
     if not os.path.exists(expdir):
         os.makedirs(expdir)
 
