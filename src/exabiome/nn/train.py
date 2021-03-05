@@ -39,7 +39,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('output', type=str, help='file to save model', default=None)
 
     add_dataset_arguments(parser)
-    parser.add_argument('--add_clf', default=False, action='store_true', help='add a classifier to a pretrained model')
+    parser.add_argument('-F', '--features', type=str, help='a checkpoint file for previously trained features', default=None)
 
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
 
@@ -128,9 +128,9 @@ def process_args(args=None, return_io=False):
 
     # make sure we are classifying if we are using adding classifier layers
     # to a resnet features model
-    if args.add_clf:
+    if args.features is not None:
         if args.manifold:
-            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. --add_clf)')
+            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
         args.classify = True
 
     data_mod = DeepIndexDataModule(args)
@@ -203,12 +203,15 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+RANK = comm.Get_rank()
 
 def print0(*msg, **kwargs):
-    rank = 0
-    if rank == 0:
+    RANK = 0
+    if RANK == 0:
         print(*msg, **kwargs)
-
 
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
@@ -216,13 +219,21 @@ def run_lightning(argv=None):
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
 
-    outbase, output = process_output(args)
-    check_directory(outbase)
+    # output is a wrapper function for os.path.join(outdir, <FILE>)
+    outdir, output = process_output(args)
+    check_directory(outdir)
     print0(args)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
+
+    if args.checkpoint is not None:
+        if RANK == 0:
+            print0(f'symlinking to {args.checkpoint} from {outdir}')
+            dest = output('start.ckpt')
+            src = os.path.relpath(args.checkpoint, start=outdir)
+            os.symlink(src, dest)
 
     seed_everything(args.seed)
 
@@ -230,8 +241,8 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(dirpath=outbase, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
-        logger = CSVLogger(save_dir=os.path.join(args.output, 'logs')),
+        checkpoint_callback=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
+        logger = CSVLogger(save_dir=output('logs')),
     )
     targs.update(addl_targs)
 

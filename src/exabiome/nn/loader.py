@@ -25,7 +25,7 @@ def add_dataset_arguments(parser):
 
     group.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     group.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
-    group.add_argument('-F', '--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
+    group.add_argument('--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
