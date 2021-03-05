@@ -1,3 +1,4 @@
+import warnings
 import torch.nn as nn
 
 from . import model, AbstractLit
@@ -9,7 +10,7 @@ from .resnet_feat import ResNetFeat
 class ResNetClassifier(AbstractLit):
     """A model that adds a classification layer to a pre-trained ResNet feature model"""
 
-    def __init__(self, hparams=None, features=None):
+    def __init__(self, hparams, features=None):
         self.hparams = self.check_hparams(hparams)
         self.hparams.classify = True
         super().__init__(self.hparams)
@@ -17,11 +18,15 @@ class ResNetClassifier(AbstractLit):
         self.set_inference(False)
         self.lr = getattr(hparams, 'lr', None)
 
-        if features is not None:
+        if isinstance(features, nn.Module):
             self.features = features
+            self.hparams.feat_model_name = features.short_hand
             if not isinstance(self.features, ResNetFeat):
                 raise ValueError("features must be an instance of ResNetFeat")
             self.setup_classifier()
+        else:
+            if features is not None:
+                warnings.warn(f'Got a strange value for features: {features}')
 
     def setup_classifier(self):
         n_inputs = 512 * self.features.layer4[-1].expansion
@@ -44,6 +49,6 @@ class ResNetClassifier(AbstractLit):
         from argparse import Namespace
 
         hparams = Namespace(**checkpoint['hyper_parameters'])
-        feat_model_cls = _models[hparams.model]
+        feat_model_cls = _models[hparams.feat_model_name]
         self.features = feat_model_cls(hparams)
         self.setup_classifier()
