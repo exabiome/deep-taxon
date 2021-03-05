@@ -79,6 +79,9 @@ class AbstractLit(LightningModule):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
         loss = self._loss(output, target)
+        pred = torch.argmax(output, dim=1)
+        acc = (pred == target).float().sum()/len(target)
+        self.log("val_acc", acc)
         self.log(self.val_loss, loss)
         return loss
 

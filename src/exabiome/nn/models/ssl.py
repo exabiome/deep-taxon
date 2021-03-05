@@ -20,13 +20,22 @@ class ResNetClassifier(AbstractLit):
 
         if isinstance(features, nn.Module):
             self.features = features
-            self.hparams.feat_model_name = features.short_hand
             if not isinstance(self.features, ResNetFeat):
                 raise ValueError("features must be an instance of ResNetFeat")
             self.setup_classifier()
         else:
             if features is not None:
                 warnings.warn(f'Got a strange value for features: {features}')
+
+
+    @property
+    def features(self):
+        return self._features
+
+    @features.setter
+    def features(self, val):
+        self._features = val
+        self.hparams.feat_model_name = val.short_hand
 
     def setup_classifier(self):
         n_inputs = 512 * self.features.layer4[-1].expansion
@@ -49,6 +58,7 @@ class ResNetClassifier(AbstractLit):
         from argparse import Namespace
 
         hparams = Namespace(**checkpoint['hyper_parameters'])
+        print('hparams', hparams)
         feat_model_cls = _models[hparams.feat_model_name]
         self.features = feat_model_cls(hparams)
         self.setup_classifier()
