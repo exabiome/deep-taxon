@@ -6,6 +6,7 @@ from . import models
 
 from ..utils import check_directory
 from pytorch_lightning.core.decorators import auto_move_data
+import torch
 
 
 def show_models(argv=None):
@@ -43,6 +44,13 @@ def process_gpus(gpus):
     return ret
 
 
+def _check_hparams(args):
+    if args.hparams is not None:
+        for k, v in args.hparams.items():
+            setattr(args, k, v)
+    del args.hparams
+
+
 def process_model(args, inference=False):
     """
     Process a model argument
@@ -54,12 +62,33 @@ def process_model(args, inference=False):
 
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
-    model = models._models[args.model]
+    model_cls = models._models[args.model]
     if inference:
         model.forward = auto_move_data(model.forward)
 
     if args.checkpoint is not None:
-        model = model.load_from_checkpoint(args.checkpoint)
+        try:
+            model = model_cls.load_from_checkpoint(args.checkpoint, hparams=args)
+        except RuntimeError as e:
+            if 'Missing key(s)' in e.args[0]:
+                raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
+            else:
+                raise e
+
+    # if we pretrained a feature extracter, like a resnet*_feat model
+    # load the pretrained model and add a classifier
+    elif args.features is not None:
+        feat_model_hparams = torch.load(args.features, map_location=torch.device('cpu'))['hyper_parameters']
+        feat_model_name = feat_model_hparams['model']
+        from .models.ssl import ResNetClassifier
+        if not (feat_model_name.startswith('resnet') and feat_model_name.endswith('feat')):
+            raise ValueError("Cannot add classifier to model %s -- must be a ResNet feature model (i.e. resnet*_feat)" % feat_model_name)
+
+        # load the features model
+        features_model = models._models[feat_model_name].load_from_checkpoint(args.features, hparams=feat_model_hparams)
+        args.feat_model_hparams = feat_model_hparams
+        _check_hparams(args)
+        model = model_cls(args, features=features_model)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
@@ -77,10 +106,7 @@ def process_model(args, inference=False):
             n_outputs = dataset.difile.n_emb_components
         args.n_outputs = n_outputs
 
-        if args.hparams is not None:
-            for k, v in args.hparams.items():
-                setattr(args, k, v)
-        del args.hparams
+        _check_hparams(args)
 
         model = model(args)
 

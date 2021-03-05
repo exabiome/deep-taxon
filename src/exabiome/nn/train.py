@@ -7,7 +7,7 @@ from datetime import datetime
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
-from .loader import add_dataset_arguments
+from .loader import add_dataset_arguments, DeepIndexDataModule
 from hdmf.utils import docval
 
 import argparse
@@ -33,11 +33,13 @@ def parse_args(*addl_args, argv=None):
     """
     desc = "Run network training"
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
-    parser.add_argument('model', type=str, help='the model to run', choices=list(models._models.keys()))
+    parser.add_argument('model', type=str, help='the model to run. see show-models for a list of available models',
+                        metavar="model", choices=list(models._models.keys()))
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
 
     add_dataset_arguments(parser)
+    parser.add_argument('-F', '--features', type=str, help='a checkpoint file for previously trained features', default=None)
 
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
 
@@ -120,6 +122,21 @@ def process_args(args=None, return_io=False):
         args.loader_kwargs['num_workers'] = 6
         args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
+    # classify by default
+    if args.manifold == args.classify == False:
+        args.classify = True
+
+    # make sure we are classifying if we are using adding classifier layers
+    # to a resnet features model
+    if args.features is not None:
+        if args.manifold:
+            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
+        args.classify = True
+
+    data_mod = DeepIndexDataModule(args)
+
+    args.n_outputs = data_mod.n_outputs
+
     model = process_model(args)
 
     targs = dict(
@@ -177,6 +194,8 @@ def process_args(args=None, return_io=False):
     if args.checkpoint:
         args.experiment += '_restart'
 
+    ret.append(data_mod)
+
     return tuple(ret)
 
 
@@ -184,19 +203,37 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+RANK = comm.Get_rank()
+
+def print0(*msg, **kwargs):
+    RANK = 0
+    if RANK == 0:
+        print(*msg, **kwargs)
 
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
-    print(argv)
-    model, args, addl_targs = process_args(parse_args(argv=argv))
 
-    outbase, output = process_output(args)
-    check_directory(outbase)
-    print(args)
+    print0(argv)
+    model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+
+    # output is a wrapper function for os.path.join(outdir, <FILE>)
+    outdir, output = process_output(args)
+    check_directory(outdir)
+    print0(args)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
+
+    if args.checkpoint is not None:
+        if RANK == 0:
+            print0(f'symlinking to {args.checkpoint} from {outdir}')
+            dest = output('start.ckpt')
+            src = os.path.relpath(args.checkpoint, start=outdir)
+            os.symlink(src, dest)
 
     seed_everything(args.seed)
 
@@ -204,31 +241,31 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(dirpath=outbase, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
-        logger = CSVLogger(save_dir=os.path.join(args.output, 'logs')),
+        checkpoint_callback=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
+        logger = CSVLogger(save_dir=output('logs')),
     )
     targs.update(addl_targs)
 
     if args.debug:
         targs['log_every_n_steps'] = 1
 
-    print('Trainer args:', targs, file=sys.stderr)
+    print0('Trainer args:', targs, file=sys.stderr)
     trainer = Trainer(**targs)
 
     if args.debug:
-        print_dataloader(model.test_dataloader())
-        print_dataloader(model.train_dataloader())
-        print_dataloader(model.val_dataloader())
+        print_dataloader(data_mod.test_dataloader())
+        print_dataloader(data_mod.train_dataloader())
+        print_dataloader(data_mod.val_dataloader())
 
     s = datetime.now()
-    trainer.fit(model)
+    trainer.fit(model, data_mod)
     e = datetime.now()
     td = e - s
     hours, seconds = divmod(td.seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
 
-    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
-    print("Total seconds:", td.total_seconds(), file=sys.stderr)
+    print0("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
+    print0("Total seconds:", td.total_seconds(), file=sys.stderr)
 
 
 def lightning_lr_find(argv=None):

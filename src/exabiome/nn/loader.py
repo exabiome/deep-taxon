@@ -1,3 +1,4 @@
+import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
@@ -24,7 +25,7 @@ def add_dataset_arguments(parser):
 
     group.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     group.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
-    group.add_argument('-F', '--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
+    group.add_argument('--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
@@ -369,3 +370,36 @@ def get_loader(dataset, distances=False, **kwargs):
         collater = DistanceCollater(dataset.difile.distances.data[:])
     return DataLoader(dataset, collate_fn=collater, **kwargs)
 
+
+class DeepIndexDataModule(pl.LightningDataModule):
+
+    def __init__(self, hparams, inference=False):
+        super().__init__()
+        self.hparams = hparams
+        self.dataset, self.io = process_dataset(self.hparams, inference=inference)
+        if self.hparams.load:
+            self.dataset.load()
+        kwargs = dict(random_state=self.hparams.seed,
+                      batch_size=self.hparams.batch_size,
+                      distances=self.hparams.manifold)
+        kwargs.update(self.hparams.loader_kwargs)
+        if inference:
+            kwargs['distances'] = False
+            kwargs.pop('num_workers', None)
+            kwargs.pop('multiprocessing_context', None)
+        tr, te, va = train_test_loaders(self.dataset, **kwargs)
+        self.loaders = {'train': tr, 'test': te, 'validate': va}
+
+        if self.hparams.classify:
+            self.n_outputs = len(self.dataset.difile.taxa_table)
+        else:
+            self.n_outputs = self.hparams.n_outputs
+
+    def train_dataloader(self):
+        return self.loaders['train']
+
+    def val_dataloader(self):
+        return self.loaders['validate']
+
+    def test_dataloader(self):
+        return self.loaders['test']
