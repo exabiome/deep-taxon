@@ -64,7 +64,7 @@ def process_model(args, inference=False):
     # the parameters used if we were given a checkpoint
     model_cls = models._models[args.model]
     if inference:
-        model.forward = auto_move_data(model.forward)
+        model_cls.forward = auto_move_data(model_cls.forward)
 
     if args.checkpoint is not None:
         try:
@@ -108,7 +108,7 @@ def process_model(args, inference=False):
 
         _check_hparams(args)
 
-        model = model(args)
+        model = model_cls(args)
 
         io.close()
 
