@@ -28,6 +28,12 @@ def check_cori(args):
         args.nodes = 1
     if args.outdir is None:
         args.outdir = os.path.abspath(os.path.expandvars("$CSCRATCH/exabiome/deep-index"))
+    if args.queue is None:
+        args.queue = 'regular'
+
+
+def get_jobargs(args):
+    return {k: getattr(args, k) for k in ('queue', 'nodes', 'gpus', 'jobname', 'project', 'time')}
 
 
 def run_train(argv=None):
@@ -48,7 +54,6 @@ def run_train(argv=None):
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
     rsc_grp.add_argument('-q', '--queue',      help="the queue to submit to", default=None)
     rsc_grp.add_argument('-P', '--project',    help="the project/account to submit under", default=None)
-    rsc_grp.add_argument('-a', '--arch',       help="the architecture to use, e.g., gpu or haswell (cori only)", default='gpu')
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
@@ -72,36 +77,42 @@ def run_train(argv=None):
     parser.add_argument('-E', '--experiment',   help="the experiment name to use", default=None)
     parser.add_argument('-d', '--debug',        help="run in debug mode", action='store_true', default=False)
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
-    parser.add_argument('-C', '--conda_env',    help="the conda environment ot use", default=None)
+    parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
+                                                      "if no environment loading is desired"), default=None)
 
     args = parser.parse_args(argv)
 
     if args.seed is None:
         args.seed = get_seed()
 
-    options = dict()
     if args.summit:
         check_summit(args)
-        job = LSFJob()
+        jobargs = get_jobargs(args)
+        job = LSFJob(**jobargs)
         job.add_modules('open-ce')
         if not args.load:
             job.set_use_bb(True)
     else:
         check_cori(args)
-        job = SlurmJob(arch=args.arch)
+        jobargs = get_jobargs(args)
+        job = SlurmJob(**jobargs)
 
-    job.set_conda_env(args.conda_env)
+    if args.conda_env is None:
+        args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
 
-    job.nodes = args.nodes
-    job.time = args.time
-    job.gpus = args.gpus
-    job.jobname = args.jobname
+    if args.conda_env != 'none':
+        job.set_conda_env(args.conda_env)
 
-    if args.queue is not None:
-        job.queue = args.queue
-        
-    if args.project is not None:
-        job.project = args.project
+    # job.nodes = args.nodes
+    # job.time = args.time
+    # job.gpus = args.gpus
+    # job.jobname = args.jobname
+
+    # if args.queue is not None:
+    #     job.queue = args.queue
+
+    # if args.project is not None:
+    #     job.project = args.project
 
     args.input = os.path.abspath(args.input)
 
@@ -147,7 +158,7 @@ def run_train(argv=None):
     if not os.path.exists(expdir):
         os.makedirs(expdir)
 
-    job.output = f'{expdir}/train.%{job.job_fmt_var}.lsf_log'
+    job.output = f'{expdir}/train.%{job.job_fmt_var}.log'
     job.error = job.output
 
     if args.nodes > 1:

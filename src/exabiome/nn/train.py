@@ -7,6 +7,7 @@ from datetime import datetime
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
+from .loader import add_dataset_arguments
 from hdmf.utils import docval
 
 import argparse
@@ -35,10 +36,11 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('model', type=str, help='the model to run', choices=list(models._models.keys()))
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
-    type_group = parser.add_mutually_exclusive_group()
-    type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
-    type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
-    type_group.add_argument('-R', '--regression', action='store_true', help='run a regression problem', default=False)
+
+    add_dataset_arguments(parser)
+
+    parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+
     parser.add_argument('-o', '--n_outputs', type=int, help='the number of outputs in the final layer', default=32)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
@@ -54,14 +56,9 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
-    parser.add_argument('--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
-    parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
-    parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
-    parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
-    parser.add_argument('-F', '--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
     parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
@@ -146,18 +143,19 @@ def process_args(args=None, return_io=False):
     else:
         targs['gpus'] = process_gpus(args.gpus)
         targs['num_nodes'] = args.num_nodes
+        targs['accelerator'] = 'ddp'
         if targs['gpus'] != 1 or targs['num_nodes'] > 1:
-            targs['accelerator'] = 'ddp'
-            env = None
-            if args.lsf:
-                env = cenv.LSFEnvironment()
-            elif args.slurm:
-                env = cenv.SLURMEnvironment()
-            else:
-                print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
-                      file=sys.stderr)
-                sys.exit(1)
-            targs.setdefault('plugins', list()).append(env)
+            # env = None
+            # if args.lsf:
+            #     env = cenv.LSFEnvironment()
+            # elif args.slurm:
+            #     env = cenv.SLURMEnvironment()
+            # else:
+            #     print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
+            #           file=sys.stderr)
+            #     sys.exit(1)
+            # targs.setdefault('plugins', list()).append(env)
+            pass
     del args.gpus
 
     if args.debug:
@@ -183,7 +181,7 @@ def process_args(args=None, return_io=False):
 
 
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 
@@ -206,13 +204,13 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False, save_last=True, save_top_k=1),
-        #logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
-        logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs')),
-        row_log_interval=10,
-        log_save_interval=100
+        checkpoint_callback=ModelCheckpoint(dirpath=outbase, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
+        logger = CSVLogger(save_dir=os.path.join(args.output, 'logs')),
     )
     targs.update(addl_targs)
+
+    if args.debug:
+        targs['log_every_n_steps'] = 1
 
     print('Trainer args:', targs, file=sys.stderr)
     trainer = Trainer(**targs)

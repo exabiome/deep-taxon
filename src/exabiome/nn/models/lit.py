@@ -14,6 +14,10 @@ from ..loss import DistMSELoss
 
 class AbstractLit(LightningModule):
 
+    val_loss = 'validation_loss'
+    train_loss = 'training_loss'
+    test_loss = 'test_loss'
+
     schedules = ('adam', 'cyclic', 'plateau')
 
     def __init__(self, hparams):
@@ -40,8 +44,7 @@ class AbstractLit(LightningModule):
     def set_dataset(self, dataset, load=True, inference=False):
         kwargs = dict(random_state=self.hparams.seed,
                       batch_size=self.hparams.batch_size,
-                      distances=self.hparams.manifold,
-                      downsample=self.hparams.downsample)
+                      distances=self.hparams.manifold)
 
         if inference:
             kwargs['distances'] = False
@@ -59,8 +62,7 @@ class AbstractLit(LightningModule):
 
             kwargs = dict(random_state=self.hparams.seed,
                           batch_size=self.hparams.batch_size,
-                          distances=self.hparams.manifold,
-                          downsample=self.hparams.downsample)
+                          distances=self.hparams.manifold)
             kwargs.update(self.hparams.loader_kwargs)
             if self._inference:
                 kwargs['distances'] = False
@@ -91,10 +93,11 @@ class AbstractLit(LightningModule):
         idx, seqs, target, olen, seq_id = batch
         output = self.forward(seqs)
         loss = self._loss(output, target)
-        return {'loss': loss}
+        self.log(self.train_loss, loss)
+        return loss
 
     def training_epoch_end(self, outputs):
-        return {'log': outputs[0]}
+        return None
 
     # VALIDATION
     def val_dataloader(self):
@@ -104,11 +107,12 @@ class AbstractLit(LightningModule):
     def validation_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
-        return {'val_loss': self._loss(output, target)}
+        loss = self._loss(output, target)
+        self.log(self.val_loss, loss)
+        return loss
 
     def validation_epoch_end(self, outputs):
-        val_loss_mean = torch.stack([x['val_loss'] for x in outputs]).mean()
-        return {'log': {'val_loss': val_loss_mean}}
+        return None
 
     # TEST
     def test_dataloader(self):
@@ -118,8 +122,9 @@ class AbstractLit(LightningModule):
     def test_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
-        return {'test_loss': self._loss(output, target)}
+        loss = self._loss(output, target)
+        self.log(self.test_loss, loss)
+        return loss
 
     def test_epoch_end(self, outputs):
-        test_loss_mean = torch.stack([x['test_loss'] for x in outputs]).mean()
-        return {'test_loss': test_loss_mean}
+        return None

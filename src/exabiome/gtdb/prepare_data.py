@@ -304,6 +304,8 @@ def prepare_data(argv=None):
                 skbio_cls = DNA
 
             vocab = np.array(list(vocab_it.characters()))
+            if not args.protein:
+                np.assert_array_equal(vocab, list('ACYWSKDVNTGRWSMHBN'))
 
             sequence = list()
             names = list()

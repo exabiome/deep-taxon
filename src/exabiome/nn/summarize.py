@@ -313,5 +313,59 @@ def summarize(argv=None):
         plt.savefig(agg_fig_path, dpi=100)
 
 
+def get_profile_data(argv=None):
+    """Extract profiling data from PL log"""
+
+    import argparse
+    import os
+    import re
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('log_files', nargs='+', help='the log files to parse')
+
+    args = parser.parse_args(argv)
+
+    re_delim = re.compile('\s*\|[_\s]*')
+    time_col = -1
+    keys =  ['model_forward',
+             'model_backward',
+             'on_batch_end',
+             'optimizer_step',
+             'get_train_batch']
+
+    gpu_re = re.compile('_g(\d+)_')
+    batch_re = re.compile('_b(\d+)_')
+
+    all_data = list()
+    for log_file in args.log_files:
+        data = dict()
+        found_report = False
+        with open(log_file, 'r', encoding='ISO-8859-1') as f:
+            for line in f:
+                if line.startswith('Action'):
+                    found_report = True
+                    columns = re_delim.split(line)
+                    for i, c in enumerate(columns):
+                        if 'Total' in c:
+                            time_col = i
+                elif found_report:
+                    if line == '\n': # done reading table
+                        break
+                    if line.startswith('Total'):
+                        data['Total'] = re_delim.split(line)[time_col].strip()
+                    else:
+                        for key in keys:
+                            if line.startswith(key):
+                                data[key] = re_delim.split(line)[time_col].strip()
+                                break
+        if len(data) == 0:
+            break
+        data['n_gpu'] = gpu_re.search(log_file).groups(0)[0].strip()
+        data['batch_size'] = batch_re.search(log_file).groups(0)[0].strip()
+        all_data.append(data)
+    pd.DataFrame(data=all_data).to_csv(sys.stdout)
+
+
 if __name__ == '__main__':
     main()

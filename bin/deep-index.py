@@ -1,3 +1,4 @@
+import numpy as np
 import sys
 from datetime import datetime
 from importlib import import_module
@@ -33,6 +34,7 @@ command_dict = {
     'probe': Command('nn.probe.probe', 'Probe the environment of the system'),
     'test-input': Command('testing.dataset.check_sequences', 'Test input file against original fasta files'),
     'dset-info': Command('nn.loader.dataset_stats', 'Read a dataset and print the number of samples to stdout'),
+    'extract-profile': Command('nn.summarize.get_profile_data', 'Extract profile data from log files'),
 }
 
 

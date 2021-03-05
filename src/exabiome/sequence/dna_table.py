@@ -443,11 +443,11 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
         self.step = step
         self.min_seq_len = min_seq_len
 
-        lengths = difile.seq_table['length'][:]
+        lengths = difile.seq_table['length'][:].astype(int)
         # compute the number of chunks proced by each sequecne by adding
         # the number of full chunks in each sequence to the number of incomplete chunks
         n_chunks = ((lengths // self.step) +
-                    (lengths % self.step > 0)).astype(int)     # the number of chunks each sequence will produce
+                    (lengths % self.step > 0))                  # the number of chunks each sequence will produce
         labels = np.repeat(difile.labels, n_chunks)             # the labels for each chunks
         seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
         chunk_start = list()
