@@ -38,6 +38,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('output', type=str, help='file to save model', default=None)
 
     add_dataset_arguments(parser)
+    parser.add_argument('-F', '--features_checkpoint', type=str, help='a checkpoint file for previously trained features', default=None)
 
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
 
@@ -120,6 +121,21 @@ def process_args(args=None, return_io=False):
         args.loader_kwargs['num_workers'] = 6
         args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
+    # classify by default
+    if args.manifold == args.classify == False:
+        args.classify = True
+
+    # make sure we are classifying if we are using adding classifier layers
+    # to a resnet features model
+    if args.features_checkpoint is not None:
+        if args.manifold:
+            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
+        args.classify = True
+
+    data_mod = DeepIndexDataModule(args)
+
+    args.n_outputs = data_mod.n_outputs
+
     model = process_model(args)
 
     targs = dict(
@@ -159,7 +175,9 @@ def process_args(args=None, return_io=False):
     del args.gpus
 
     if args.debug:
-        targs['fast_dev_run'] = True
+        targs['limit_train_batches'] = 10
+        targs['limit_val_batches'] =5
+        targs['max_epochs'] = 1
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -184,6 +202,16 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+#from mpi4py import MPI
+
+#comm = MPI.COMM_WORLD
+#RANK = comm.Get_rank()
+
+RANK = 0
+
+def print0(*msg, **kwargs):
+    if RANK == 0:
+        print(*msg, **kwargs)
 
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
@@ -197,6 +225,19 @@ def run_lightning(argv=None):
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
+
+    if args.checkpoint is not None:
+        if RANK == 0:
+            print0(f'symlinking to {args.checkpoint} from {outdir}')
+            dest = output('start.ckpt')
+            src = os.path.relpath(args.checkpoint, start=outdir)
+            if os.path.exists(dest):
+                existing_src = os.readlink(dest)
+                if existing_src != src:
+                    msg = f'Cannot create symlink to checkpoint -- {dest} already exists, but points to {existing_src}'
+                    raise RuntimeError(msg)
+            else:
+                os.symlink(src, dest)
 
     seed_everything(args.seed)
 
@@ -281,7 +322,6 @@ def overall_metric(model, loader, metric):
     return val
 
 def print_args(argv=None):
-    '''Run Lightning Learning Rate finder'''
     import pickle
     import ruamel.yaml as yaml
     parser = argparse.ArgumentParser()
@@ -291,6 +331,15 @@ def print_args(argv=None):
         namespace = pickle.load(f)
     yaml.main.safe_dump(vars(namespace), sys.stdout, default_flow_style=False)
 
+
+def show_hparams(argv=None):
+    import yaml
+    import torch
+    parser = argparse.ArgumentParser()
+    parser.add_argument('checkpoint', help='the checkpoint file to pull hparams from', type=str)
+    args = parser.parse_args(argv)
+    hparams = torch.load(args.checkpoint, map_location=torch.device('cpu'))['hyper_parameters']
+    yaml.dump(hparams, sys.stdout)
 
 
 
