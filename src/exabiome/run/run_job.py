@@ -71,9 +71,10 @@ def run_train(argv=None):
     parser.add_argument('-M', '--model',        help="the model name", default='roznet')
     parser.add_argument('-D', '--dataset',      help="the dataset name", default='default')
     parser.add_argument('-e', '--epochs',       help="the number of epochs to run for", default=10)
-    parser.add_argument('-F', '--fwd_only',     help="use only fwd strand", action='store_true', default=False)
+    parser.add_argument('--fwd_only',     help="use only fwd strand", action='store_true', default=False)
     parser.add_argument('-u', '--scheduler',    help="the learning rate scheduler to use", default=None)
     parser.add_argument('-c', '--checkpoint',   help="a checkpoint file to restart from", default=None)
+    parser.add_argument('-F', '--features',     help="a checkpoint file for features", default=None)
     parser.add_argument('-E', '--experiment',   help="the experiment name to use", default=None)
     parser.add_argument('-d', '--debug',        help="run in debug mode", action='store_true', default=False)
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
@@ -135,7 +136,7 @@ def run_train(argv=None):
         options += f' -l'
 
     if args.fwd_only:
-        options += ' -F'
+        options += ' --fwd_only'
         chunks += '_fwd-only'
 
     if args.seed:
@@ -146,7 +147,12 @@ def run_train(argv=None):
         exp += f'_{args.scheduler}'
 
     if args.checkpoint:
-        options += f' -c {args.checkpoint}'
+        job.set_env_var('CKPT', args.checkpoint)
+        options += f' -c $CKPT'
+
+    if args.features:
+        job.set_env_var('FEATS_CKPT', args.features)
+        options += f' -F $FEATS_CKPT'
 
 
     if args.experiment:

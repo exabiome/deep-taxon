@@ -1,9 +1,7 @@
-from argparse import Namespace
 import warnings
 
 import torch
 import torch.nn as nn
-
 
 from . import model, AbstractLit
 from .resnet_feat import ResNetFeat
