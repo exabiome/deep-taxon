@@ -20,7 +20,6 @@ class ResNetClassifier(AbstractLit):
         self.lr = getattr(hparams, 'lr', None)
 
         if hasattr(self.hparams, 'features_checkpoint') and self.hparams.features_checkpoint is not None:
-            breakpoint()
             self._setup_features(self.hparams.features_checkpoint)
             self._setup_classifier()
 

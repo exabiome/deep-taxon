@@ -90,18 +90,18 @@ def process_model(args, inference=False):
     #    args.feat_model_name = feat_model_name
     #    _check_hparams(args)
     #    model = model_cls(args, features=features_model)
-    elif args.features is not None:
-        feat_model_hparams = torch.load(args.features, map_location=torch.device('cpu'))['hyper_parameters']
-        feat_model_name = feat_model_hparams['model']
-        from .models.ssl import ResNetClassifier
-        if not (feat_model_name.startswith('resnet') and feat_model_name.endswith('feat')):
-            raise ValueError("Cannot add classifier to model %s -- must be a ResNet feature model (i.e. resnet*_feat)" % feat_model_name)
+    # elif args.features is not None:
+    #     feat_model_hparams = torch.load(args.features, map_location=torch.device('cpu'))['hyper_parameters']
+    #     feat_model_name = feat_model_hparams['model']
+    #     from .models.ssl import ResNetClassifier
+    #     if not (feat_model_name.startswith('resnet') and feat_model_name.endswith('feat')):
+    #         raise ValueError("Cannot add classifier to model %s -- must be a ResNet feature model (i.e. resnet*_feat)" % feat_model_name)
 
-        # load the features model
-        features_model = models._models[feat_model_name].load_from_checkpoint(args.features, hparams=feat_model_hparams)
-        args.feat_model_hparams = feat_model_hparams
-        _check_hparams(args)
-        model = model_cls(args, features=features_model)
+    #     # load the features model
+    #     features_model = models._models[feat_model_name].load_from_checkpoint(args.features, hparams=feat_model_hparams)
+    #     args.feat_model_hparams = feat_model_hparams
+    #     _check_hparams(args)
+    #     model = model_cls(args, features=features_model)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '

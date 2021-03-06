@@ -206,10 +206,11 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 
-from mpi4py import MPI
-
-comm = MPI.COMM_WORLD
-RANK = comm.Get_rank()
+#from mpi4py import MPI
+#
+#comm = MPI.COMM_WORLD
+#RANK = comm.Get_rank()
+RANK = 0
 
 def print0(*msg, **kwargs):
     if RANK == 0:
