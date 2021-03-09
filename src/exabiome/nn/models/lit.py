@@ -76,8 +76,8 @@ class AbstractLit(LightningModule):
         idx, seqs, target, olen, seq_id = batch
         output = self.forward(seqs)
         loss = self._loss(output, target)
-        acc = self.accuracy(output, target)
-        self.log(self.train_acc, acc)
+        if self.hparams.classify:
+            self.log(self.train_acc, self.accuracy(output, target))
         self.log(self.train_loss, loss)
         return loss
 
@@ -89,8 +89,8 @@ class AbstractLit(LightningModule):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
         loss = self._loss(output, target)
-        acc = self.accuracy(output, target)
-        self.log(self.val_acc, acc)
+        if self.hparams.classify:
+            self.log(self.val_acc, self.accuracy(output, target))
         self.log(self.val_loss, loss)
         return loss
 
