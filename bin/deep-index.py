@@ -35,6 +35,7 @@ command_dict = {
     'test-input': Command('testing.dataset.check_sequences', 'Test input file against original fasta files'),
     'dset-info': Command('nn.loader.dataset_stats', 'Read a dataset and print the number of samples to stdout'),
     'extract-profile': Command('nn.summarize.get_profile_data', 'Extract profile data from log files'),
+    'show-hparams': Command('nn.train.show_hparams', 'Print hparams from a checkpoint file'),
 }
 
 

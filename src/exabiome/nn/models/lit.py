@@ -16,6 +16,8 @@ class AbstractLit(LightningModule):
 
     val_loss = 'validation_loss'
     train_loss = 'training_loss'
+    val_acc = 'validation_acc'
+    train_acc = 'training_acc'
     test_loss = 'test_loss'
 
     schedules = ('adam', 'cyclic', 'plateau')
@@ -63,11 +65,19 @@ class AbstractLit(LightningModule):
                 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             return [optimizer], [scheduler]
 
+    @staticmethod
+    def accuracy(output, target):
+        pred = torch.argmax(output, dim=1)
+        acc = (pred == target).float().sum()/len(target)
+        return acc
+
     # TRAIN
     def training_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self.forward(seqs)
         loss = self._loss(output, target)
+        if self.hparams.classify:
+            self.log(self.train_acc, self.accuracy(output, target))
         self.log(self.train_loss, loss)
         return loss
 
@@ -79,9 +89,8 @@ class AbstractLit(LightningModule):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
         loss = self._loss(output, target)
-        pred = torch.argmax(output, dim=1)
-        acc = (pred == target).float().sum()/len(target)
-        self.log("val_acc", acc)
+        if self.hparams.classify:
+            self.log(self.val_acc, self.accuracy(output, target))
         self.log(self.val_loss, loss)
         return loss
 
