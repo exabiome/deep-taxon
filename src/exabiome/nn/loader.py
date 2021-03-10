@@ -46,6 +46,8 @@ def dataset_stats(argv=None):
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
     test_group.add_argument('-s', '--seed', type=parse_seed, default=None, help='seed for an 80/10/10 split before reading an element')
     test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+    test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
+
 
     args = parser.parse_args(argv)
     dataset, io = process_dataset(args)
@@ -75,6 +77,21 @@ def dataset_stats(argv=None):
         print("Attempting to read testing data")
         for i in tqdm(te):
             continue
+    if args.output_map is not None:
+        tl1, tl2 = args.output_map
+        ret = difile.taxa_table.get_outputs_map(tl1, tl2)
+        bad = False
+        for id2, id1 in enumerate(ret):
+            mask = difile.taxa_table[tl2].get(np.s_[:], index=True) == id2
+            t2_vals = difile.taxa_table[tl1].get(mask, index=True)
+            if not np.all(t2_vals == id1):
+                t2 = difile.taxa_table[tl2].vocabulary[id2]
+                t1 = difile.taxa_table[tl1].vocabulary[id1]
+                print('ERROR -- not all {tl2} {t2} have {tl1} {t1}')
+                bad = True
+        if not bad:
+            print(f'taxonomic hierarchy for {tl1} to {tl2} okay')
+
 
 def read_dataset(path):
     hdmfio = get_hdf5io(path, 'r')
