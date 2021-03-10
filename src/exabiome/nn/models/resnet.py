@@ -179,6 +179,9 @@ class ResNet(AbstractLit):
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
+    def reconfigure_outputs(self, n_outputs):
+        self.fc = nn.Linear(self.fc.in_features, n_outputs)
+
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self.hparams.norm_layer
         downsample = None
