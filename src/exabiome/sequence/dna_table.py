@@ -322,6 +322,7 @@ class DeepIndexFile(Container):
         call_docval_func(super().__init__, {'name': 'root'})
         self.seq_table = seq_table
         self.taxa_table = taxa_table
+        self.__n_outputs = len(taxa_table)
         self.distances = distances
         self.tree = tree
         self._sanity = False
@@ -333,9 +334,14 @@ class DeepIndexFile(Container):
         self.__get_kwargs = dict()
 
     def set_label_key(self, val):
+        self.label_key = val
         if val in self.taxonomic_levels:
             self.__get_kwargs['index'] = True
-        self.label_key = val
+            self.__n_outputs = len(self.taxa_table[self.label_key].vocabulary)
+
+    @property
+    def n_outputs(self):
+        return self.__n_outputs
 
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity

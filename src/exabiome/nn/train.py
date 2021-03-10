@@ -134,8 +134,6 @@ def process_args(args=None, return_io=False):
 
     data_mod = DeepIndexDataModule(args)
 
-    args.n_outputs = data_mod.n_outputs
-
     model = process_model(args)
 
     targs = dict(
@@ -217,6 +215,16 @@ def print0(*msg, **kwargs):
 
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
+
+    import signal
+    import traceback
+    def signal_handler(sig, frame):
+        print('I caught SIG_KILL!')
+        track = traceback.format_exc()
+        print(track)
+        raise KeyboardInterrupt
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))

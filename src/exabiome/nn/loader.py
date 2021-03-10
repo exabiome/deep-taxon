@@ -97,13 +97,12 @@ def process_dataset(args, path=None, inference=False):
                          'to determine the number of outputs')
     if args.classify:
         dataset.set_classify(True)
-        n_outputs = len(dataset.difile.taxa_table)
         dataset.difile.set_label_key(args.tgt_tax_lvl)
+        args.n_outputs = dataset.difile.n_outputs
     elif args.manifold:
         if args.tgt_tax_lvl != 'species':
             raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
         dataset.set_classify(True)
-        n_outputs = 32        #TODO make this configurable #breakpoint
     else:
         raise ValueError('classify (-C) or manifold (-M) should be set')
 
@@ -394,11 +393,6 @@ class DeepIndexDataModule(pl.LightningDataModule):
             kwargs.pop('multiprocessing_context', None)
         tr, te, va = train_test_loaders(self.dataset, **kwargs)
         self.loaders = {'train': tr, 'test': te, 'validate': va}
-
-        if self.hparams.classify:
-            self.n_outputs = len(self.dataset.difile.taxa_table)
-        else:
-            self.n_outputs = self.hparams.n_outputs
 
     def train_dataloader(self):
         return self.loaders['train']
