@@ -179,8 +179,16 @@ class ResNet(AbstractLit):
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
-    def reconfigure_outputs(self, n_outputs):
-        self.fc = nn.Linear(self.fc.in_features, n_outputs)
+    def reconfigure_outputs(self, outputs_map):
+        outputs_map = torch.as_tensor(outputs_map)
+        n_outputs = torch.unique(outputs_map).shape[0]
+        new_fc = nn.Linear(self.fc.in_features, n_outputs)
+        with torch.no_grad():
+            for i in range(self.fc.out_features):
+                mask = outputs_map == i
+                new_fc.weight[mask, :] = self.fc.weight[i, :]
+                new_fc.bias[mask] = self.fc.bias[i]
+        self.fc = new_fc
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self.hparams.norm_layer

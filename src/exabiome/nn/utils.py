@@ -51,7 +51,7 @@ def _check_hparams(args):
     del args.hparams
 
 
-def process_model(args, inference=False):
+def process_model(args, inference=False, taxa_table=None):
     """
     Process a model argument
 
@@ -71,7 +71,14 @@ def process_model(args, inference=False):
             ckpt_hparams = torch.load(args.checkpoint)['hyper-parameters']
             model = model_cls.load_from_checkpoint(args.checkpoint, hparams=ckpt_hparams)
             if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
-                model.reconfigure_output(args.n_outputs)
+                if taxa_table is not None:
+                    msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
+                          "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.checkpoint}. You must provide the TaxaTable for "
+                          "computing the taxonomy mapping for reconfiguring the final output layer")
+
+                    raise ValueError(msg)
+                outputs_map = taxa_table.get_outputs_map(ckpt_hparams.tgt_tax_lvl, args.tgt_tax_lvl)
+                model.reconfigure_output(outputs_map)
         except RuntimeError as e:
             if 'Missing key(s)' in e.args[0]:
                 raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e

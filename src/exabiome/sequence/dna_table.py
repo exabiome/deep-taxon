@@ -251,6 +251,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
         taxon_id, embedding, rep_taxon_id = popargs('taxon_id', 'embedding', 'rep_taxon_id', kwargs)
         taxonomy_labels = ['phylum', 'class', 'order', 'family', 'genus', 'species']
         taxonomy = popargs(*taxonomy_labels, kwargs)
+        self.__taxmap = {t: i for i, t in enumerate(taxonomy_labels)}
 
         columns = list()
         if isinstance(taxon_id, VectorData):      # data is being read -- here we assume that everything is a VectorData
@@ -270,6 +271,23 @@ class TaxaTable(DynamicTable, TorchableMixin):
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
 
+    def get_outputs_map(self, in_tax, out_tax):
+        if in_tax not in self.__taxmap:
+            raise ValueError(f'Unrecognized taxonomic level: {in_tax}')
+        if out_tax not in self.__taxmap:
+            raise ValueError(f'Unrecognized taxonomic level: {out_tax}')
+        if self.__taxmap[in_tax] >= self.__taxmap[out_tax]:
+            raise ValueError(f'got in_tax={in_tax} and out_tax={out_tax} -- in_tax should be a higher taxonomic level than out_tax')
+        in_ids = np.asarray(self[in_tax].data)
+        out_ids = np.asarray(self[out_tax].data)
+        ret = np.ones(len(np.unique(out_ids)), dtype=int) * -1
+        for in_id in np.unique(in_ids):
+            mask = in_ids == in_id
+            out_mask = np.unique(out_ids[mask])
+            if any(ret[out_mask] != -1):
+                raise ValueError("hierarchy violation!")
+            ret[out_mask] = in_id
+        return ret
 
     def taxid_torch_conversion(self, num_classes, device=None):
         def func(x):
