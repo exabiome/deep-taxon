@@ -239,12 +239,12 @@ class TaxaTable(DynamicTable, TorchableMixin):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
-            {'name': 'phylum', 'type': ('array_data', 'data', VectorData), 'doc': 'the phylum for each taxon'},
-            {'name': 'class', 'type': ('array_data', 'data', VectorData), 'doc': 'the class for each taxon'},
-            {'name': 'order', 'type': ('array_data', 'data', VectorData), 'doc': 'the order for each taxon'},
-            {'name': 'family', 'type': ('array_data', 'data', VectorData), 'doc': 'the family for each taxon'},
-            {'name': 'genus', 'type': ('array_data', 'data', VectorData), 'doc': 'the genus for each taxon'},
-            {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon'},
+            {'name': 'phylum', 'type': ('array_data', 'data', VocabData), 'doc': 'the phylum for each taxon'},
+            {'name': 'class', 'type': ('array_data', 'data', VocabData), 'doc': 'the class for each taxon'},
+            {'name': 'order', 'type': ('array_data', 'data', VocabData), 'doc': 'the order for each taxon'},
+            {'name': 'family', 'type': ('array_data', 'data', VocabData), 'doc': 'the family for each taxon'},
+            {'name': 'genus', 'type': ('array_data', 'data', VocabData), 'doc': 'the genus for each taxon'},
+            {'name': 'species', 'type': ('array_data', 'data', VocabData), 'doc': 'the species for each taxon'},
             {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None},
             {'name': 'rep_taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID for the species representative', 'default': None})
     def __init__(self, **kwargs):
@@ -263,7 +263,10 @@ class TaxaTable(DynamicTable, TorchableMixin):
             if embedding is not None: columns.append(VectorData('embedding', 'an embedding for each taxon', data=embedding))
             if rep_taxon_id is not None: columns.append(VectorData('rep_taxon_id', 'the taxon ID for the this species representative', data=rep_taxon_id))
             for l, t in zip(taxonomy_labels, taxonomy):
-                columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
+                if isinstance(t, VocabData):
+                    columns.append(t)
+                else:
+                    columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
 
@@ -303,6 +306,8 @@ class NewickString(Data):
 @register_class('DeepIndexFile', NS)
 class DeepIndexFile(Container):
 
+    taxonomic_levels = ("phylum", "class", "order", "family", "genus", "species")
+
     __fields__ = ({'name': 'seq_table', 'child': True},
                   {'name': 'taxa_table', 'child': True},
                   {'name': 'distances', 'child': True},
@@ -323,10 +328,13 @@ class DeepIndexFile(Container):
         self._sanity_features = 5
         self.__labels = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
-        self.label_key = 'id'
+        self.set_label_key('id')
         self.__rev = False
+        self.__get_kwargs = dict()
 
     def set_label_key(self, val):
+        if val in self.taxonomic_levels:
+            self.__get_kwargs['index'] = True
         self.label_key = val
 
     def set_sanity(self, sanity, n_features=5):
@@ -359,7 +367,7 @@ class DeepIndexFile(Container):
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
         label = self.seq_table['taxon'].get(arg, index=True)    # index to taxon table
         length = self.seq_table['length'].get(arg)
-        label = self.taxa_table[self.label_key][label]          # get the interesting information from the taxon table i.e. embedding
+        label = self.taxa_table[self.label_key].get(label, **self.__get_kwargs)
         return {'id': idx, 'seq': seq, 'label': label, 'length': length}
 
     def __len__(self):

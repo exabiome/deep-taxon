@@ -80,28 +80,22 @@ groups:
     doc: embedding of each taxa on n-dimensional space
     required: false
   - name: phylum
-    data_type_inc: VectorData
-    dtype: text
+    data_type_inc: VocabData
     doc: The phylum in the taxonomy
   - name: class
-    data_type_inc: VectorData
-    dtype: text
+    data_type_inc: VocabData
     doc: The class in the taxonomy
   - name: order
-    data_type_inc: VectorData
-    dtype: text
+    data_type_inc: VocabData
     doc: The order in the taxonomy
   - name: family
-    data_type_inc: VectorData
-    dtype: text
+    data_type_inc: VocabData
     doc: The family in the taxonomy
   - name: genus
-    data_type_inc: VectorData
-    dtype: text
+    data_type_inc: VocabData
     doc: The genus in the taxonomy
   - name: species
-    data_type_inc: VectorData
-    dtype: text
+    data_type_inc: VocabData
     doc: The species in the taxonomy
 
 - data_type_def: DeepIndexFile
