@@ -2,6 +2,8 @@ import math
 import numpy as np
 import skbio.stats.distance as ssd
 from skbio.sequence import DNA, Protein
+from sklearn.preprocessing import LabelEncoder
+from hdmf.common import VocabData
 import skbio.io
 import os
 
@@ -140,7 +142,7 @@ def prepare_data(argv=None):
     taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
     def func(row):
         dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
-        dat['species'] = dat['species'].split(' ')[1]
+        dat['species'] = dat['species'] # .split(' ')[1]
         dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
         dat['accession'] = row['accession'][3:]
         return pd.Series(data=dat)
@@ -189,8 +191,6 @@ def prepare_data(argv=None):
 
     logger.info('Shearing filtered accession from tree')
     rep_ids = taxdf['gtdb_genome_representative'].values
-    for rid in rep_ids:
-        print(rid)
     root = root.shear(rep_ids)
     logger.info('%d tips remaning' % len(list(root.tips())))
 
@@ -305,7 +305,7 @@ def prepare_data(argv=None):
 
             vocab = np.array(list(vocab_it.characters()))
             if not args.protein:
-                np.assert_array_equal(vocab, list('ACYWSKDVNTGRWSMHBN'))
+                np.testing.assert_array_equal(vocab, list('ACYWSKDVNTGRWSMHBN'))
 
             sequence = list()
             names = list()
@@ -350,7 +350,11 @@ def prepare_data(argv=None):
     tt_args = ['taxa_table', 'a table for storing taxa data', taxa_ids]
     tt_kwargs = dict()
     for t in taxlevels[1:]:
-        tt_args.append(taxdf[t].values)
+        enc = LabelEncoder().fit(taxdf[t].values)
+        tax_vocab = enc.classes_
+        if t == 'species':
+            tax_vocab = [x.split(' ')[1] for x in tax_vocab]
+        tt_args.append(VocabData(name=t, description=f'label encoded {t}', data=enc.transform(taxdf[t].values), vocabulary=tax_vocab))
     if emb is not None:
         tt_kwargs['embedding'] = emb
     tt_kwargs['rep_taxon_id'] = rep_ids
