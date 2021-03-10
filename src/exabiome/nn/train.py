@@ -54,7 +54,6 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
-    parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')

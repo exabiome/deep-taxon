@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
-from ..sequence import WindowChunkedDIFile, RevCompFilter
+from ..sequence import WindowChunkedDIFile, RevCompFilter, DeepIndexFile
 from ..utils import parse_seed
 
 
@@ -29,6 +29,8 @@ def add_dataset_arguments(parser):
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
+    group.add_argument('-t', '--tgt_tax_lvl', choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
+                       help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species')
 
     return None
 
@@ -96,12 +98,15 @@ def process_dataset(args, path=None, inference=False):
     if args.classify:
         dataset.set_classify(True)
         n_outputs = len(dataset.difile.taxa_table)
+        dataset.difile.set_label_key(args.tgt_tax_lvl)
     elif args.manifold:
+        if args.tgt_tax_lvl != 'species':
+            raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
         dataset.set_classify(True)
         n_outputs = 32        #TODO make this configurable #breakpoint
     else:
-        args.regression = True
-        dataset.set_classify(False)
+        raise ValueError('classify (-C) or manifold (-M) should be set')
+
     if inference:
         dataset.set_classify(True)
     args.window, args.step = check_window(args.window, args.step)

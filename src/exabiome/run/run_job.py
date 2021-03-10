@@ -48,7 +48,7 @@ def run_train(argv=None):
     parser.add_argument('--profile',           help="use PTL profiling", action='store_true', default=False)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
-    rsc_grp.add_argument('-t', '--time',       help='the time to run the job for', default='01:00:00')
+    rsc_grp.add_argument('-T', '--time',       help='the time to run the job for', default='01:00:00')
     rsc_grp.add_argument('-n', '--nodes',      help="the number of nodes to use", default=None, type=int)
     rsc_grp.add_argument('-g', '--gpus',       help="the number of GPUs to use", default=None, type=int)
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
@@ -69,6 +69,7 @@ def run_train(argv=None):
     parser.add_argument('-s', '--seed',         help="the seed to use", default=None)
     parser.add_argument('-L', '--loss',         help="the loss function to use", default='M')
     parser.add_argument('-M', '--model',        help="the model name", default='roznet')
+    parser.add_argument('-t', '--tgt_tax_lvl',  help='the taxonomic level to use', default=None)
     parser.add_argument('-D', '--dataset',      help="the dataset name", default='default')
     parser.add_argument('-e', '--epochs',       help="the number of epochs to run for", default=10)
     parser.add_argument('--fwd_only',     help="use only fwd strand", action='store_true', default=False)
@@ -153,6 +154,9 @@ def run_train(argv=None):
     if args.features:
         job.set_env_var('FEATS_CKPT', args.features)
         options += f' -F $FEATS_CKPT'
+
+    if args.tgt_tax_lvl is not None:
+        options += f' -t {args.tgt_tax_lvl}'
 
 
     if args.experiment:
