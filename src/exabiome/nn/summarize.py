@@ -367,5 +367,60 @@ def get_profile_data(argv=None):
     pd.DataFrame(data=all_data).to_csv(sys.stdout)
 
 
+def plot_loss(argv=None):
+    import argparse
+    import os
+
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('csv', type=str, help='the metrics.csv file')
+    #parser.add_argument('cols', nargs='*', type=str, help='the metrics.csv file')
+    args = parser.parse_args(argv)
+
+    def plot(ax, x, y, **kwargs):
+        mask = np.logical_not(np.logical_or(np.isnan(x), np.isnan(y)))
+        x = x[mask]
+        y = y[mask]
+        ax.plot(x, y, **kwargs)
+
+    df = pd.read_csv(args.csv, header=0)
+
+    outdir = os.path.dirname(args.csv)
+
+    x = df.step.values
+    tr_loss = df.training_loss.values
+    va_loss = df.validation_loss.values
+    epoch = df.epoch.values
+    epoch = epoch / epoch.max()
+
+    fig, ax = plt.subplots(1)
+    plot(ax, x, tr_loss, color='k', label='training')
+    plot(ax, x, va_loss, color='r', label='validation')
+    ep = epoch*max(np.nanmax(tr_loss), np.nanmax(va_loss))
+    plot(ax, x, ep, color='gray', ls='--', alpha=0.5)
+    ax.set_title('Loss')
+    path = os.path.join(outdir, 'loss.png')
+    print(f'saving loss figure to {path}')
+    fig.savefig(path, dpi=100)
+
+    columns = df.columns
+    if 'validation_acc' in df.columns or 'training_acc' in df.columns:
+        tr_acc = df.training_acc.values
+        va_acc = df.validation_acc.values
+        fig, ax = plt.subplots(1)
+        plot(ax, x, tr_acc, color='k', label='training')
+        plot(ax, x, va_acc, color='r', label='validation')
+        ep = epoch*max(np.nanmax(tr_acc), np.nanmax(va_acc))
+        plot(ax, x, ep, color='gray', ls='--', alpha=0.5)
+        ax.set_title('Accuracy')
+        path = os.path.join(outdir, 'accuracy.png')
+        print(f'saving accuracy figure to {path}')
+        fig.savefig(path, dpi=100)
+
+
+
+
 if __name__ == '__main__':
     main()
