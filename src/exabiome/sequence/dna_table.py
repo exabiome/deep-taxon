@@ -272,6 +272,14 @@ class TaxaTable(DynamicTable, TorchableMixin):
         call_docval_func(super().__init__, kwargs)
 
     def get_outputs_map(self, in_tax, out_tax):
+        """
+        Return a mapping from the *out_tax* taxonomic level to the *in_tax* taxonomic level
+
+        See exabiome.nn.model.resnet.ResNet.reconfigure_outputs for an example of where this gets used
+        Args:
+            in_tax (str)        : the input taxonomic level
+            out_tax (str)       : the output taxonomic level
+        """
         if in_tax not in self.__taxmap:
             raise ValueError(f'Unrecognized taxonomic level: {in_tax}')
         if out_tax not in self.__taxmap:
