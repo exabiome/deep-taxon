@@ -134,7 +134,7 @@ def process_args(args=None, return_io=False):
 
     data_mod = DeepIndexDataModule(args)
 
-    model = process_model(args)
+    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
     targs = dict(
         max_epochs=args.epochs,
@@ -203,11 +203,11 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 
-#from mpi4py import MPI
-#
-#comm = MPI.COMM_WORLD
-#RANK = comm.Get_rank()
-RANK = 0
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+RANK = comm.Get_rank()
+#RANK = 0
 
 def print0(*msg, **kwargs):
     if RANK == 0:

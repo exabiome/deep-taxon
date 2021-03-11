@@ -209,7 +209,7 @@ class ResNet(AbstractLit):
             outputs_map (array)         : a mapping of original layer output to new layer output
         """
         outputs_map = torch.as_tensor(outputs_map)
-        n_outputs = torch.unique(outputs_map).shape[0]
+        n_outputs = len(outputs_map)
         new_fc = nn.Linear(self.fc.in_features, n_outputs)
         with torch.no_grad():
             for i in range(self.fc.out_features):

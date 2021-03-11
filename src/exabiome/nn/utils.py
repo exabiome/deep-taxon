@@ -1,3 +1,4 @@
+from argparse import Namespace
 import sys
 import os
 
@@ -68,17 +69,17 @@ def process_model(args, inference=False, taxa_table=None):
 
     if args.checkpoint is not None:
         try:
-            ckpt_hparams = torch.load(args.checkpoint)['hyper-parameters']
+            ckpt_hparams = Namespace(**torch.load(args.checkpoint)['hyper_parameters'])
             model = model_cls.load_from_checkpoint(args.checkpoint, hparams=ckpt_hparams)
             if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
-                if taxa_table is not None:
+                if taxa_table is None:
                     msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
                           "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.checkpoint}. You must provide the TaxaTable for "
                           "computing the taxonomy mapping for reconfiguring the final output layer")
 
                     raise ValueError(msg)
                 outputs_map = taxa_table.get_outputs_map(ckpt_hparams.tgt_tax_lvl, args.tgt_tax_lvl)
-                model.reconfigure_output(outputs_map)
+                model.reconfigure_outputs(outputs_map)
         except RuntimeError as e:
             if 'Missing key(s)' in e.args[0]:
                 raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
