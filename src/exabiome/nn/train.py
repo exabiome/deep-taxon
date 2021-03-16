@@ -43,6 +43,8 @@ def parse_args(*addl_args, argv=None):
 
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
 
+    parser.add_argument('-w', '--weighted', nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'], help='weight classes in classification')
+    parser.add_argument('--ens_beta', type=float, help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9)
     parser.add_argument('-o', '--n_outputs', type=int, help='the number of outputs in the final layer', default=32)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
@@ -136,6 +138,17 @@ def process_args(args=None, return_io=False):
 
     model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
+    if args.weighted:
+        labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
+        uniq, counts = np.unique(labels, return_counts=True)
+        if args.weighted == 'ens':
+            weights = (1 - args.ens_beta)/(1 - args.ens_beta**counts)
+        elif args.weighted == 'isns':
+            weights = np.sqrt(1/counts)
+        else:
+            weights = np.sqrt(1/counts)
+        model.set_class_weights(weights)
+
     targs = dict(
         max_epochs=args.epochs,
         num_nodes=args.num_nodes,
@@ -145,10 +158,6 @@ def process_args(args=None, return_io=False):
         targs['profiler'] = True
 
     targs['accumulate_grad_batches'] = args.accumulate
-
-    #if args.gpus is not None:
-    #    targs['gpus'] = 1
-    #targs['accelerator'] = 'horovod'
 
     if args.horovod:
         targs['accelerator'] = 'horovod'

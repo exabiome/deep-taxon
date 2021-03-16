@@ -196,7 +196,7 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, difile, classify=False):
+    def __init__(self, difile, classify=True):
         self.difile = difile
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'

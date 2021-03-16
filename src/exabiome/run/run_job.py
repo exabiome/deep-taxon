@@ -61,6 +61,8 @@ def run_train(argv=None):
     grp.add_argument('--summit', help='make script for running on OLCF Summit', action='store_true', default=False)
 
     parser.add_argument('-r', '--rate',         help="the learning rate to use for training", default=0.001)
+    parser.add_argument('-w', '--weighted',     help='weight classes in classification',
+                         nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'])
     parser.add_argument('-o', '--output_dims',  help="the number of dimensions to output", default=256)
     parser.add_argument('-A', '--accum',        help="the number of batches to accumulate", default=1)
     parser.add_argument('-b', '--batch_size',   help="the number of batches to accumulate", default=64)
@@ -158,6 +160,11 @@ def run_train(argv=None):
     if args.tgt_tax_lvl is not None:
         options += f' -t {args.tgt_tax_lvl}'
 
+    if args.weighted:
+        if isinstance(args.weighted, str):
+            options += f' -w {args.weighted}'
+        else:
+            options += f' -w'
 
     if args.experiment:
         exp = args.experiment
@@ -204,10 +211,8 @@ def run_train(argv=None):
     cp_run = None
     if args.summit:
         cp_run = 'jsrun -n 1'
-    job.add_command('cp $0 $OUTDIR.sh', run=cp_run)
-
-
     job.add_command('mkdir -p $OUTDIR')
+    job.add_command('cp $0 $OUTDIR.sh', run=cp_run)
 
     if args.summit:
         # when using regular DDP, jsrun should be called with one resource per node (-r) and

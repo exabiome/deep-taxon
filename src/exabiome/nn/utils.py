@@ -69,7 +69,8 @@ def process_model(args, inference=False, taxa_table=None):
 
     if args.checkpoint is not None:
         try:
-            ckpt_hparams = Namespace(**torch.load(args.checkpoint)['hyper_parameters'])
+            ckpt = torch.load(args.checkpoint)
+            ckpt_hparams = Namespace(**ckpt['hyper_parameters'])
             model = model_cls.load_from_checkpoint(args.checkpoint, hparams=ckpt_hparams)
             if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
                 if taxa_table is None:
@@ -80,6 +81,7 @@ def process_model(args, inference=False, taxa_table=None):
                     raise ValueError(msg)
                 outputs_map = taxa_table.get_outputs_map(ckpt_hparams.tgt_tax_lvl, args.tgt_tax_lvl)
                 model.reconfigure_outputs(outputs_map)
+                model.hparams.tgt_tax_lvl = args.tgt_tax_lvl
         except RuntimeError as e:
             if 'Missing key(s)' in e.args[0]:
                 raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
