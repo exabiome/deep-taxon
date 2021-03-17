@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import sklearn.neighbors as skn
 
 from hdmf.common import VectorIndex, VectorData, DynamicTable,\
-                        DynamicTableRegion, register_class, VocabData
+                        DynamicTableRegion, register_class, EnumData
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf.data_utils import DataIO
 from hdmf import Container, Data
@@ -60,7 +60,7 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'sequence_name', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
-            {'name': 'sequence', 'type': ('array_data', 'data', VectorData), 'doc': 'bitpacked DNA sequence'},
+            {'name': 'sequence', 'type': ('array_data', 'data', EnumData), 'doc': 'bitpacked DNA sequence'},
             {'name': 'sequence_index', 'type': ('array_data', 'data', VectorIndex), 'doc': 'index for sequence'},
             {'name': 'length', 'type': ('array_data', 'data', VectorData), 'doc': 'lengths of sequence'},
             {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
@@ -95,10 +95,12 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
             seq = self.get_sequence_data(sequence)
             columns.append(self.get_sequence_index(index, seq))
             columns.append(seq)
+            columns.append(seq.elements)
             columns.append(VectorData('length', 'sequence lengths', data=seqlens))
             columns.append(DynamicTableRegion('taxon', taxon, 'taxa for each sequence', taxon_table))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
+        print('hello')
 
 
 @register_class('SequenceTable', NS)
@@ -112,7 +114,7 @@ class SequenceTable(AbstractSequenceTable):
             vocab = data.data.data.encoded_vocab
         else:
             vocab = self.vocab
-        return VocabData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=vocab)
+        return EnumData('sequence', 'sequence data from a vocabulary', data=data, elements=vocab)
 
     dna = ['A', 'C', 'G', 'T', 'N']
 
@@ -123,7 +125,7 @@ class SequenceTable(AbstractSequenceTable):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'sequence_name', 'type': ('array_data', 'data', VectorData), 'doc': 'sequence names'},
-            {'name': 'sequence', 'type': ('array_data', 'data', VocabData), 'doc': 'bitpacked DNA sequence'},
+            {'name': 'sequence', 'type': ('array_data', 'data', EnumData), 'doc': 'bitpacked DNA sequence'},
             {'name': 'sequence_index', 'type': ('array_data', 'data', VectorIndex), 'doc': 'index for sequence'},
             {'name': 'length', 'type': ('array_data', 'data', VectorData), 'doc': 'lengths of sequence'},
             {'name': 'taxon', 'type': ('array_data', 'data', VectorData), 'doc': 'index for sequence'},
@@ -146,7 +148,7 @@ class SequenceTable(AbstractSequenceTable):
 
 
 @register_class('DNAData', NS)
-class DNAData(VocabData):
+class DNAData(EnumData):
 
     def get(self, key, **kwargs):
         return super().get(key, **kwargs)
@@ -157,7 +159,7 @@ class DNATable(SequenceTable):
 
     def get_sequence_data(self, data):
         vocab = self.vocab
-        return DNAData('sequence', 'sequence data from a vocabulary', data=data, vocabulary=vocab)
+        return DNAData('sequence', 'sequence data from a vocabulary', data=data, elements=vocab)
 
     def get_sequence_index(self, data, target):
         return VectorIndex('sequence_index', data, target)
@@ -227,11 +229,11 @@ class TaxaTable(DynamicTable, TorchableMixin):
 
     __columns__ = (
         {'name': 'taxon_id', 'description': 'the taxon ID'},
-        {'name': 'phylum', 'description': 'the phylum for each taxon'},
-        {'name': 'class', 'description': 'the class for each taxon'},
-        {'name': 'order', 'description': 'the order for each taxon'},
-        {'name': 'family', 'description': 'the family for each taxon'},
-        {'name': 'genus', 'description': 'the genus for each taxon'},
+        {'name': 'phylum', 'description': 'the phylum for each taxon', 'enum': True},
+        {'name': 'class', 'description': 'the class for each taxon', 'enum': True},
+        {'name': 'order', 'description': 'the order for each taxon', 'enum': True},
+        {'name': 'family', 'description': 'the family for each taxon', 'enum': True},
+        {'name': 'genus', 'description': 'the genus for each taxon', 'enum': True},
         {'name': 'species', 'description': 'the species for each taxon'},
         {'name': 'embedding', 'description': 'the embedding for each taxon'},
         {'name': 'rep_taxon_id', 'description': 'the taxon ID for the this species representative'}
@@ -239,12 +241,12 @@ class TaxaTable(DynamicTable, TorchableMixin):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
-            {'name': 'phylum', 'type': ('array_data', 'data', VocabData), 'doc': 'the phylum for each taxon'},
-            {'name': 'class', 'type': ('array_data', 'data', VocabData), 'doc': 'the class for each taxon'},
-            {'name': 'order', 'type': ('array_data', 'data', VocabData), 'doc': 'the order for each taxon'},
-            {'name': 'family', 'type': ('array_data', 'data', VocabData), 'doc': 'the family for each taxon'},
-            {'name': 'genus', 'type': ('array_data', 'data', VocabData), 'doc': 'the genus for each taxon'},
-            {'name': 'species', 'type': ('array_data', 'data', VocabData), 'doc': 'the species for each taxon'},
+            {'name': 'phylum', 'type': ('array_data', 'data', EnumData), 'doc': 'the phylum for each taxon'},
+            {'name': 'class', 'type': ('array_data', 'data', EnumData), 'doc': 'the class for each taxon'},
+            {'name': 'order', 'type': ('array_data', 'data', EnumData), 'doc': 'the order for each taxon'},
+            {'name': 'family', 'type': ('array_data', 'data', EnumData), 'doc': 'the family for each taxon'},
+            {'name': 'genus', 'type': ('array_data', 'data', EnumData), 'doc': 'the genus for each taxon'},
+            {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon'},
             {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None},
             {'name': 'rep_taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID for the species representative', 'default': None})
     def __init__(self, **kwargs):
@@ -264,7 +266,10 @@ class TaxaTable(DynamicTable, TorchableMixin):
             if embedding is not None: columns.append(VectorData('embedding', 'an embedding for each taxon', data=embedding))
             if rep_taxon_id is not None: columns.append(VectorData('rep_taxon_id', 'the taxon ID for the this species representative', data=rep_taxon_id))
             for l, t in zip(taxonomy_labels, taxonomy):
-                if isinstance(t, VocabData):
+                if isinstance(t, EnumData):
+                    columns.append(t)
+                    columns.append(t.elements)
+                elif isinstance(t, VectorData):
                     columns.append(t)
                 else:
                     columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
@@ -315,8 +320,8 @@ class TaxaTable(DynamicTable, TorchableMixin):
         if isinstance(key, str):
             return super().__getitem__(key)
         else:
-            ret = list(super().__getitem__(key))
-            return tuple(ret)
+            ret = super().__getitem__(key)
+            return ret
 
 
 @register_class('CondensedDistanceMatrix', NS)
@@ -361,9 +366,11 @@ class DeepIndexFile(Container):
 
     def set_label_key(self, val):
         self.label_key = val
-        if val in self.taxonomic_levels:
+        if val == 'species':         # if species is specified, just use the id column
+            self.label_key = 'id'
+        elif val in self.taxonomic_levels:
             self.__get_kwargs['index'] = True
-            self.__n_outputs = len(self.taxa_table[self.label_key].vocabulary)
+            self.__n_outputs = len(self.taxa_table[self.label_key].elements)
 
     @property
     def n_outputs(self):
@@ -545,7 +552,7 @@ class RevCompFilter(DIFileFilter):
     def __init__(self, difile):
         super().__init__(difile)
         self.labels = np.concatenate([self.labels, self.labels])
-        vocab = difile.seq_table.sequence.vocabulary
+        vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
 
     def __len__(self):

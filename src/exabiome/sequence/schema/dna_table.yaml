@@ -13,7 +13,7 @@ datasets:
   doc: a compressed distance matrix
 
 - data_type_def: DNAData
-  data_type_inc: VocabData
+  data_type_inc: EnumData
   dtype: uint8
   doc: DNA sequence data
 
@@ -46,7 +46,7 @@ groups:
     data_type_inc: VectorIndex
     doc: Index for 'sequence'
   - name: sequence
-    data_type_inc: VocabData
+    data_type_inc: EnumData
     doc: DNA or protein sequence data
 
 - data_type_def: DNATable
@@ -79,24 +79,46 @@ groups:
     dtype: float
     doc: embedding of each taxa on n-dimensional space
     required: false
+
   - name: phylum
-    data_type_inc: VocabData
+    data_type_inc: EnumData
     doc: The phylum in the taxonomy
+  - name: phylum_elements
+    data_type_inc: VectorData
+    doc: The available phyla in the taxonomy
+
   - name: class
-    data_type_inc: VocabData
+    data_type_inc: EnumData
     doc: The class in the taxonomy
+  - name: class_elements
+    data_type_inc: VectorData
+    doc: The available classes in the taxonomy
+
   - name: order
-    data_type_inc: VocabData
+    data_type_inc: EnumData
     doc: The order in the taxonomy
+  - name: order_elements
+    data_type_inc: VectorData
+    doc: The available orders in the taxonomy
+
   - name: family
-    data_type_inc: VocabData
+    data_type_inc: EnumData
     doc: The family in the taxonomy
+  - name: family_elements
+    data_type_inc: VectorData
+    doc: The available families in the taxonomy
+
   - name: genus
-    data_type_inc: VocabData
+    data_type_inc: EnumData
     doc: The genus in the taxonomy
+  - name: genus_elements
+    data_type_inc: EnumData
+    doc: The available genera in the taxonomy
+
   - name: species
-    data_type_inc: VocabData
+    data_type_inc: VectorData
     doc: The species in the taxonomy
+    dtype: text
 
 - data_type_def: DeepIndexFile
   data_type_inc: Container
