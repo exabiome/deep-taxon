@@ -188,11 +188,11 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
 
     # classifier from MEAN of outputs
     output_mean_preds = clf.predict(X_mean)
-    make_plots(seq_viz, y, output_mean_preds, axes[:,0], class_pal, seq_len, 'Mean classification')
+    make_plots(y, output_mean_preds, axes[:,0], class_pal, seq_len, 'Mean classification', seq_viz)
 
     # classifier from MEDIAN of outputs
     output_median_preds = clf.predict(X_median)
-    make_plots(seq_viz, y, output_median_preds, axes[:,1], class_pal, seq_len, 'Median classification')
+    make_plots(y, output_median_preds, axes[:,1], class_pal, seq_len, 'Median classification', seq_viz)
 
     # classifier from voting with chunk predictions
     all_preds = clf.predict(outputs)
@@ -201,18 +201,20 @@ def aggregated_chunk_analysis(path, clf, fig_height=7):
         seq_mask = seq_ids == seq
         vote_preds[seq_i] = stats.mode(all_preds[seq_mask])[0][0]
 
-    make_plots(seq_viz, y, vote_preds, axes[:,2], class_pal, seq_len, 'Vote classification')
+    make_plots(y, vote_preds, axes[:,2], class_pal, seq_len, 'Vote classification', seq_viz)
 
     plt.tight_layout()
 
 
-def make_plots(seq_viz, true, pred, axes, pal, seq_len, title):
-    plot_seq_emb(seq_viz, pred, axes[0], pal=pal)
-    axes[0].set_title(title)
-    axes[0].set_xlabel('Mean of first UMAP dimension')
-    axes[0].set_ylabel('Mean of second UMAP dimension')
-    plot_clf_report(true, pred, axes[1], pal=pal)
-    plot_acc_of_len(true, pred, seq_len, axes[2])
+def make_plots(true, pred, axes, pal, seq_len, title=None, seq_viz=None):
+    if seq_viz is not None:
+        plot_seq_emb(seq_viz, pred, axes[0], pal=pal)
+        axes[0].set_title(title)
+        axes[0].set_xlabel('Mean of first UMAP dimension')
+        axes[0].set_ylabel('Mean of second UMAP dimension')
+        axes = axes[1:]
+    plot_clf_report(true, pred, axes[0], pal=pal)
+    plot_acc_of_len(true, pred, seq_len, axes[1])
 
 
 def plot_acc_of_len(y_true, y_pred, seq_len, ax):
@@ -255,6 +257,103 @@ def plot_clf_report(y_true, y_pred, ax, pal=None):
     subdf = df[[str(l) for l in uniq_labels]].iloc[:-1]
     subplot = subdf.plot.barh(ax=ax, color=pal, legend=False)
     ax.text(np.mean(subplot.get_xlim())*1.4, np.max(subplot.get_ylim())*0.95, 'accuracy: %0.6f' % report['accuracy'])
+
+
+def classification_aggregate(path, verbose=False):
+    """Aggregate outputs from a classifier
+
+    outputs should be a softmax
+    """
+    labels = path['labels']
+    outputs = path['outputs']
+    seq_ids = path['seq_ids']
+    olens = path['orig_lens']
+
+    viz_emb = None
+    if 'viz_emb' in path:
+        viz_emb = path['viz_emb']
+        seq_viz = np.zeros((uniq_seqs.shape[0], 2))
+
+    uniq_seqs = np.unique(seq_ids)
+    X_mean = np.zeros((uniq_seqs.shape[0], outputs.shape[1]))
+    X_median = np.zeros((uniq_seqs.shape[0], outputs.shape[1]))
+    y = np.zeros(uniq_seqs.shape[0], dtype=int)
+    seq_len = np.zeros(uniq_seqs.shape[0], dtype=int)
+
+    vote_preds = np.zeros_like(y)
+
+    all_preds = np.argmax(outputs, axis=1)
+
+    it = enumerate(uniq_seqs)
+    if verbose:
+        from tqdm import tqdm
+        it = tqdm(it, total=uniq_seqs.shape[0])
+    for seq_i, seq in it:
+        seq_mask = seq_ids == seq
+        uniq_labels = labels[seq_mask]
+        if not np.all(uniq_labels == uniq_labels[0]):
+            raise ValueError(f'Found more than one label for sequence {seq}')
+        y[seq_i] = uniq_labels[0]
+        X_mean[seq_i] = outputs[seq_mask].mean(axis=0)
+        X_median[seq_i] = np.median(outputs[seq_mask], axis=0)
+        if viz_emb is not None:
+            seq_viz[seq_i] = viz_emb[seq_mask].mean(axis=0)
+        seq_len[seq_i] = olens[seq_mask].sum()
+        vote_preds[seq_i] = stats.mode(all_preds[seq_mask])[0][0]
+
+    X_mean = np.argmax(X_mean, axis=1)
+    X_median = np.argmax(X_median, axis=1)
+
+    return y, X_mean, X_median, vote_preds, seq_len
+
+
+
+def classifier_summarize(argv=None):
+    '''Summarize training/inference results'''
+    import argparse
+    import pickle
+    from ..utils import parse_logger
+    parser = argparse.ArgumentParser()
+    parser.add_argument('input', type=str,
+                        help='the HDF5 file with network outputs or a directory containing a single outputs file')
+    parser.add_argument('-o', '--outdir', type=str, default=None, help='the output directory for figures')
+
+    args = parser.parse_args(args=argv)
+    if os.path.isdir(args.input):
+        outputs = list(glob.glob(f'{args.input}/outputs.h5'))
+        if len(outputs) != 1:
+            print(f'More than one outputs file in {args.input}, please specify the exact file')
+            sys.exit(1)
+        args.input = outputs[0]
+
+    outdir = os.path.dirname(args.input)
+    if args.outdir is not None:
+        outdir = args.outdir
+        if not os.path.exists(outdir):
+            os.mkdir(outdir)
+
+    fig_path = os.path.join(outdir, 'summary.png')
+
+    logger = parse_logger('')
+
+    logger.info('reading outputs')
+    outputs = read_outputs(args.input)
+
+    logger.info('aggregating outputs across sequences')
+    y_true_seq, mean, median, vote, seq_len = classification_aggregate(outputs, verbose=True)
+    seq_len = np.log10(seq_len)
+
+    n_classes = outputs['outputs'].shape[1]
+    class_pal = get_color_markers(n_classes)
+    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 15))
+
+    make_plots(y_true_seq, mean, axes[0], class_pal, seq_len)
+    make_plots(y_true_seq, median, axes[1], class_pal, seq_len)
+    make_plots(y_true_seq, vote, axes[2], class_pal, seq_len)
+
+    logger.info(f'saving figure to {fig_path}')
+    plt.savefig(fig_path, dpi=100)
+
 
 
 def summarize(argv=None):
