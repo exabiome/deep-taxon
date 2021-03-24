@@ -34,9 +34,9 @@ groups:
     data_type_inc: VectorData
     dtype: uint8
     doc: Packed sequence
-  - name: taxon
+  - name: genome
     data_type_inc: DynamicTableRegion
-    doc: integer ID for the taxa that each sequence belongs to
+    doc: integer ID for the genome that each sequence belongs to
 
 - data_type_def: SequenceTable
   data_type_inc: AbstractSeqTable
@@ -120,6 +120,18 @@ groups:
     doc: The species in the taxonomy
     dtype: text
 
+- data_type_def: GenomeTable
+  data_type_inc: DynamicTable
+  doc: A table for storing information about nonrepresentative species
+  datasets:
+  - name: taxon_id
+    data_type_inc: VectorData
+    dtype: text
+    doc: Taxon ID from GTDB
+  - name: rep_idx
+    data_type_inc: DynamicTableRegion
+    doc: Index of representative taxon in the TaxaTable
+
 - data_type_def: DeepIndexFile
   data_type_inc: Container
   doc: A file that has taxonomy and sequence information for running deep index
@@ -139,3 +151,6 @@ groups:
   - name: taxa_table
     data_type_inc: TaxaTable
     doc: Taxa table
+  - name: genome_table
+    data_type_inc: GenomeTable
+    doc: table storing information about the genome from which each sequence comes
