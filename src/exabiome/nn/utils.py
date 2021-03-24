@@ -72,16 +72,17 @@ def process_model(args, inference=False, taxa_table=None):
             ckpt = torch.load(args.checkpoint)
             ckpt_hparams = Namespace(**ckpt['hyper_parameters'])
             model = model_cls.load_from_checkpoint(args.checkpoint, hparams=ckpt_hparams)
-            if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
-                if taxa_table is None:
-                    msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
-                          "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.checkpoint}. You must provide the TaxaTable for "
-                          "computing the taxonomy mapping for reconfiguring the final output layer")
+            if not inference:
+                if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
+                    if taxa_table is None:
+                        msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
+                              "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.checkpoint}. You must provide the TaxaTable for "
+                              "computing the taxonomy mapping for reconfiguring the final output layer")
 
-                    raise ValueError(msg)
-                outputs_map = taxa_table.get_outputs_map(ckpt_hparams.tgt_tax_lvl, args.tgt_tax_lvl)
-                model.reconfigure_outputs(outputs_map)
-                model.hparams.tgt_tax_lvl = args.tgt_tax_lvl
+                        raise ValueError(msg)
+                    outputs_map = taxa_table.get_outputs_map(ckpt_hparams.tgt_tax_lvl, args.tgt_tax_lvl)
+                    model.reconfigure_outputs(outputs_map)
+                    model.hparams.tgt_tax_lvl = args.tgt_tax_lvl
         except RuntimeError as e:
             if 'Missing key(s)' in e.args[0]:
                 raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
@@ -92,6 +93,8 @@ def process_model(args, inference=False, taxa_table=None):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
         _check_hparams(args)
+        if taxa_table is not None:
+            args.labels = taxa_table['phylum'].elements.data[:]
         model = model_cls(args)
 
     return model

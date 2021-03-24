@@ -123,8 +123,8 @@ def process_dataset(args, path=None, inference=False):
     else:
         raise ValueError('classify (-C) or manifold (-M) should be set')
 
-    if inference:
-        dataset.set_classify(True)
+    #if inference:
+    #    dataset.set_classify(True)
     args.window, args.step = check_window(args.window, args.step)
 
     # Process any arguments that impact how we set up the dataset
