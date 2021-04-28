@@ -43,6 +43,8 @@ def parse_args(*addl_args, argv=None):
 
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
 
+    parser.add_argument('-w', '--weighted', nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'], help='weight classes in classification')
+    parser.add_argument('--ens_beta', type=float, help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9)
     parser.add_argument('-o', '--n_outputs', type=int, help='the number of outputs in the final layer', default=32)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
@@ -54,7 +56,6 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
-    parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
@@ -135,9 +136,18 @@ def process_args(args=None, return_io=False):
 
     data_mod = DeepIndexDataModule(args)
 
-    args.n_outputs = data_mod.n_outputs
+    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
-    model = process_model(args)
+    if args.weighted:
+        labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
+        uniq, counts = np.unique(labels, return_counts=True)
+        if args.weighted == 'ens':
+            weights = (1 - args.ens_beta)/(1 - args.ens_beta**counts)
+        elif args.weighted == 'isns':
+            weights = np.sqrt(1/counts)
+        else:
+            weights = np.sqrt(1/counts)
+        model.set_class_weights(weights)
 
     targs = dict(
         max_epochs=args.epochs,
@@ -148,10 +158,6 @@ def process_args(args=None, return_io=False):
         targs['profiler'] = True
 
     targs['accumulate_grad_batches'] = args.accumulate
-
-    #if args.gpus is not None:
-    #    targs['gpus'] = 1
-    #targs['accelerator'] = 'horovod'
 
     if args.horovod:
         targs['accelerator'] = 'horovod'
@@ -206,11 +212,11 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 
-#from mpi4py import MPI
-#
-#comm = MPI.COMM_WORLD
-#RANK = comm.Get_rank()
-RANK = 0
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+RANK = comm.Get_rank()
+#RANK = 0
 
 def print0(*msg, **kwargs):
     if RANK == 0:
@@ -218,6 +224,16 @@ def print0(*msg, **kwargs):
 
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
+
+    import signal
+    import traceback
+    def signal_handler(sig, frame):
+        print('I caught SIG_KILL!')
+        track = traceback.format_exc()
+        print(track)
+        raise KeyboardInterrupt
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))

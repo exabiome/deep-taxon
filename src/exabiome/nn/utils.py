@@ -1,3 +1,4 @@
+from argparse import Namespace
 import sys
 import os
 
@@ -51,7 +52,7 @@ def _check_hparams(args):
     del args.hparams
 
 
-def process_model(args, inference=False):
+def process_model(args, inference=False, taxa_table=None):
     """
     Process a model argument
 
@@ -68,62 +69,33 @@ def process_model(args, inference=False):
 
     if args.checkpoint is not None:
         try:
-            model = model_cls.load_from_checkpoint(args.checkpoint, hparams=args)
+            ckpt = torch.load(args.checkpoint)
+            ckpt_hparams = Namespace(**ckpt['hyper_parameters'])
+            model = model_cls.load_from_checkpoint(args.checkpoint, hparams=ckpt_hparams)
+            if not inference:
+                if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
+                    if taxa_table is None:
+                        msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
+                              "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.checkpoint}. You must provide the TaxaTable for "
+                              "computing the taxonomy mapping for reconfiguring the final output layer")
+
+                        raise ValueError(msg)
+                    outputs_map = taxa_table.get_outputs_map(ckpt_hparams.tgt_tax_lvl, args.tgt_tax_lvl)
+                    model.reconfigure_outputs(outputs_map)
+                    model.hparams.tgt_tax_lvl = args.tgt_tax_lvl
         except RuntimeError as e:
             if 'Missing key(s)' in e.args[0]:
                 raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
             else:
                 raise e
-
-    # if we pretrained a feature extracter, like a resnet*_feat model
-    # load the pretrained model and add a classifier
-    #elif args.features_checkpoint is not None:
-    #    feat_model_hparams = torch.load(args.features, map_location=torch.device('cpu'))['hyper_parameters']
-    #    feat_model_name = feat_model_hparams['model']
-    #    from .models.ssl import ResNetClassifier
-    #    if not (feat_model_name.startswith('resnet') and feat_model_name.endswith('feat')):
-    #        raise ValueError("Cannot add classifier to model %s -- must be a ResNet feature model (i.e. resnet*_feat)" % feat_model_name)
-
-    #    # load the features model
-    #    features_model = models._models[feat_model_name].load_from_checkpoint(args.features, hparams=feat_model_hparams)
-    #    args.feat_model_hparams = feat_model_hparams
-    #    args.feat_model_name = feat_model_name
-    #    _check_hparams(args)
-    #    model = model_cls(args, features=features_model)
-    # elif args.features is not None:
-    #     feat_model_hparams = torch.load(args.features, map_location=torch.device('cpu'))['hyper_parameters']
-    #     feat_model_name = feat_model_hparams['model']
-    #     from .models.ssl import ResNetClassifier
-    #     if not (feat_model_name.startswith('resnet') and feat_model_name.endswith('feat')):
-    #         raise ValueError("Cannot add classifier to model %s -- must be a ResNet feature model (i.e. resnet*_feat)" % feat_model_name)
-
-    #     # load the features model
-    #     features_model = models._models[feat_model_name].load_from_checkpoint(args.features, hparams=feat_model_hparams)
-    #     args.feat_model_hparams = feat_model_hparams
-    #     _check_hparams(args)
-    #     model = model_cls(args, features=features_model)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
-        # First, get the dataset, so we can figure
-        # out how many outputs there are
-        dataset, io = read_dataset(args.input)
-
-        if args.classify:
-            n_outputs = len(dataset.difile.taxa_table)
-        elif args.manifold:
-            n_outputs = args.n_outputs        #TODO make this configurable #breakpoint
-        else:
-            args.regression = True
-            n_outputs = dataset.difile.n_emb_components
-        args.n_outputs = n_outputs
-
         _check_hparams(args)
-
+        if taxa_table is not None:
+            args.labels = taxa_table['phylum'].elements.data[:]
         model = model_cls(args)
-
-        io.close()
 
     return model
 

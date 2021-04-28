@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
-from ..sequence import WindowChunkedDIFile, RevCompFilter
+from ..sequence import WindowChunkedDIFile, RevCompFilter, DeepIndexFile
 from ..utils import parse_seed
 
 
@@ -29,6 +29,8 @@ def add_dataset_arguments(parser):
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
+    group.add_argument('-t', '--tgt_tax_lvl', choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
+                       help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species')
 
     return None
 
@@ -44,6 +46,8 @@ def dataset_stats(argv=None):
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
     test_group.add_argument('-s', '--seed', type=parse_seed, default=None, help='seed for an 80/10/10 split before reading an element')
     test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+    test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
+
 
     args = parser.parse_args(argv)
     dataset, io = process_dataset(args)
@@ -73,6 +77,21 @@ def dataset_stats(argv=None):
         print("Attempting to read testing data")
         for i in tqdm(te):
             continue
+    if args.output_map is not None:
+        tl1, tl2 = args.output_map
+        ret = difile.taxa_table.get_outputs_map(tl1, tl2)
+        bad = False
+        for id2, id1 in enumerate(ret):
+            mask = difile.taxa_table[tl2].get(np.s_[:], index=True) == id2
+            t2_vals = difile.taxa_table[tl1].get(mask, index=True)
+            if not np.all(t2_vals == id1):
+                t2 = difile.taxa_table[tl2].vocabulary[id2]
+                t1 = difile.taxa_table[tl1].vocabulary[id1]
+                print('ERROR -- not all {tl2} {t2} have {tl1} {t1}')
+                bad = True
+        if not bad:
+            print(f'taxonomic hierarchy for {tl1} to {tl2} okay')
+
 
 def read_dataset(path):
     hdmfio = get_hdf5io(path, 'r')
@@ -95,15 +114,17 @@ def process_dataset(args, path=None, inference=False):
                          'to determine the number of outputs')
     if args.classify:
         dataset.set_classify(True)
-        n_outputs = len(dataset.difile.taxa_table)
+        dataset.difile.set_label_key(args.tgt_tax_lvl)
+        args.n_outputs = dataset.difile.n_outputs
     elif args.manifold:
+        if args.tgt_tax_lvl != 'species':
+            raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
         dataset.set_classify(True)
-        n_outputs = 32        #TODO make this configurable #breakpoint
     else:
-        args.regression = True
-        dataset.set_classify(False)
-    if inference:
-        dataset.set_classify(True)
+        raise ValueError('classify (-C) or manifold (-M) should be set')
+
+    #if inference:
+    #    dataset.set_classify(True)
     args.window, args.step = check_window(args.window, args.step)
 
     # Process any arguments that impact how we set up the dataset
@@ -175,11 +196,11 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, difile, classify=False):
+    def __init__(self, difile, classify=True):
         self.difile = difile
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'
-        self.vocab_len = len(self.difile.seq_table['sequence'].target.vocabulary)
+        self.vocab_len = len(self.difile.seq_table['sequence'].target.elements)
         self.__ohe = True
 
     def set_classify(self, classify):
@@ -389,11 +410,6 @@ class DeepIndexDataModule(pl.LightningDataModule):
             kwargs.pop('multiprocessing_context', None)
         tr, te, va = train_test_loaders(self.dataset, **kwargs)
         self.loaders = {'train': tr, 'test': te, 'validate': va}
-
-        if self.hparams.classify:
-            self.n_outputs = len(self.dataset.difile.taxa_table)
-        else:
-            self.n_outputs = self.hparams.n_outputs
 
     def train_dataloader(self):
         return self.loaders['train']

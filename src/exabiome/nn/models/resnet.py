@@ -179,6 +179,45 @@ class ResNet(AbstractLit):
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
+    def reconfigure_outputs(self, outputs_map):
+        """
+        Reconfigure final layer to produce more outputs.
+
+        For example, use weights from a phylum-level classifer for initializing a class-level classifier.
+
+        This is done by providing an array that maps from the original taxonomic level to the
+        new taxonomic level
+
+
+        If original output layer weights look like:
+
+        [ [a b c],       # this corresponds to three phylum in our example
+          [d e f],
+          [g h i] ]
+
+        and we reconfigure to output for 6 classes, where classes [0, 1] belong to phylum 0, [2, 3] belong to phylum 1,
+        and [4, 5] belong to phylum 2 i.e. outputs_map = [0, 0, 1, 1, 2, 2], then the new output layer weights would look like:
+
+        [ [a b c],
+          [a b c],
+          [d e f],
+          [d e f],
+          [g h i],
+          [g h i] ]
+
+        Args
+            outputs_map (array)         : a mapping of original layer output to new layer output
+        """
+        outputs_map = torch.as_tensor(outputs_map)
+        self.hparams.n_outputs = len(outputs_map)
+        new_fc = nn.Linear(self.fc.in_features, self.hparams.n_outputs)
+        with torch.no_grad():
+            for i in range(self.fc.out_features):
+                mask = outputs_map == i
+                new_fc.weight[mask, :] = self.fc.weight[i, :]
+                new_fc.bias[mask] = self.fc.bias[i]
+        self.fc = new_fc
+
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self.hparams.norm_layer
         downsample = None
@@ -225,6 +264,16 @@ class ResNet(AbstractLit):
 
     def forward(self, x):
         return self._forward_impl(x)
+
+
+@model('resnet9')
+class ResNet9(ResNet):
+
+    def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
+        hparams.block = BasicBlock
+        hparams.layers = [1, 1, 1, 1]
+        super().__init__(hparams)
 
 
 @model('resnet18')

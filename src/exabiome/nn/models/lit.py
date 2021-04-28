@@ -40,6 +40,11 @@ class AbstractLit(LightningModule):
             return argparse.Namespace(**hparams)
         return hparams
 
+    def set_class_weights(self, weights):
+        if weights is not None:
+            weights = torch.as_tensor(weights, dtype=torch.float)
+        self._loss = nn.CrossEntropyLoss(weight=weights)
+
     def set_inference(self, inference=True):
         self._inference = inference
 
