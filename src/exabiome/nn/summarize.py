@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.patches import Circle
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, precision_recall_curve
 import scipy.stats as stats
 
 
@@ -259,6 +259,18 @@ def plot_clf_report(y_true, y_pred, ax, pal=None):
     ax.text(np.mean(subplot.get_xlim())*1.4, np.max(subplot.get_ylim())*0.95, 'accuracy: %0.6f' % report['accuracy'])
 
 
+def plot_pr_curve(y_true, X, ax, pal=None, labels=None):
+    for i in np.unique(y_true):
+        precision, recall, thresh = precision_recall_curve(y_true, X[:, i], pos_label=i)
+        ax.plot(precision, recall, color=pal[i])
+
+def make_clf_plots(true, X, axes, pal, seq_len):
+    pred = np.argmax(X, axis=1)
+    plot_clf_report(true, pred, axes[0], pal=pal)
+    plot_acc_of_len(true, pred, seq_len, axes[1])
+    plot_pr_curve(true, X, axes[2], pal=pal)
+
+
 def classification_aggregate(path, verbose=False):
     """Aggregate outputs from a classifier
 
@@ -280,7 +292,7 @@ def classification_aggregate(path, verbose=False):
     y = np.zeros(uniq_seqs.shape[0], dtype=int)
     seq_len = np.zeros(uniq_seqs.shape[0], dtype=int)
 
-    vote_preds = np.zeros_like(y)
+    vote_preds = np.zeros_like(X_mean)
 
     all_preds = np.argmax(outputs, axis=1)
 
@@ -299,13 +311,10 @@ def classification_aggregate(path, verbose=False):
         if viz_emb is not None:
             seq_viz[seq_i] = viz_emb[seq_mask].mean(axis=0)
         seq_len[seq_i] = olens[seq_mask].sum()
-        vote_preds[seq_i] = stats.mode(all_preds[seq_mask])[0][0]
-
-    X_mean = np.argmax(X_mean, axis=1)
-    X_median = np.argmax(X_median, axis=1)
+        uniq, counts = np.unique(all_preds[seq_mask], return_counts=True)
+        vote_preds[seq_i][uniq] = counts/counts.sum()
 
     return y, X_mean, X_median, vote_preds, seq_len
-
 
 
 def classifier_summarize(argv=None):
@@ -333,8 +342,11 @@ def classifier_summarize(argv=None):
             os.mkdir(outdir)
 
     fig_path = os.path.join(outdir, 'summary.png')
+    agg_res_path = os.path.join(outdir, 'aggregated_results.h5')
 
     logger = parse_logger('')
+    logger.info(f'saving figure to {fig_path}')
+    logger.info(f'saving aggregated outputs to {agg_res_path}')
 
     logger.info('reading outputs')
     outputs = read_outputs(args.input)
@@ -345,15 +357,22 @@ def classifier_summarize(argv=None):
 
     n_classes = outputs['outputs'].shape[1]
     class_pal = get_color_markers(n_classes)
-    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 15))
+    fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(15, 15))
 
-    make_plots(y_true_seq, mean, axes[0], class_pal, seq_len)
-    make_plots(y_true_seq, median, axes[1], class_pal, seq_len)
-    make_plots(y_true_seq, vote, axes[2], class_pal, seq_len)
+    make_clf_plots(y_true_seq, mean, axes[:, 0], class_pal, seq_len)
+    axes[0, 0].set_title('Mean')
+    make_clf_plots(y_true_seq, median, axes[:, 1], class_pal, seq_len)
+    axes[0, 1].set_title('Median')
+    make_clf_plots(y_true_seq, vote, axes[:, 2], class_pal, seq_len)
+    axes[0, 2].set_title('Vote')
 
-    logger.info(f'saving figure to {fig_path}')
+    with h5py.File(agg_res_path, 'w') as f:
+        f.create_dataset('labels', data=y_true_seq)
+        f.create_dataset('mean', data=mean)
+        f.create_dataset('median', data=median)
+        f.create_dataset('vote', data=vote)
+
     plt.savefig(fig_path, dpi=100)
-
 
 
 def summarize(argv=None):
