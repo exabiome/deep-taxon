@@ -266,6 +266,16 @@ class ResNet(AbstractLit):
         return self._forward_impl(x)
 
 
+@model('resnet9')
+class ResNet9(ResNet):
+
+    def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
+        hparams.block = BasicBlock
+        hparams.layers = [1, 1, 1, 1]
+        super().__init__(hparams)
+
+
 @model('resnet18')
 class ResNet18(ResNet):
 
