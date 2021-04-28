@@ -68,7 +68,8 @@ def process_model(args, inference=False):
 
     if args.checkpoint is not None:
         try:
-            model = model_cls.load_from_checkpoint(args.checkpoint, hparams=args)
+            hparams = torch.load(args.checkpoint, map_location=torch.device('cpu'))['hyper_parameters']
+            model = model_cls.load_from_checkpoint(args.checkpoint, hparams=hparams)
         except RuntimeError as e:
             if 'Missing key(s)' in e.args[0]:
                 raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
