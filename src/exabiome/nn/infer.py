@@ -164,7 +164,25 @@ def run_inference(argv=None):
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
     model, args, addl_targs = process_args(argv=argv)
-    import h5py
+
+    from pkg_resources import resource_filename
+    from os.path import join
+    from hdmf.common import load_namespaces, get_class
+
+    load_namespaces(join(resource_filename(__name__, '../hdmf-ml'), 'schema', 'ml', 'namespace.yaml'))
+    TrainValidationTestMask = get_class('TrainValidationTestMask', 'hdmf-ml')
+    CrossValidationMask = get_class('CrossValidationMask', 'hdmf-ml')
+    ClassProbability = get_class('ClassProbability', 'hdmf-ml')
+    ClassLabel = get_class('ClassLabel', 'hdmf-ml')
+    RegressionOutput = get_class('RegressionOutput', 'hdmf-ml')
+    ClusterLabel = get_class('ClusterLabel', 'hdmf-ml')
+    EmbeddedValues = get_class('EmbeddedValues', 'hdmf-ml')
+    ResultsTable = get_class('ResultsTable', 'hdmf-ml')
+
+    stop
+
+    from hdmf.backends.hdf5 import HDF5IO
+
     import numpy as np
     import os
     model.to(args.device)
@@ -173,43 +191,45 @@ def run_inference(argv=None):
     n_samples = len(args.difile)
 
     args.logger.info(f'saving outputs to {args.output}')
-    f = h5py.File(args.output, 'w')
+    with HDF5IO(args.output, 'w') as io:
 
-    emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
-    label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
-    olen_dset = f.create_dataset('orig_lens', shape=(n_samples,), dtype=int)
-    f.create_dataset('label_names', data=model.hparams['labels'], dtype=h5py.special_dtype(vlen=str))
-    seq_id_dset = None
-    if model.hparams.window is not None:
-        seq_id_dset = f.create_dataset('seq_ids', shape=(n_samples,), dtype=int)
+        emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
+        label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
+        olen_dset = f.create_dataset('orig_lens', shape=(n_samples,), dtype=int)
+        f.create_dataset('label_names', data=model.hparams['labels'], dtype=h5py.special_dtype(vlen=str))
+        seq_id_dset = None
+        if model.hparams.window is not None:
+            seq_id_dset = f.create_dataset('seq_ids', shape=(n_samples,), dtype=int)
 
-    for loader_key, loader in args.loaders.items():
-        mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
-        args.logger.info(f'computing outputs for {loader_key}')
-        idx, outputs, labels, orig_lens, seq_ids = get_outputs(model, loader, args.device, debug=args.debug)
-        if args.label_map is not None:
-            labels = args.label_map[labels]
-        order = np.argsort(idx)
-        idx = idx[order]
-        args.logger.info('writing outputs')
-        emb_dset[idx] = outputs[order]
-        args.logger.info('writing labels')
-        label_dset[idx] = labels[order]
-        args.logger.info('writing orig_lens')
-        olen_dset[idx] = orig_lens
-        args.logger.info('writing mask')
-        mask_dset[idx] = True
-        if seq_id_dset is not None:
-            seq_id_dset[idx] = seq_ids[order]
+        for loader_key, loader in args.loaders.items():
+            mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
+            args.logger.info(f'computing outputs for {loader_key}')
+            idx, outputs, labels, orig_lens, seq_ids = get_outputs(model, loader, args.device, debug=args.debug)
+            if args.label_map is not None:
+                labels = args.label_map[labels]
+            order = np.argsort(idx)
+            idx = idx[order]
+            args.logger.info('writing outputs')
+            emb_dset[idx] = outputs[order]
+            args.logger.info('writing labels')
+            label_dset[idx] = labels[order]
+            args.logger.info('writing orig_lens')
+            olen_dset[idx] = orig_lens
+            args.logger.info('writing mask')
+            mask_dset[idx] = True
+            if seq_id_dset is not None:
+                seq_id_dset[idx] = seq_ids[order]
 
-    if args.umap:
-        # compute UMAP arguments for convenience
-        args.logger.info('Running UMAP embedding')
-        from umap import UMAP
-        umap = UMAP(n_components=2)
-        tfm = umap.fit_transform(emb_dset[:])
-        umap_dset = f.create_dataset('viz_emb', shape=(n_samples, 2), dtype=float)
-        umap_dset[:] = tfm
+        if args.umap:
+            # compute UMAP arguments for convenience
+            args.logger.info('Running UMAP embedding')
+            from umap import UMAP
+            umap = UMAP(n_components=2)
+            tfm = umap.fit_transform(emb_dset[:])
+            umap_dset = f.create_dataset('viz_emb', shape=(n_samples, 2), dtype=float)
+            umap_dset[:] = tfm
+
+        io.write(table)
 
 
 def get_outputs(model, loader, device, debug=False):
