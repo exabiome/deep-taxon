@@ -13,3 +13,6 @@
 [submodule "5ea0c84b6ad22c000125ce43"]
 	path = journal
 	url = https://git.overleaf.com/5ea0c84b6ad22c000125ce43
+[submodule "src\\exabiome\\hdmf-ml\\schema"]
+	path = src\\exabiome\\hdmf-ml\\schema
+	url = https://github.com/hdmf-dev/hdmf-ml.git
