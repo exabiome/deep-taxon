@@ -1,4 +1,3 @@
-name: my-open-ce-0.1.0
 channels:
   - conda-forge
   - file:///gpfs/alpine/world-shared/stf011/junqi/open-ce/condabuild

@@ -4,4 +4,7 @@ namespaces:
   version: 0.1.0
   schema:
   - namespace: hdmf-common
+  - namespace: hdmf-experimental
+    data_types:
+      - EnumData
   - source: dna_table.yaml

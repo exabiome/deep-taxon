@@ -129,24 +129,25 @@ def process_args(argv=None):
     if args.batch_size is not None:
         model.hparams.batch_size = args.batch_size
 
+    args.label_map = None
     if args.input is not None:                          # if an input file is passed in, use that first
         dset, io  = process_dataset(model.hparams, path=args.input, inference=True)
         ldr = get_loader(dset, batch_size=args.batch_size, distances=False)
         args.loaders = {'input': ldr}
         args.difile = dset.difile
-        train_dset, train_io = process_dataset(model.hparams, inference=True)
-        args.label_map = np.zeros(len(dset), dtype=int)
-        train_tid  = train_dset.difile.taxa_table['taxon_id'][:]
-        tid2idx = {tid: i for i, tid in enumerate(train_tid)}
-        rep_tid = dset.difile.taxa_table['rep_taxon_id'][:]
-        args.label_map = np.array([tid2idx[tid] for tid in rep_tid])
-        train_io.close()
+        #train_dset, train_io = process_dataset(model.hparams, inference=True)
+        #args.label_map = np.zeros(len(dset), dtype=int)
+        #train_tid  = train_dset.difile.taxa_table['taxon_id'][:]
+        #tid2idx = {tid: i for i, tid in enumerate(train_tid)}
+        #rep_tid = dset.difile.taxa_table['rep_taxon_id'][:]
+        #args.label_map = np.array([tid2idx[tid] for tid in rep_tid])
+        #train_io.close()
     elif args.loaders is None:                           # if an input file is not passed in, do all TVT data
         args.loaders = {'train': model.train_dataloader(),
                         'validate': model.val_dataloader(),
                         'test': model.test_dataloader()}
         args.difile = model.dataset.difile
-        args.label_map = None
+        #args.label_map = None
 
     # return the model, any arguments, and Lighting Trainer args just in case
     # we want to use them down the line when we figure out how to use Lightning for
@@ -177,6 +178,7 @@ def run_inference(argv=None):
     emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
     label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
     olen_dset = f.create_dataset('orig_lens', shape=(n_samples,), dtype=int)
+    f.create_dataset('label_names', data=model.hparams['labels'], dtype=h5py.special_dtype(vlen=str))
     seq_id_dset = None
     if model.hparams.window is not None:
         seq_id_dset = f.create_dataset('seq_ids', shape=(n_samples,), dtype=int)

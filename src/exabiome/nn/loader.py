@@ -1,3 +1,4 @@
+import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
@@ -6,7 +7,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
-from ..sequence import WindowChunkedDIFile, RevCompFilter
+from ..sequence import WindowChunkedDIFile, RevCompFilter, DeepIndexFile
+from ..utils import parse_seed
 
 
 def check_window(window, step):
@@ -16,6 +18,79 @@ def check_window(window, step):
         if step is None:
             step = window
         return window, step
+
+
+def add_dataset_arguments(parser):
+    group = parser.add_argument_group("Dataset options")
+
+    group.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
+    group.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
+    group.add_argument('--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
+    type_group = group.add_mutually_exclusive_group()
+    type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
+    type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
+    group.add_argument('-t', '--tgt_tax_lvl', choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
+                       help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species')
+
+    return None
+
+
+def dataset_stats(argv=None):
+    """Read a dataset and print the number of samples to stdout"""
+
+    import argparse
+    parser =  argparse.ArgumentParser()
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    add_dataset_arguments(parser)
+    test_group = parser.add_argument_group('Test reading')
+    test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
+    test_group.add_argument('-s', '--seed', type=parse_seed, default=None, help='seed for an 80/10/10 split before reading an element')
+    test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+    test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
+
+
+    args = parser.parse_args(argv)
+    dataset, io = process_dataset(args)
+    difile = io.read()
+
+    n_taxa = len(difile.taxa_table)
+    n_seqs = len(difile.seq_table)
+
+    n_samples = len(dataset)
+    wlen = args.window
+    step = args.step
+    if wlen is not None:
+        print(("Splitting %d sequences (from %d species) into %d "
+               "bp windows every %d bps produces %d samples") % (n_seqs, n_taxa, wlen, step, n_samples))
+    else:
+        print(("Found %d sequences across %d species. %d total samples") % (n_seqs, n_taxa, n_samples))
+
+    if args.test_read:
+        print("Attempting to read training data")
+        tr, va, te = train_test_loaders(dataset, random_state=args.seed, downsample=None, distances=args.manifold)
+        from tqdm import tqdm
+        for i in tqdm(tr):
+            continue
+        print("Attempting to read validation data")
+        for i in tqdm(va):
+            continue
+        print("Attempting to read testing data")
+        for i in tqdm(te):
+            continue
+    if args.output_map is not None:
+        tl1, tl2 = args.output_map
+        ret = difile.taxa_table.get_outputs_map(tl1, tl2)
+        bad = False
+        for id2, id1 in enumerate(ret):
+            mask = difile.taxa_table[tl2].get(np.s_[:], index=True) == id2
+            t2_vals = difile.taxa_table[tl1].get(mask, index=True)
+            if not np.all(t2_vals == id1):
+                t2 = difile.taxa_table[tl2].vocabulary[id2]
+                t1 = difile.taxa_table[tl1].vocabulary[id1]
+                print('ERROR -- not all {tl2} {t2} have {tl1} {t1}')
+                bad = True
+        if not bad:
+            print(f'taxonomic hierarchy for {tl1} to {tl2} okay')
 
 
 def read_dataset(path):
@@ -39,15 +114,17 @@ def process_dataset(args, path=None, inference=False):
                          'to determine the number of outputs')
     if args.classify:
         dataset.set_classify(True)
-        n_outputs = len(dataset.difile.taxa_table)
+        dataset.difile.set_label_key(args.tgt_tax_lvl)
+        args.n_outputs = dataset.difile.n_outputs
     elif args.manifold:
+        if args.tgt_tax_lvl != 'species':
+            raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
         dataset.set_classify(True)
-        n_outputs = 32        #TODO make this configurable #breakpoint
     else:
-        args.regression = True
-        dataset.set_classify(False)
-    if inference:
-        dataset.set_classify(True)
+        raise ValueError('classify (-C) or manifold (-M) should be set')
+
+    #if inference:
+    #    dataset.set_classify(True)
     args.window, args.step = check_window(args.window, args.step)
 
     # Process any arguments that impact how we set up the dataset
@@ -119,11 +196,11 @@ class SeqDataset(Dataset):
     A torch Dataset to handle reading samples read from a DeepIndex file
     """
 
-    def __init__(self, difile, classify=False):
+    def __init__(self, difile, classify=True):
         self.difile = difile
         self.set_classify(classify)
         self._target_key = 'class_label' if classify else 'embedding'
-        self.vocab_len = len(self.difile.seq_table['sequence'].target.vocabulary)
+        self.vocab_len = len(self.difile.seq_table['sequence'].target.elements)
         self.__ohe = True
 
     def set_classify(self, classify):
@@ -291,7 +368,6 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
         collater = DistanceCollater(dataset.difile.distances.data[:])
 
     kwargs['pin_memory'] = True
-    print(kwargs)
 
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)
@@ -315,3 +391,31 @@ def get_loader(dataset, distances=False, **kwargs):
         collater = DistanceCollater(dataset.difile.distances.data[:])
     return DataLoader(dataset, collate_fn=collater, **kwargs)
 
+
+class DeepIndexDataModule(pl.LightningDataModule):
+
+    def __init__(self, hparams, inference=False):
+        super().__init__()
+        self.hparams = hparams
+        self.dataset, self.io = process_dataset(self.hparams, inference=inference)
+        if self.hparams.load:
+            self.dataset.load()
+        kwargs = dict(random_state=self.hparams.seed,
+                      batch_size=self.hparams.batch_size,
+                      distances=self.hparams.manifold)
+        kwargs.update(self.hparams.loader_kwargs)
+        if inference:
+            kwargs['distances'] = False
+            kwargs.pop('num_workers', None)
+            kwargs.pop('multiprocessing_context', None)
+        tr, te, va = train_test_loaders(self.dataset, **kwargs)
+        self.loaders = {'train': tr, 'test': te, 'validate': va}
+
+    def train_dataloader(self):
+        return self.loaders['train']
+
+    def val_dataloader(self):
+        return self.loaders['validate']
+
+    def test_dataloader(self):
+        return self.loaders['test']

@@ -14,6 +14,12 @@ from ..loss import DistMSELoss
 
 class AbstractLit(LightningModule):
 
+    val_loss = 'validation_loss'
+    train_loss = 'training_loss'
+    val_acc = 'validation_acc'
+    train_acc = 'training_acc'
+    test_loss = 'test_loss'
+
     schedules = ('adam', 'cyclic', 'plateau')
 
     def __init__(self, hparams):
@@ -34,41 +40,23 @@ class AbstractLit(LightningModule):
             return argparse.Namespace(**hparams)
         return hparams
 
+    def set_class_weights(self, weights):
+        if weights is not None:
+            weights = torch.as_tensor(weights, dtype=torch.float)
+        self._loss = nn.CrossEntropyLoss(weight=weights)
+
     def set_inference(self, inference=True):
         self._inference = inference
 
     def set_dataset(self, dataset, load=True, inference=False):
         kwargs = dict(random_state=self.hparams.seed,
                       batch_size=self.hparams.batch_size,
-                      distances=self.hparams.manifold,
-                      downsample=self.hparams.downsample)
+                      distances=self.hparams.manifold)
 
         if inference:
             kwargs['distances'] = False
         tr, te, va = train_test_loaders(dataset, **kwargs)
         self.loaders = {'train': tr, 'test': te, 'validate': va}
-
-    def _check_loaders(self):
-        """
-        Load dataset if it has not been loaded yet
-        """
-        if not hasattr(self, 'loaders'):
-            dataset, io = process_dataset(self.hparams, inference=self._inference)
-            if self.hparams.load:
-                dataset.load()
-
-            kwargs = dict(random_state=self.hparams.seed,
-                          batch_size=self.hparams.batch_size,
-                          distances=self.hparams.manifold,
-                          downsample=self.hparams.downsample)
-            kwargs.update(self.hparams.loader_kwargs)
-            if self._inference:
-                kwargs['distances'] = False
-                kwargs.pop('num_workers', None)
-                kwargs.pop('multiprocessing_context', None)
-            tr, te, va = train_test_loaders(dataset, **kwargs)
-            self.loaders = {'train': tr, 'test': te, 'validate': va}
-            self.dataset = dataset
 
     def configure_optimizers(self):
         if self.hparams.lr_scheduler == 'adam':
@@ -82,44 +70,45 @@ class AbstractLit(LightningModule):
                 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             return [optimizer], [scheduler]
 
-    # TRAIN
-    def train_dataloader(self):
-        self._check_loaders()
-        return self.loaders['train']
+    @staticmethod
+    def accuracy(output, target):
+        pred = torch.argmax(output, dim=1)
+        acc = (pred == target).float().sum()/len(target)
+        return acc
 
+    # TRAIN
     def training_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self.forward(seqs)
         loss = self._loss(output, target)
-        return {'loss': loss}
+        if self.hparams.classify:
+            self.log(self.train_acc, self.accuracy(output, target))
+        self.log(self.train_loss, loss)
+        return loss
 
     def training_epoch_end(self, outputs):
-        return {'log': outputs[0]}
+        return None
 
     # VALIDATION
-    def val_dataloader(self):
-        self._check_loaders()
-        return self.loaders['validate']
-
     def validation_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
-        return {'val_loss': self._loss(output, target)}
+        loss = self._loss(output, target)
+        if self.hparams.classify:
+            self.log(self.val_acc, self.accuracy(output, target))
+        self.log(self.val_loss, loss)
+        return loss
 
     def validation_epoch_end(self, outputs):
-        val_loss_mean = torch.stack([x['val_loss'] for x in outputs]).mean()
-        return {'log': {'val_loss': val_loss_mean}}
+        return None
 
     # TEST
-    def test_dataloader(self):
-        self._check_loaders()
-        return self.loaders['test']
-
     def test_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
         output = self(seqs)
-        return {'test_loss': self._loss(output, target)}
+        loss = self._loss(output, target)
+        self.log(self.test_loss, loss)
+        return loss
 
     def test_epoch_end(self, outputs):
-        test_loss_mean = torch.stack([x['test_loss'] for x in outputs]).mean()
-        return {'test_loss': test_loss_mean}
+        return None
