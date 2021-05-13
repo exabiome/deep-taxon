@@ -1,5 +1,5 @@
 import sys
-import os.path
+import os
 import argparse
 import shutil
 
@@ -17,7 +17,9 @@ def check_summit(args):
     if args.outdir is None:
         args.outdir = os.path.realpath(os.path.expandvars("$PROJWORK/bif115/../scratch/$USER/deep-index"))
     if args.conda_env is None:
-        args.conda_env = 'exabiome-wml'
+        args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
+        if args.conda_env is None:
+            raise RuntimeError("Cannot determine the conda environment to use")
         #args.conda_env = 'exabiome-wml-1.7.0-3'
 
 
@@ -30,6 +32,12 @@ def check_cori(args):
         args.outdir = os.path.abspath(os.path.expandvars("$CSCRATCH/exabiome/deep-index"))
     if args.queue is None:
         args.queue = 'regular'
+
+
+def check_args(args):
+    if args.loss == 'M':
+        if args.output_dims is None:
+            args.output_dims = 256
 
 
 def get_jobargs(args):
@@ -63,7 +71,7 @@ def run_train(argv=None):
     parser.add_argument('-r', '--rate',         help="the learning rate to use for training", default=0.001)
     parser.add_argument('-w', '--weighted',     help='weight classes in classification',
                          nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'])
-    parser.add_argument('-o', '--output_dims',  help="the number of dimensions to output", default=256)
+    parser.add_argument('-o', '--output_dims',  help="the number of dimensions to output", default=None)
     parser.add_argument('-A', '--accum',        help="the number of batches to accumulate", default=1)
     parser.add_argument('-b', '--batch_size',   help="the number of batches to accumulate", default=64)
     parser.add_argument('-W', '--window',       help="the size of chunks to use", default=4000)
@@ -130,10 +138,14 @@ def run_train(argv=None):
 
     chunks = f'chunks_W{args.window}_S{args.step}'
 
-    options = (f'{options} -{args.loss} -b {args.batch_size} -g {args.gpus} -n {args.nodes} -o {args.output_dims} '
+    options = (f'{options} -{args.loss} -b {args.batch_size} -g {args.gpus} -n {args.nodes} '
                f'-W {args.window} -S {args.step} -r {args.rate} -A {args.accum} -e {args.epochs}')
 
-    exp = f'n{args.nodes}_g{args.gpus}_A{args.accum}_b{args.batch_size}_r{args.rate}_o{args.output_dims}'
+    exp = f'n{args.nodes}_g{args.gpus}_A{args.accum}_b{args.batch_size}_r{args.rate}'
+
+    if args.output_dims is not None:
+        exp = f'{exp}_o{args.output_dims}'
+        options = f'{options} -o {args.output_dims} '
 
     if args.load:
         options += f' -l'

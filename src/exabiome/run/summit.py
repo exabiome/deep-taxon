@@ -17,7 +17,7 @@ class LSFJob(AbstractJob):
 
     debug_queue = 'debug'
 
-    def __init__(self, queue='batch', project='BIF115', time='1:00:00', nodes=2, jobname=None, output=None, error=None):
+    def __init__(self, queue='batch', project='BIF115', time='1:00:00', nodes=2, jobname=None, output=None, error=None, **kwargs):
         super().__init__()
         self.queue = queue
         self.project = project

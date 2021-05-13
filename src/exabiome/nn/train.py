@@ -120,7 +120,7 @@ def process_args(args=None, return_io=False):
 
     args.loader_kwargs = dict()
     if args.lsf:
-        args.loader_kwargs['num_workers'] = 6
+        args.loader_kwargs['num_workers'] = 1
         args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
     # classify by default

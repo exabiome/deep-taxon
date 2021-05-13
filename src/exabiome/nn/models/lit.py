@@ -1,5 +1,6 @@
 from .. import train_test_loaders
 from pytorch_lightning import LightningModule
+import torch_optimizer as ptoptim
 import torch.optim as optim
 import torch.nn as nn
 import torch
@@ -59,6 +60,8 @@ class AbstractLit(LightningModule):
         self.loaders = {'train': tr, 'test': te, 'validate': va}
 
     def configure_optimizers(self):
+        if self.hparams.optimizer == 'lamb':
+            return ptoptim.Lamb(self.parameters(), lr=self.hparams.lr)
         if self.hparams.lr_scheduler == 'adam':
             return optim.Adam(self.parameters(), lr=self.hparams.lr)
         else:
