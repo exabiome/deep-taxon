@@ -14,6 +14,15 @@ import argparse
 import logging
 
 
+from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning.loggers import CSVLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+
+from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
+from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin
+from .lsf_environment import LSFEnvironment
+
+
 def parse_train_size(string):
     ret = float(string)
     if ret > 1.0:
@@ -54,7 +63,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
-    parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
+    parser.add_argument('-n', '--n_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
@@ -119,9 +128,6 @@ def process_args(args=None, return_io=False):
     args.input_nc = input_nc
 
     args.loader_kwargs = dict()
-    if args.lsf:
-        args.loader_kwargs['num_workers'] = 1
-        args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
     # classify by default
     if args.manifold == args.classify == False:
@@ -151,7 +157,7 @@ def process_args(args=None, return_io=False):
 
     targs = dict(
         max_epochs=args.epochs,
-        num_nodes=args.num_nodes,
+        n_nodes=args.n_nodes,
     )
 
     if args.profile:
@@ -159,27 +165,50 @@ def process_args(args=None, return_io=False):
 
     targs['accumulate_grad_batches'] = args.accumulate
 
-    if args.horovod:
-        targs['accelerator'] = 'horovod'
-        if args.gpus:
-            targs['gpus'] = 1
-    else:
-        targs['gpus'] = process_gpus(args.gpus)
-        targs['num_nodes'] = args.num_nodes
-        targs['accelerator'] = 'ddp'
-        if targs['gpus'] != 1 or targs['num_nodes'] > 1:
-            # env = None
-            # if args.lsf:
-            #     env = cenv.LSFEnvironment()
-            # elif args.slurm:
-            #     env = cenv.SLURMEnvironment()
-            # else:
-            #     print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
-            #           file=sys.stderr)
-            #     sys.exit(1)
-            # targs.setdefault('plugins', list()).append(env)
-            pass
+    targs['gpus'] = process_gpus(args.gpus)
+
+    #if args.horovod:
+    #    targs['accelerator'] = 'horovod'
+    #    if args.gpus:
+    #        targs['gpus'] = 1
+    #else:
+    #    targs['n_nodes'] = args.n_nodes
+    #    targs['accelerator'] = 'ddp'
+    #    if targs['gpus'] != 1 or targs['n_nodes'] > 1:
+    #        # env = None
+    #        # if args.lsf:
+    #        #     env = cenv.LSFEnvironment()
+    #        # elif args.slurm:
+    #        #     env = cenv.SLURMEnvironment()
+    #        # else:
+    #        #     print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
+    #        #           file=sys.stderr)
+    #        #     sys.exit(1)
+    #        # targs.setdefault('plugins', list()).append(env)
+    #        pass
     del args.gpus
+
+
+    env = None
+    if args.lsf:
+        ##########################################################################################
+        # Currently coding against pytorch-lightning 1.3.1.
+        ##########################################################################################
+        args.loader_kwargs['num_workers'] = 1
+        args.loader_kwargs['multiprocessing_context'] = 'spawn'
+        env = LSFEnvironment()
+    elif args.slurm:
+        env = SLURMEnvironment()
+
+    if targs['gpus'] is not None:
+        targs['accelerator'] = GPUAccelerator(
+            precision_plugin = NativeMixedPrecisionPlugin(),
+            training_type_plugin = DDPPlugin(cluster_environment=cenv, n_nodes=args.n_nodes)
+        )
+    else:
+        targs['accelerator'] = CPUAccelerator(
+            training_type_plugin = DDPPlugin(cluster_environment=cenv, n_nodes=args.n_nodes)
+        )
 
     if args.debug:
         targs['limit_train_batches'] = 10
@@ -205,11 +234,6 @@ def process_args(args=None, return_io=False):
     ret.append(data_mod)
 
     return tuple(ret)
-
-
-from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
 
 
 from mpi4py import MPI
