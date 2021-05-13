@@ -1,3 +1,4 @@
+from argparse import Namespace
 import sys
 import os
 
@@ -6,6 +7,7 @@ from . import models
 
 from ..utils import check_directory
 from pytorch_lightning.core.decorators import auto_move_data
+import torch
 
 
 def show_models(argv=None):
@@ -43,7 +45,14 @@ def process_gpus(gpus):
     return ret
 
 
-def process_model(args, inference=False):
+def _check_hparams(args):
+    if args.hparams is not None:
+        for k, v in args.hparams.items():
+            setattr(args, k, v)
+    del args.hparams
+
+
+def process_model(args, inference=False, taxa_table=None):
     """
     Process a model argument
 
@@ -54,37 +63,39 @@ def process_model(args, inference=False):
 
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
-    model = models._models[args.model]
+    model_cls = models._models[args.model]
     if inference:
-        model.forward = auto_move_data(model.forward)
+        model_cls.forward = auto_move_data(model_cls.forward)
 
     if args.checkpoint is not None:
-        model = model.load_from_checkpoint(args.checkpoint)
+        try:
+            ckpt = torch.load(args.checkpoint)
+            ckpt_hparams = Namespace(**ckpt['hyper_parameters'])
+            model = model_cls.load_from_checkpoint(args.checkpoint, hparams=ckpt_hparams)
+            if not inference:
+                if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
+                    if taxa_table is None:
+                        msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
+                              "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.checkpoint}. You must provide the TaxaTable for "
+                              "computing the taxonomy mapping for reconfiguring the final output layer")
+
+                        raise ValueError(msg)
+                    outputs_map = taxa_table.get_outputs_map(ckpt_hparams.tgt_tax_lvl, args.tgt_tax_lvl)
+                    model.reconfigure_outputs(outputs_map)
+                    model.hparams.tgt_tax_lvl = args.tgt_tax_lvl
+        except RuntimeError as e:
+            if 'Missing key(s)' in e.args[0]:
+                raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
+            else:
+                raise e
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
-        # First, get the dataset, so we can figure
-        # out how many outputs there are
-        dataset, io = read_dataset(args.input)
-
-        if args.classify:
-            n_outputs = len(dataset.difile.taxa_table)
-        elif args.manifold:
-            n_outputs = args.n_outputs        #TODO make this configurable #breakpoint
-        else:
-            args.regression = True
-            n_outputs = dataset.difile.n_emb_components
-        args.n_outputs = n_outputs
-
-        if args.hparams is not None:
-            for k, v in args.hparams.items():
-                setattr(args, k, v)
-        del args.hparams
-
-        model = model(args)
-
-        io.close()
+        _check_hparams(args)
+        if taxa_table is not None:
+            args.labels = taxa_table['phylum'].elements.data[:]
+        model = model_cls(args)
 
     return model
 

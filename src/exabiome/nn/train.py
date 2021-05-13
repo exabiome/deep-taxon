@@ -7,6 +7,7 @@ from datetime import datetime
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
+from .loader import add_dataset_arguments, DeepIndexDataModule
 from hdmf.utils import docval
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -38,13 +39,18 @@ def parse_args(*addl_args, argv=None):
     """
     desc = "Run network training"
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
-    parser.add_argument('model', type=str, help='the model to run', choices=list(models._models.keys()))
+    parser.add_argument('model', type=str, help='the model to run. see show-models for a list of available models',
+                        metavar="model", choices=list(models._models.keys()))
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
-    type_group = parser.add_mutually_exclusive_group()
-    type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
-    type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
-    type_group.add_argument('-R', '--regression', action='store_true', help='run a regression problem', default=False)
+
+    add_dataset_arguments(parser)
+    parser.add_argument('-F', '--features_checkpoint', type=str, help='a checkpoint file for previously trained features', default=None)
+
+    parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+
+    parser.add_argument('-w', '--weighted', nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'], help='weight classes in classification')
+    parser.add_argument('--ens_beta', type=float, help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9)
     parser.add_argument('-o', '--n_outputs', type=int, help='the number of outputs in the final layer', default=32)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
@@ -56,18 +62,12 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
-    parser.add_argument('-t', '--train_size', type=parse_train_size, default=0.8, help='size of train split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
-    parser.add_argument('--downsample', type=float, default=None, help='downsample input before training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
-    parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
-    parser.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
-    parser.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
-    parser.add_argument('-F', '--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
     parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
@@ -128,7 +128,31 @@ def process_args(args=None, return_io=False):
     if args.lsf:
         args.loader_kwargs['num_workers'] = 6
 
-    model = process_model(args)
+    # classify by default
+    if args.manifold == args.classify == False:
+        args.classify = True
+
+    # make sure we are classifying if we are using adding classifier layers
+    # to a resnet features model
+    if args.features_checkpoint is not None:
+        if args.manifold:
+            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
+        args.classify = True
+
+    data_mod = DeepIndexDataModule(args)
+
+    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+
+    if args.weighted:
+        labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
+        uniq, counts = np.unique(labels, return_counts=True)
+        if args.weighted == 'ens':
+            weights = (1 - args.ens_beta)/(1 - args.ens_beta**counts)
+        elif args.weighted == 'isns':
+            weights = np.sqrt(1/counts)
+        else:
+            weights = np.sqrt(1/counts)
+        model.set_class_weights(weights)
 
     targs = dict(
         max_epochs=args.epochs,
@@ -140,10 +164,6 @@ def process_args(args=None, return_io=False):
 
     targs['accumulate_grad_batches'] = args.accumulate
 
-    #if args.gpus is not None:
-    #    targs['gpus'] = 1
-    #targs['accelerator'] = 'horovod'
-
     if args.horovod:
         targs['accelerator'] = 'horovod'
         if args.gpus:
@@ -151,6 +171,7 @@ def process_args(args=None, return_io=False):
     else:
         targs['gpus'] = process_gpus(args.gpus)
         targs['num_nodes'] = args.num_nodes
+        targs['accelerator'] = 'ddp'
         if targs['gpus'] != 1 or targs['num_nodes'] > 1:
             env = None
             if args.lsf:
@@ -169,7 +190,9 @@ def process_args(args=None, return_io=False):
     del args.gpus
 
     if args.debug:
-        targs['fast_dev_run'] = True
+        targs['limit_train_batches'] = 10
+        targs['limit_val_batches'] =5
+        targs['max_epochs'] = 1
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -187,20 +210,63 @@ def process_args(args=None, return_io=False):
     if args.checkpoint:
         args.experiment += '_restart'
 
+    ret.append(data_mod)
+
     return tuple(ret)
 
 
+from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning.loggers import CSVLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+
+
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+RANK = comm.Get_rank()
+#RANK = 0
+
+def print0(*msg, **kwargs):
+    if RANK == 0:
+        print(*msg, **kwargs)
+
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
-    model, args, addl_targs = process_args(parse_args(argv=argv))
 
-    outbase, output = process_output(args)
-    check_directory(outbase)
-    print("processed_args: ", args, file=sys.stderr)
+    import signal
+    import traceback
+    def signal_handler(sig, frame):
+        print('I caught SIG_KILL!')
+        track = traceback.format_exc()
+        print(track)
+        raise KeyboardInterrupt
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    print0(argv)
+    model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+
+    # output is a wrapper function for os.path.join(outdir, <FILE>)
+    outdir, output = process_output(args)
+    check_directory(outdir)
+    print0(args)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
+
+    if args.checkpoint is not None:
+        if RANK == 0:
+            print0(f'symlinking to {args.checkpoint} from {outdir}')
+            dest = output('start.ckpt')
+            src = os.path.relpath(args.checkpoint, start=outdir)
+            if os.path.exists(dest):
+                existing_src = os.readlink(dest)
+                if existing_src != src:
+                    msg = f'Cannot create symlink to checkpoint -- {dest} already exists, but points to {existing_src}'
+                    raise RuntimeError(msg)
+            else:
+                os.symlink(src, dest)
 
     seed_everything(args.seed)
 
@@ -208,31 +274,31 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(filepath=output("seed=%d-{epoch:02d}-{val_loss:.2f}" % args.seed), save_weights_only=False, save_last=True, save_top_k=None),
-        #logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs'), name=args.experiment),
-        logger = TensorBoardLogger(save_dir=os.path.join(args.output, 'tb_logs')),
-        log_every_n_steps=100
+        checkpoint_callback=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
+        logger = CSVLogger(save_dir=output('logs')),
     )
     targs.update(addl_targs)
 
+    if args.debug:
+        targs['log_every_n_steps'] = 1
 
-    print('Trainer args:', targs, file=sys.stderr)
+    print0('Trainer args:', targs, file=sys.stderr)
     trainer = Trainer(**targs)
 
     if args.debug:
-        print_dataloaders(test=model.test_dataloader(),
-                          train=model.train_dataloader(),
-                          val=model.val_dataloader())
+        print_dataloader(data_mod.test_dataloader())
+        print_dataloader(data_mod.train_dataloader())
+        print_dataloader(data_mod.val_dataloader())
 
     s = datetime.now()
-    trainer.fit(model)
+    trainer.fit(model, data_mod)
     e = datetime.now()
     td = e - s
     hours, seconds = divmod(td.seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
 
-    print("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
-    print("Total seconds:", td.total_seconds(), file=sys.stderr)
+    print0("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
+    print0("Total seconds:", td.total_seconds(), file=sys.stderr)
 
 
 def lightning_lr_find(argv=None):
@@ -288,7 +354,6 @@ def overall_metric(model, loader, metric):
     return val
 
 def print_args(argv=None):
-    '''Run Lightning Learning Rate finder'''
     import pickle
     import ruamel.yaml as yaml
     parser = argparse.ArgumentParser()
@@ -298,6 +363,15 @@ def print_args(argv=None):
         namespace = pickle.load(f)
     yaml.main.safe_dump(vars(namespace), sys.stdout, default_flow_style=False)
 
+
+def show_hparams(argv=None):
+    import yaml
+    import torch
+    parser = argparse.ArgumentParser()
+    parser.add_argument('checkpoint', help='the checkpoint file to pull hparams from', type=str)
+    args = parser.parse_args(argv)
+    hparams = torch.load(args.checkpoint, map_location=torch.device('cpu'))['hyper_parameters']
+    yaml.dump(hparams, sys.stdout)
 
 
 
