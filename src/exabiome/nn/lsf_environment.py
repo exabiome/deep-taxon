@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import sys
 import re
 import socket
 import warnings
@@ -54,6 +55,8 @@ class LSFEnvironment(ClusterEnvironment):
         log.debug(f"MASTER_ADDR: {os.environ['MASTER_ADDR']}")
         os.environ["MASTER_PORT"] = str(self._master_port)
         log.debug(f"MASTER_PORT: {os.environ['MASTER_PORT']}")
+
+        self._rep = ",".join('%s=%s' % (s, getattr(self, "_"+s)) for s in ('master_address', 'master_port', 'world_size', 'local_rank', 'node_rank', 'global_rank'))
 
     def _read_hosts(self):
         var = "LSB_HOSTS"
@@ -139,6 +142,10 @@ class LSFEnvironment(ClusterEnvironment):
                 count[host] = len(count)
         return count[socket.gethostname()]
 
+
+    def __str__(self):
+        return self._rep
+
     def creates_children(self):
         """
         LSF creates subprocesses -- i.e. PyTorch Lightning does not need to spawn them
@@ -180,3 +187,9 @@ class LSFEnvironment(ClusterEnvironment):
         World size is read from the environment variable JSM_NAMESPACE_RANK
         """
         return self._global_rank
+
+    def set_world_size(self, size: int) -> None:
+        log.debug("SLURMEnvironment.set_world_size was called, but setting world size is not allowed. Ignored.")
+
+    def set_global_rank(self, rank: int) -> None:
+        log.debug("SLURMEnvironment.set_global_rank was called, but setting global rank is not allowed. Ignored.")

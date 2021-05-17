@@ -22,6 +22,7 @@ from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin
 from .lsf_environment import LSFEnvironment
 
+import torch
 
 def parse_train_size(string):
     ret = float(string)
@@ -63,7 +64,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
-    parser.add_argument('-n', '--n_nodes', type=int, default=1, help='the number of nodes to run on')
+    parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
     parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
@@ -72,6 +73,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
     parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
+    parser.add_argument('-O', '--optimizer', type=str, choices=['adam', 'lamb'], help='the optimizer to use', default='adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
     grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
@@ -157,7 +159,7 @@ def process_args(args=None, return_io=False):
 
     targs = dict(
         max_epochs=args.epochs,
-        n_nodes=args.n_nodes,
+        num_nodes=args.num_nodes,
     )
 
     if args.profile:
@@ -172,9 +174,9 @@ def process_args(args=None, return_io=False):
     #    if args.gpus:
     #        targs['gpus'] = 1
     #else:
-    #    targs['n_nodes'] = args.n_nodes
+    #    targs['num_nodes'] = args.num_nodes
     #    targs['accelerator'] = 'ddp'
-    #    if targs['gpus'] != 1 or targs['n_nodes'] > 1:
+    #    if targs['gpus'] != 1 or targs['num_nodes'] > 1:
     #        # env = None
     #        # if args.lsf:
     #        #     env = cenv.LSFEnvironment()
@@ -197,17 +199,22 @@ def process_args(args=None, return_io=False):
         args.loader_kwargs['num_workers'] = 1
         args.loader_kwargs['multiprocessing_context'] = 'spawn'
         env = LSFEnvironment()
+        print0(env.node_rank())
     elif args.slurm:
         env = SLURMEnvironment()
 
     if targs['gpus'] is not None:
+        parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count())]
+        print(env, parallel_devices, file=sys.stderr)
         targs['accelerator'] = GPUAccelerator(
             precision_plugin = NativeMixedPrecisionPlugin(),
-            training_type_plugin = DDPPlugin(cluster_environment=cenv, n_nodes=args.n_nodes)
+            training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
+                                             cluster_environment=env)
+                                             #num_nodes=args.num_nodes)
         )
     else:
         targs['accelerator'] = CPUAccelerator(
-            training_type_plugin = DDPPlugin(cluster_environment=cenv, n_nodes=args.n_nodes)
+            training_type_plugin = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
         )
 
     if args.debug:

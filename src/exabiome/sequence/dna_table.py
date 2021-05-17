@@ -596,7 +596,7 @@ class RevCompFilter(DIFileFilter):
         item = self.difile[arg]
         try:
             if rev:
-                item['seq'] = self.rcmap[item['seq'].long()]
+                item['seq'] = self.rcmap[item['seq'].astype(int)]
         except AttributeError as e:
             raise ValueError("Cannot run without loading data. Use -l to load data") from e
         item['id'] = oarg

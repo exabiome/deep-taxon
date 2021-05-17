@@ -25,7 +25,8 @@ class AbstractLit(LightningModule):
 
     def __init__(self, hparams):
         super().__init__()
-        self.hparams = self.check_hparams(hparams)
+        #self.hparams = self.check_hparams(hparams)
+        self.save_hyperparameters(hparams)
         if self.hparams.manifold:
             self._loss = DistMSELoss()
         elif self.hparams.classify:

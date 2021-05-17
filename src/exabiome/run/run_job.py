@@ -190,9 +190,8 @@ def run_train(argv=None):
     job.output = f'{expdir}/train.%{job.job_fmt_var}.log'
     job.error = job.output
 
-    if args.nodes > 1:
-        job.set_env_var('OMP_NUM_THREADS', 1)
-        job.set_env_var('NCCL_DEBUG', 'INFO')
+    job.set_env_var('OMP_NUM_THREADS', 1)
+    job.set_env_var('NCCL_DEBUG', 'INFO')
 
     job.set_env_var('OPTIONS', options)
     job.set_env_var('OUTDIR', f'{expdir}/train.$JOB')
@@ -206,7 +205,8 @@ def run_train(argv=None):
         train_cmd += ' --lsf'
         if job.use_bb:
             job.set_env_var('BB_INPUT', '/mnt/bb/$USER/`basename $INPUT`')
-            input_var = 'BB_INPUT'
+            #input_var = 'BB_INPUT'
+            input_var = 'INPUT'
     elif args.cori:
         train_cmd += ' --slurm'
 
@@ -214,7 +214,7 @@ def run_train(argv=None):
 
     if args.summit and job.use_bb:
         job.add_command('echo "$INPUT to $BB_INPUT"')
-        job.add_command('cp $INPUT $BB_INPUT', run='jsrun -n 1')
+        job.add_command('cp $INPUT $BB_INPUT', run=f'jsrun -n {args.nodes}')
         job.add_command('ls /mnt/bb/$USER', run='jsrun -n 1')
         job.add_command('ls $BB_INPUT', run='jsrun -n 1')
 
