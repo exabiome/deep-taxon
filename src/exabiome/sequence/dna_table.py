@@ -19,7 +19,8 @@ __all__ = ['DeepIndexFile',
            'RevCompFilter',
            'SequenceTable',
            'GenomeTable',
-           'TaxaTable']
+           'TaxaTable',
+           'chunk_sequence']
 
 NS = 'deep-index'
 
@@ -514,36 +515,57 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
     """
 
     def __init__(self, difile, wlen, step=None, min_seq_len=100):
-        if not isinstance(difile, (DeepIndexFile, DIFileFilter)):
-            raise ValueError(f'difile must be a DeepIndexFile or a DIFileFilter, got {type(difile)}')
-        if step is None:
-            step = wlen
+        seq_idx, chunk_start, chunk_end, labels = chunk_sequence(difile, wlen, step=step, min_seq_len=min_seq_len)
         self.wlen = wlen
         self.step = step
         self.min_seq_len = min_seq_len
-
-        lengths = difile.seq_table['length'][:].astype(int)
-        # compute the number of chunks proced by each sequecne by adding
-        # the number of full chunks in each sequence to the number of incomplete chunks
-        n_chunks = ((lengths // self.step) +
-                    (lengths % self.step > 0))                  # the number of chunks each sequence will produce
-        labels = np.repeat(difile.labels, n_chunks)             # the labels for each chunks
-        seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
-        chunk_start = list()
-        for i in range(len(difile)):
-            chunk_start.append(np.arange(0, lengths[i], self.step))
-        chunk_start = np.concatenate(chunk_start)               # the start of each chunk in it's respective sequence
-        chunk_end = chunk_start + self.wlen                     # the end of each chunk in it's respective sequence
-        chunk_end = np.min(np.array([chunk_end,                 # trim any ends that go over the end of a sequence
-                                     np.repeat(lengths, n_chunks)]), axis=0)
-
-        mask = (chunk_end - chunk_start) >= self.min_seq_len    # get rid of any sequences that are less than the minimum length
-        labels = labels[mask]
-        seq_idx = seq_idx[mask]
-        chunk_start = chunk_start[mask]
-        chunk_end = chunk_end[mask]
-
         super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
+
+def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
+    """
+    Compute start and ends for a chunked sequence
+
+    Args:
+        difile (DeepIndexFile)      : the DeepIndexFile with the sequence data to chunk
+        wlen (int)                  : the window length to chunk into
+        step (int)                  : the step between window starts. by default this is wlen
+                                      i.e. non-overlapping windows
+        min_seq_len (int)           : the minimum sequence length to keep
+
+    Returns:
+        A tuple of (seq_idx, chunk-start, chunk_end, labels)
+        seq_idx (array)             : the index of the sequence that each chunk is derived from
+        chunk_start (array)         : the start of each chunk in its respective sequence
+        chunk_end (array)           : the end of each chunk in its respective sequence
+        labels (array)              : the taxonomic labels of each chunk
+    """
+    if not isinstance(difile, (DeepIndexFile, DIFileFilter)):
+        raise ValueError(f'difile must be a DeepIndexFile or a DIFileFilter, got {type(difile)}')
+    if step is None:
+        step = wlen
+
+    lengths = difile.seq_table['length'][:].astype(int)
+    # compute the number of chunks proced by each sequecne by adding
+    # the number of full chunks in each sequence to the number of incomplete chunks
+    n_chunks = ((lengths // step) +
+                (lengths % step > 0))                  # the number of chunks each sequence will produce
+    labels = np.repeat(difile.labels, n_chunks)             # the labels for each chunks
+    seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
+    chunk_start = list()
+    for i in range(len(difile)):
+        chunk_start.append(np.arange(0, lengths[i], step))
+    chunk_start = np.concatenate(chunk_start)               # the start of each chunk in it's respective sequence
+    chunk_end = chunk_start + wlen                     # the end of each chunk in it's respective sequence
+    chunk_end = np.min(np.array([chunk_end,                 # trim any ends that go over the end of a sequence
+                                 np.repeat(lengths, n_chunks)]), axis=0)
+
+    mask = (chunk_end - chunk_start) >= min_seq_len    # get rid of any sequences that are less than the minimum length
+    labels = labels[mask]
+    seq_idx = seq_idx[mask]
+    chunk_start = chunk_start[mask]
+    chunk_end = chunk_end[mask]
+    return seq_idx, chunk_start, chunk_end, labels
+
 
 
 class RevCompFilter(DIFileFilter):

@@ -48,7 +48,11 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
 
+    ##################################################
+    # Add dataset-specific arguments, like tgt_tax_lvl
+    ##################################################
     add_dataset_arguments(parser)
+
     parser.add_argument('-F', '--features_checkpoint', type=str, help='a checkpoint file for previously trained features', default=None)
 
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
@@ -59,7 +63,6 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
     parser.add_argument('-A', '--accumulate', type=json.loads, help='accumulate_grad_batches argument to pl.Trainer', default=1)
-    parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
     parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
@@ -72,7 +75,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
-    parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
+    parser.add_argument('-r', '--lr', type=float, default=0.001, help='the learning rate for Adam')
     parser.add_argument('-O', '--optimizer', type=str, choices=['adam', 'lamb'], help='the optimizer to use', default='adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
@@ -80,6 +83,12 @@ def parse_args(*addl_args, argv=None):
     grp.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
     grp.add_argument('--lsf', default=False, action='store_true', help='running on LSF system')
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
+
+    dl_grp = parser.add_argument_group('Data loading')
+    dl_grp.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
+    dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
+    dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
+    dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
 
 
     for a in addl_args:
@@ -144,11 +153,12 @@ def process_args(args=None, return_io=False):
 
     data_mod = DeepIndexDataModule(args)
 
-    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+    #model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+    model = process_model(args)
 
     if args.weighted:
         labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
-        uniq, counts = np.unique(labels, return_counts=True)
+        uniq, counts = data_mod.dataset.labels, data_mod.dataset.label_counts
         if args.weighted == 'ens':
             weights = (1 - args.ens_beta)/(1 - args.ens_beta**counts)
         elif args.weighted == 'isns':
@@ -197,9 +207,8 @@ def process_args(args=None, return_io=False):
         # Currently coding against pytorch-lightning 1.3.1.
         ##########################################################################################
         args.loader_kwargs['num_workers'] = 1
-        args.loader_kwargs['multiprocessing_context'] = 'spawn'
+        args.loader_kwargs['multiprocessing_context'] = 'forkserver'
         env = LSFEnvironment()
-        print0(env.node_rank())
     elif args.slurm:
         env = SLURMEnvironment()
 

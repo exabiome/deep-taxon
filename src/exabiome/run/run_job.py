@@ -52,7 +52,7 @@ def run_train(argv=None):
     parser.add_argument('sh', nargs='?', help='the input file to use')
 
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
-    parser.add_argument('-O', '--outdir',      help="the output directory", default=None)
+    parser.add_argument('--outdir',      help="the output directory", default=None)
     parser.add_argument('--profile',           help="use PTL profiling", action='store_true', default=False)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
@@ -74,6 +74,9 @@ def run_train(argv=None):
     parser.add_argument('-o', '--output_dims',  help="the number of dimensions to output", default=None)
     parser.add_argument('-A', '--accum',        help="the number of batches to accumulate", default=1)
     parser.add_argument('-b', '--batch_size',   help="the number of batches to accumulate", default=64)
+    parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
+    parser.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
+    parser.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     parser.add_argument('-W', '--window',       help="the size of chunks to use", default=4000)
     parser.add_argument('-S', '--step',         help="the chunking step size", default=4000)
     parser.add_argument('-s', '--seed',         help="the seed to use", default=None)
@@ -82,6 +85,7 @@ def run_train(argv=None):
     parser.add_argument('-t', '--tgt_tax_lvl',  help='the taxonomic level to use', default=None)
     parser.add_argument('-D', '--dataset',      help="the dataset name", default='default')
     parser.add_argument('-e', '--epochs',       help="the number of epochs to run for", default=10)
+    parser.add_argument('-O', '--optimizer', type=str, choices=['adam', 'lamb'], help='the optimizer to use', default='adam')
     parser.add_argument('--fwd_only',     help="use only fwd strand", action='store_true', default=False)
     parser.add_argument('-u', '--scheduler',    help="the learning rate scheduler to use", default=None)
     parser.add_argument('-c', '--checkpoint',   help="a checkpoint file to restart from", default=None)
@@ -91,6 +95,7 @@ def run_train(argv=None):
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
+
 
     args = parser.parse_args(argv)
 
@@ -138,10 +143,17 @@ def run_train(argv=None):
 
     chunks = f'chunks_W{args.window}_S{args.step}'
 
-    options = (f'{options} -{args.loss} -b {args.batch_size} -g {args.gpus} -n {args.nodes} '
-               f'-W {args.window} -S {args.step} -r {args.rate} -A {args.accum} -e {args.epochs}')
+    options = (f'{options} -{args.loss} -b {args.batch_size} -g {args.gpus} -n {args.nodes} -O {args.optimizer} '
+               f'-W {args.window} -S {args.step} -r {args.rate} -A {args.accum} -e {args.epochs} '
+               f'-k {args.num_workers}')
 
-    exp = f'n{args.nodes}_g{args.gpus}_A{args.accum}_b{args.batch_size}_r{args.rate}'
+    exp = f'n{args.nodes}_g{args.gpus}_A{args.accum}_b{args.batch_size}_r{args.rate}_O{args.optimizer}'
+
+    if args.pin_memory:
+        options += ' -y'
+
+    if args.shuffle:
+        options += ' -f'
 
     if args.output_dims is not None:
         exp = f'{exp}_o{args.output_dims}'
