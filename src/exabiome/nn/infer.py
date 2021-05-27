@@ -170,65 +170,85 @@ def run_inference(argv=None):
     from hdmf.common import load_namespaces, get_class
 
     load_namespaces(join(resource_filename(__name__, '../hdmf-ml'), 'schema', 'ml', 'namespace.yaml'))
-    TrainValidationTestMask = get_class('TrainValidationTestMask', 'hdmf-ml')
-    CrossValidationMask = get_class('CrossValidationMask', 'hdmf-ml')
-    ClassProbability = get_class('ClassProbability', 'hdmf-ml')
-    ClassLabel = get_class('ClassLabel', 'hdmf-ml')
-    RegressionOutput = get_class('RegressionOutput', 'hdmf-ml')
-    ClusterLabel = get_class('ClusterLabel', 'hdmf-ml')
-    EmbeddedValues = get_class('EmbeddedValues', 'hdmf-ml')
+    # TrainValidationTestMask = get_class('TrainValidationTestMask', 'hdmf-ml')
+    # ClassLabel = get_class('ClassLabel', 'hdmf-ml')
+    # EmbeddedValues = get_class('EmbeddedValues', 'hdmf-ml')
     ResultsTable = get_class('ResultsTable', 'hdmf-ml')
 
-    stop
+    # tvt_mask = TrainValidationTestMask(name='tvt_mask', description='tvt mask', elements=['train', 'validate', 'test'])
+    # class_label = ClassLabel(name='class_label', description='', training_label=phylum_col)  # TODO where are training labels column?
+    # embedded_vals = EmbeddedValues(name='embedded_vals', description='')
+    # cols = [tvt_mask, tvt_mask.elements, class_label, embedded_vals]
+    table = ResultsTable(name='results', description='ml results')
 
     from hdmf.backends.hdf5 import HDF5IO
 
-    import numpy as np
-    import os
     model.to(args.device)
     model.eval()
     n_outputs = model.hparams.n_outputs
     n_samples = len(args.difile)
 
+    emb_dset = np.empty(shape=(n_samples, n_outputs), dtype=float)
+    label_dset = np.empty(shape=(n_samples,), dtype=int)
+    olen_dset = np.empty(shape=(n_samples,), dtype=int)  # original lengths
+    tvt_mask = np.empty(shape=(n_samples,), dtype=str)
+    # f.create_dataset('label_names', data=model.hparams['labels'], dtype=h5py.special_dtype(vlen=str))
+    seq_id_dset = None
+    if model.hparams.window is not None:
+        seq_id_dset = np.empty(shape=(n_samples,), dtype=int)
+
+    for loader_key, loader in args.loaders.items():
+        # separate loaders for train, validate, test
+        # mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
+        args.logger.info(f'computing outputs for {loader_key}')
+        idx, outputs, labels, orig_lens, seq_ids = get_outputs(model, loader, args.device, debug=args.debug)
+        if args.label_map is not None:
+            labels = args.label_map[labels]
+        order = np.argsort(idx)
+        idx = idx[order]
+        args.logger.info('writing outputs')
+        emb_dset[idx] = outputs[order]
+        args.logger.info('writing labels')
+        label_dset[idx] = labels[order]
+        args.logger.info('writing orig_lens')
+        olen_dset[idx] = orig_lens
+        args.logger.info('writing mask')
+        tvt_mask[idx] = loader_key
+        if seq_id_dset is not None:
+            seq_id_dset[idx] = seq_ids[order]
+
+    umap_dset = None
+    if args.umap:
+        # compute UMAP arguments for convenience
+        args.logger.info('Running UMAP embedding')
+        from umap import UMAP
+        umap = UMAP(n_components=2)
+        tfm = umap.fit_transform(emb_dset[:])
+        umap_dset = np.empty(shape=(n_samples, 2), dtype=float)
+        umap_dset[:] = tfm
+
+    table = ResultsTable(name='results', description='ml results')
+    table.add_column(name='orig_lens', description='original lengths')
+    if seq_id_dset is not None:
+        table.add_column(name='seq_ids', description='sequential ids')
+    if args.umap:
+        table.add_column(name='viz_emb', description='umap visualization embedding')
+    for i in range(n_samples):
+        rkwargs = dict(
+            embedded_vals=emb_dset[i, :],
+            class_label=label_dset[i],
+            orig_lens=olen_dset[i],
+            tvt_mask=tvt_mask[i],
+        )
+        if seq_id_dset is not None:
+            rkwargs['seq_ids'] = seq_id_dset[i]
+        if args.umap:
+            rkwargs['viz_emb'] = umap_dset[i, :]
+        table.add_row(**rkwargs)
+        # TODO consider putting all data for all columns in at once rather than row by row
+
     args.logger.info(f'saving outputs to {args.output}')
     with HDF5IO(args.output, 'w') as io:
-
-        emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
-        label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
-        olen_dset = f.create_dataset('orig_lens', shape=(n_samples,), dtype=int)
-        f.create_dataset('label_names', data=model.hparams['labels'], dtype=h5py.special_dtype(vlen=str))
-        seq_id_dset = None
-        if model.hparams.window is not None:
-            seq_id_dset = f.create_dataset('seq_ids', shape=(n_samples,), dtype=int)
-
-        for loader_key, loader in args.loaders.items():
-            mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
-            args.logger.info(f'computing outputs for {loader_key}')
-            idx, outputs, labels, orig_lens, seq_ids = get_outputs(model, loader, args.device, debug=args.debug)
-            if args.label_map is not None:
-                labels = args.label_map[labels]
-            order = np.argsort(idx)
-            idx = idx[order]
-            args.logger.info('writing outputs')
-            emb_dset[idx] = outputs[order]
-            args.logger.info('writing labels')
-            label_dset[idx] = labels[order]
-            args.logger.info('writing orig_lens')
-            olen_dset[idx] = orig_lens
-            args.logger.info('writing mask')
-            mask_dset[idx] = True
-            if seq_id_dset is not None:
-                seq_id_dset[idx] = seq_ids[order]
-
-        if args.umap:
-            # compute UMAP arguments for convenience
-            args.logger.info('Running UMAP embedding')
-            from umap import UMAP
-            umap = UMAP(n_components=2)
-            tfm = umap.fit_transform(emb_dset[:])
-            umap_dset = f.create_dataset('viz_emb', shape=(n_samples, 2), dtype=float)
-            umap_dset[:] = tfm
-
         io.write(table)
 
 
