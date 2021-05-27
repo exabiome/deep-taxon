@@ -9,6 +9,12 @@ from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
 from .loader import add_dataset_arguments, DeepIndexDataModule
 from hdmf.utils import docval
+from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+import pytorch_lightning.cluster_environments as cenv
+from pytorch_lightning.accelerators.cpu_accelerator import CPUAccelerator
+
 
 import argparse
 import logging
@@ -121,7 +127,6 @@ def process_args(args=None, return_io=False):
     args.loader_kwargs = dict()
     if args.lsf:
         args.loader_kwargs['num_workers'] = 6
-        args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
     # classify by default
     if args.manifold == args.classify == False:
@@ -168,17 +173,20 @@ def process_args(args=None, return_io=False):
         targs['num_nodes'] = args.num_nodes
         targs['accelerator'] = 'ddp'
         if targs['gpus'] != 1 or targs['num_nodes'] > 1:
-            # env = None
-            # if args.lsf:
-            #     env = cenv.LSFEnvironment()
-            # elif args.slurm:
-            #     env = cenv.SLURMEnvironment()
-            # else:
-            #     print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
-            #           file=sys.stderr)
-            #     sys.exit(1)
-            # targs.setdefault('plugins', list()).append(env)
-            pass
+            env = None
+            if args.lsf:
+                env = cenv.LSFEnvironment()
+            elif args.slurm:
+                env = cenv.SLURMEnvironment()
+            else:
+                print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
+                      file=sys.stderr)
+                sys.exit(1)
+            targs.setdefault('plugins', list()).append(env)
+            if targs['gpus'] is not None:
+                targs['accelerator'] = 'ddp'
+            else:
+                targs['accelerator'] = CPUAccelerator(trainer=None, cluster_environment=env)
     del args.gpus
 
     if args.debug:
@@ -332,8 +340,11 @@ def cuda_sum(argv=None):
     print('torch.cuda.is_available:', torch.cuda.is_available())
     print('torch.cuda.device_count:', torch.cuda.device_count())
 
-def print_dataloader(dl):
-    print(dl.dataset.index[0], dl.dataset.index[-1])
+def print_dataloaders(**loaders):
+    msg = list()
+    for k, v in loaders.items():
+        msg.append("%s=(%s, %s)" % (k, v.dataset.index[0], v.dataset.index[-1]))
+    print(" ".join(msg), file=sys.stderr)
 
 def overall_metric(model, loader, metric):
     val = 0.0

@@ -49,6 +49,5 @@ class SlurmJob(AbstractJob):
 
         n_gpus = self.gpus
 
-
     def write_run(self, f, command, command_options, options):
         print(f'srun -u {command}', file=f)

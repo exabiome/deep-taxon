@@ -1,4 +1,3 @@
 git+https://github.com/hdmf-dev/hdmf.git@0efea00ff1d10c4021c8145e917d92566f7edb4c
 seaborn==0.11.0
-git+https://github.com/ajtritt/pytorch-lightning.git@99d2503373fe1b966cf7014c4ce7e7183766d48a
-torch==1.6.0
+git+https://github.com/ajtritt/pytorch-lightning.git@fb30942d2c47a95531e063ed35a22f8fba25be12

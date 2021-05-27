@@ -161,9 +161,9 @@ class AbstractJob(metaclass=ABCMeta):
         print(file=f)
         for k, v in self.env_vars.items():
             if isinstance(v, str):
-                print(f'{k}="{v}"', file=f)
+                print(f'export {k}="{v}"', file=f)
             else:
-                print(f'{k}={v}', file=f)
+                print(f'export {k}={v}', file=f)
         print(file=f)
         for c in self.commands:
             #if isinstance(c, dict):

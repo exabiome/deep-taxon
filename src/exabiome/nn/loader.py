@@ -1,3 +1,4 @@
+import os
 import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
@@ -94,6 +95,9 @@ def dataset_stats(argv=None):
 
 
 def read_dataset(path):
+    for root, dirs, files in os.walk("/mnt/bb/ajtritt/"):
+        for filename in files:
+            print(rank, '-', filename)
     hdmfio = get_hdf5io(path, 'r')
     difile = hdmfio.read()
     dataset = SeqDataset(difile)
@@ -392,6 +396,49 @@ def get_loader(dataset, distances=False, **kwargs):
     return DataLoader(dataset, collate_fn=collater, **kwargs)
 
 
+<<<<<<< HEAD
+class DIDataModule(pl.LightningDataModule):
+
+    def __init__(self, hparams, inference=False):
+        self.hparams = hparams
+        self.inference = inference
+
+    def train_dataloader(self):
+        self._check_loaders()
+        return self.loaders['train']
+
+    def val_dataloader(self):
+        self._check_loaders()
+        return self.loaders['validate']
+
+    def test_dataloader(self):
+        self._check_loaders()
+        return self.loaders['test']
+
+
+
+    def _check_loaders(self):
+        """
+        Load dataset if it has not been loaded yet
+        """
+        dataset, io = process_dataset(self.hparams, inference=self._inference)
+        if self.hparams.load:
+            dataset.load()
+
+        kwargs = dict(random_state=self.hparams.seed,
+                      batch_size=self.hparams.batch_size,
+                      distances=self.hparams.manifold,
+                      downsample=self.hparams.downsample)
+        kwargs.update(self.hparams.loader_kwargs)
+        if self._inference:
+            kwargs['distances'] = False
+            kwargs.pop('num_workers', None)
+            kwargs.pop('multiprocessing_context', None)
+        tr, te, va = train_test_loaders(dataset, **kwargs)
+        self.loaders = {'train': tr, 'test': te, 'validate': va}
+        self.dataset = dataset
+
+=======
 class DeepIndexDataModule(pl.LightningDataModule):
 
     def __init__(self, hparams, inference=False):
@@ -419,3 +466,4 @@ class DeepIndexDataModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         return self.loaders['test']
+>>>>>>> master
