@@ -1,3 +1,6 @@
+import sys
+import warnings
+
 import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
@@ -336,8 +339,8 @@ class DatasetSubset(Dataset):
     def __len__(self):
         return len(self.index)
 
-    def __getattr__(self, attr):
-        return getattr(self.dataset, attr)
+    # def __getattr__(self, attr):
+    #     return getattr(self.dataset, attr)
 
 
 def train_test_loaders(dataset, random_state=None, downsample=None, distances=False,
@@ -351,7 +354,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
     """
     index = np.arange(len(dataset))
     #stratify = dataset.difile.labels
-    stratify = dataset.labels
+    stratify = dataset.sample_labels
     if downsample is not None:
         index, _, stratify, _ = train_test_split(index, stratify,
                                                  train_size=downsample,
@@ -366,14 +369,16 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
         #collater = DistanceCollater(dataset.difile.distances.data[:])
         collater = DistanceCollater(dataset.distances)
 
-    kwargs['pin_memory'] = True
-
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)
     validate_dataset = DatasetSubset(dataset, validate_idx)
-    return (DataLoader(train_dataset, collate_fn=collater, **kwargs),
-            DataLoader(test_dataset, collate_fn=collater, **kwargs),
-            DataLoader(validate_dataset, collate_fn=collater, **kwargs))
+
+    tr_dl = DataLoader(train_dataset, collate_fn=collater, **kwargs)
+    kwargs.pop('shuffle', None)
+    va_dl = DataLoader(test_dataset, collate_fn=collater, **kwargs)
+    te_dl = DataLoader(validate_dataset, collate_fn=collater, **kwargs)
+
+    return (tr_dl, va_dl, te_dl)
 
 def get_loader(dataset, distances=False, **kwargs):
     """
@@ -397,19 +402,23 @@ class DeepIndexDataModule(pl.LightningDataModule):
         super().__init__()
         self.hparams = hparams
         # self.dataset, self.io = process_dataset(self.hparams, inference=inference)
-        self.dataset = LazySeqDataset(self.hparams)
+
+        self.dataset = LazySeqDataset(self.hparams, keep_open=self.hparams.num_workers==0)
         if self.hparams.load:
             self.dataset.load()
         kwargs = dict(random_state=self.hparams.seed,
                       batch_size=self.hparams.batch_size,
                       distances=self.hparams.manifold,
-                      pin_memory=self.hparams.pin_memory,
-                      num_workers=self.hparams.num_workers,
+                      pin_memory=False, #self.hparams.pin_memory,
                       shuffle=self.hparams.shuffle,
-                      multiprocessing_context='forkserver',
-                      worker_init_fn=self.dataset.open,
-                      persistent_workers=True)
+                      num_workers=self.hparams.num_workers)
+        if self.hparams.num_workers > 0:
+            kwargs['multiprocessing_context'] = 'spawn'
+            kwargs['worker_init_fn'] = self.dataset.worker_init
+            kwargs['persistent_workers'] = True
+
         kwargs.update(self.hparams.loader_kwargs)
+        print("------------- DataLoader kwargs:", str(kwargs), file=sys.stderr)
         if inference:
             kwargs['distances'] = False
             kwargs.pop('num_workers', None)
@@ -447,10 +456,9 @@ class LazySeqDataset(Dataset):
         # open to get dataset length
         self.open()
         self.__len = len(self.difile)
-        labels = self.difile.taxa_table[hparams.tgt_tax_lvl].data
-        self.labels, self.label_counts = np.unique(labels, return_counts=True)
+        self.sample_labels = self.difile.labels # taxa_table[hparams.tgt_tax_lvl].data
+        self.taxa_labels, self.taxa_counts = np.unique(self.sample_labels, return_counts=True)
 
-        # args.n_outputs = dataset.difile.n_outputs   # This should be done in train.process_args
         self.vocab_len = len(self.orig_difile.seq_table['sequence'].target.elements)
 
         self.dmat = None
@@ -469,19 +477,21 @@ class LazySeqDataset(Dataset):
 
         self.__ohe = False
 
-
         if not keep_open:
             self.io.close()
             self.difile = None
             self.orig_difile = None
             self.io = None
 
-
-
     def open(self):
+        """Open the HDMF file and set up chunks and taxonomy label"""
         self.io = get_hdf5io(self.path, 'r')
-        self.orig_difile = self.io.read()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.orig_difile = self.io.read()
         self.difile = self.orig_difile
+
+        self.difile.set_label_key(self.hparams.tgt_tax_lvl)
 
         self.set_ohe(False)
         if self.window is not None:
@@ -491,9 +501,9 @@ class LazySeqDataset(Dataset):
         if self.load_data:
             self.load()
 
-        self.difile.set_label_key(self.hparams.tgt_tax_lvl)
 
     def worker_init(self, worker_id):
+        print("------------- Opening DeepIndexFile for worker %s\n\n" % worker_id, file=sys.stderr)
         self.open()
 
     def set_chunks(self, window, step=None):

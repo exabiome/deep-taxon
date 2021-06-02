@@ -19,7 +19,7 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
-from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin
+from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin
 from .lsf_environment import LSFEnvironment
 
 import torch
@@ -154,17 +154,19 @@ def process_args(args=None, return_io=False):
     data_mod = DeepIndexDataModule(args)
 
     #model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+
+    # n_taxa replaces n_outputs
+    args.n_taxa = len(data_mod.dataset.taxa_labels)
     model = process_model(args)
 
     if args.weighted:
-        labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
-        uniq, counts = data_mod.dataset.labels, data_mod.dataset.label_counts
+        #labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
         if args.weighted == 'ens':
-            weights = (1 - args.ens_beta)/(1 - args.ens_beta**counts)
+            weights = (1 - args.ens_beta)/(1 - args.ens_beta**data_mod.dataset.taxa_counts)
         elif args.weighted == 'isns':
-            weights = np.sqrt(1/counts)
+            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
         else:
-            weights = np.sqrt(1/counts)
+            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
         model.set_class_weights(weights)
 
     targs = dict(
@@ -207,29 +209,35 @@ def process_args(args=None, return_io=False):
         # Currently coding against pytorch-lightning 1.3.1.
         ##########################################################################################
         args.loader_kwargs['num_workers'] = 1
-        args.loader_kwargs['multiprocessing_context'] = 'forkserver'
+        args.loader_kwargs['multiprocessing_context'] = 'spawn'
         env = LSFEnvironment()
     elif args.slurm:
         env = SLURMEnvironment()
 
     if targs['gpus'] is not None:
-        parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count())]
-        print(env, parallel_devices, file=sys.stderr)
-        targs['accelerator'] = GPUAccelerator(
-            precision_plugin = NativeMixedPrecisionPlugin(),
-            training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
-                                             cluster_environment=env)
-                                             #num_nodes=args.num_nodes)
-        )
+        if targs['gpus'] == 1:
+            targs['accelerator'] = GPUAccelerator(
+                precision_plugin = NativeMixedPrecisionPlugin(),
+                training_type_plugin = SingleDevicePlugin(torch.device(0))
+            )
+        else:
+            if env is None:
+                raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
+            parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count())]
+            targs['accelerator'] = GPUAccelerator(
+                precision_plugin = NativeMixedPrecisionPlugin(),
+                training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
+                                                 cluster_environment=env)
+            )
     else:
         targs['accelerator'] = CPUAccelerator(
             training_type_plugin = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
         )
 
     if args.debug:
-        targs['limit_train_batches'] = 10
-        targs['limit_val_batches'] =5
-        targs['max_epochs'] = 1
+        targs['limit_train_batches'] = 20
+        targs['limit_val_batches'] = 5
+        targs['max_epochs'] = 5
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -252,11 +260,11 @@ def process_args(args=None, return_io=False):
     return tuple(ret)
 
 
-from mpi4py import MPI
-
-comm = MPI.COMM_WORLD
-RANK = comm.Get_rank()
-#RANK = 0
+#from mpi4py import MPI
+#
+#comm = MPI.COMM_WORLD
+#RANK = comm.Get_rank()
+RANK = 0
 
 def print0(*msg, **kwargs):
     if RANK == 0:
@@ -308,6 +316,7 @@ def run_lightning(argv=None):
     targs = dict(
         checkpoint_callback=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
         logger = CSVLogger(save_dir=output('logs')),
+        profiler = "simple",
     )
     targs.update(addl_targs)
 
@@ -372,8 +381,13 @@ def cuda_sum(argv=None):
     print('torch.cuda.is_available:', torch.cuda.is_available())
     print('torch.cuda.device_count:', torch.cuda.device_count())
 
-def print_dataloader(dl):
-    print(dl.dataset.index[0], dl.dataset.index[-1])
+def print_dataloader(dl, name=None):
+    msg = list()
+    if name is not None:
+        msg.append(name)
+    msg.append(dl.dataset.index[0])
+    msg.append(dl.dataset.index[-1])
+    print0(*msg)
 
 def overall_metric(model, loader, metric):
     val = 0.0

@@ -383,12 +383,12 @@ class DeepIndexFile(Container):
         self.seq_table = seq_table
         self.taxa_table = taxa_table
         self.genome_table = genome_table
-        self.__n_outputs = len(taxa_table)
         self.distances = distances
         self.tree = tree
         self._sanity = False
         self._sanity_features = 5
-        self.__labels = None
+        self.labels = None
+        self.__n_outputs = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
         self.set_label_key('id')
         self.__rev = False
@@ -396,11 +396,22 @@ class DeepIndexFile(Container):
 
     def set_label_key(self, val):
         self.label_key = val
-        if val == 'species':         # if species is specified, just use the id column
+        genome_labels = None
+        if val in ('species', 'id'):         # if species is specified, just use the id column
             self.label_key = 'id'
+            genome_labels = self.genome_table['rep_idx'].data[:]
+            self.__n_outputs = len(self.taxa_table)
+
         elif val in self.taxonomic_levels:
             self.__get_kwargs['index'] = True
             self.__n_outputs = len(self.taxa_table[self.label_key].elements)
+            genome_labels = self.genome_table['rep_idx'].data[:]
+            genome_labels = self.taxa_table[val].data[genome_labels]
+        else:
+            raise ValueError("Unrecognized label key: '%s'" % val)
+
+        genome_idx = self.seq_table['genome'].data[:]
+        self.labels = genome_labels[genome_idx]
 
     @property
     def n_outputs(self):
@@ -414,14 +425,6 @@ class DeepIndexFile(Container):
         if revcomp and self.seq_table.vocab_type != 'dna':
                 raise ValueError("Can only set reverse complement on DNA sequence data")
         self.__rev = revcomp
-
-    @property
-    def labels(self):
-        if self.__labels is None:
-            reps = self.genome_table['rep_idx'].data[:]
-            genome_idx = self.seq_table['genome'].data[:]
-            self.__labels = reps[genome_idx]
-        return self.__labels
 
     @property
     def n_emb_components(self):
@@ -605,7 +608,7 @@ class RevCompFilter(DIFileFilter):
 
     def __init__(self, difile):
         super().__init__(difile)
-        self.labels = np.concatenate([self.labels, self.labels])
+        self.labels = np.concatenate([difile.labels, difile.labels])
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
 
