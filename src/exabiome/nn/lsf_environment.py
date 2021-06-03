@@ -32,8 +32,8 @@ class LSFEnvironment(ClusterEnvironment):
     LSB_JOBID
       The LSF assigned job ID
 
-    LSB_HOSTS
-      The hosts used in the job. This string is expected to have the format "batch <rank_0_host> ...."
+    LSB_DJOB_RANKFILE
+      The OpenMPI compatibile rank file for the LSF job
 
     JSM_NAMESPACE_LOCAL_RANK
       The node local rank for the task. This environment variable is set by jsrun
@@ -59,17 +59,6 @@ class LSFEnvironment(ClusterEnvironment):
         self._rep = ",".join('%s=%s' % (s, getattr(self, "_"+s)) for s in ('master_address', 'master_port', 'world_size', 'local_rank', 'node_rank', 'global_rank'))
 
     def _read_hosts(self):
-        #var = "LSB_HOSTS"
-        #hosts = os.environ.get(var)
-        #if not hosts:
-        #    import sys
-        #    print(os.environ, file=sys.stderr)
-        #    raise ValueError("Could not find hosts -- expected in environment variable %s" % var)
-        #hosts = hosts.split()
-        #if len(hosts) < 2:
-        #    raise ValueError("Cannot parse hosts from LSB_HOSTS environment variable -- "
-        #                     "expected format \"batch <rank_0_host> ...\"")
-        #return hosts
         var = "LSB_DJOB_RANKFILE"
         rankfile = os.environ.get(var)
         ret = None
