@@ -52,9 +52,10 @@ def print_help():
     print()
 
 
-if len(sys.argv) == 1:
-    print_help()
-else:
-    cmd = sys.argv[1]
-    func = command_dict[cmd].get_func()
-    func(sys.argv[2:])
+if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        print_help()
+    else:
+        cmd = sys.argv[1]
+        func = command_dict[cmd].get_func()
+        func(sys.argv[2:])
