@@ -128,14 +128,9 @@ def process_args(args=None, return_io=False):
     if not isinstance(args, argparse.Namespace):
         args = parse_args(args)
 
-    # determing number of input channels:
-    # 18 for DNA, 26 for protein
-    # 5 for sanity check (this probably doesn't work anymore)
     input_nc = 18
     if args.protein:
         input_nc = 26
-    if args.sanity:
-        input_nc = 5
     args.input_nc = input_nc
 
     args.loader_kwargs = dict()
@@ -227,17 +222,19 @@ def process_args(args=None, return_io=False):
             targs['accelerator'] = GPUAccelerator(
                 precision_plugin = NativeMixedPrecisionPlugin(),
                 training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
-                                                 cluster_environment=env)
+                                                 cluster_environment=env, num_nodes=args.num_nodes)
             )
+            torch.cuda.set_device(env.local_rank())
+            print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
     else:
         targs['accelerator'] = CPUAccelerator(
             training_type_plugin = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
         )
 
-    if args.debug:
-        targs['limit_train_batches'] = 20
+    if args.sanity:
+        targs['limit_train_batches'] = 40
         targs['limit_val_batches'] = 5
-        targs['max_epochs'] = 5
+        targs['max_epochs'] = min(args.epochs, 5)
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -314,7 +311,8 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
+        checkpoint_callback=True,
+        callbacks=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
         logger = CSVLogger(save_dir=output('logs')),
         profiler = "simple",
     )

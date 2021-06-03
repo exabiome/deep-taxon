@@ -91,7 +91,8 @@ def run_train(argv=None):
     parser.add_argument('-c', '--checkpoint',   help="a checkpoint file to restart from", default=None)
     parser.add_argument('-F', '--features',     help="a checkpoint file for features", default=None)
     parser.add_argument('-E', '--experiment',   help="the experiment name to use", default=None)
-    parser.add_argument('-d', '--debug',        help="run in debug mode", action='store_true', default=False)
+    parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
+    parser.add_argument('--sanity',             help="run a small number of batches", action='store_true', default=False)
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
@@ -136,7 +137,9 @@ def run_train(argv=None):
     options = ''
     if args.debug:
         job.set_debug(True)
-        options = '-d'
+
+    if args.sanity:
+        options = '--sanity'
 
     if args.profile:
         options += f' --profile'
