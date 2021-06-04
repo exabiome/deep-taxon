@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import sklearn.neighbors as skn
 
-from hdmf.common import VectorIndex, VectorData, DynamicTable, CSRMatrix\
+from hdmf.common import VectorIndex, VectorData, DynamicTable, CSRMatrix,\
                         DynamicTableRegion, register_class, EnumData
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf.data_utils import DataIO
