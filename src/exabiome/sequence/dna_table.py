@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import sklearn.neighbors as skn
 
-from hdmf.common import VectorIndex, VectorData, DynamicTable,\
+from hdmf.common import VectorIndex, VectorData, DynamicTable, CSRMatrix\
                         DynamicTableRegion, register_class, EnumData
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf.data_utils import DataIO
@@ -358,6 +358,22 @@ class CondensedDistanceMatrix(Data):
 @register_class('NewickString', NS)
 class NewickString(Data):
     pass
+
+
+@register_class('TreeGraph', NS)
+class TreeGraph(CSRMatrix):
+
+    __fields__ = ('leaves', 'table')
+
+    @docval(*get_docval(CSRMatrix.__init__),
+            {'name': 'leaves', 'type': ('array_data', 'data'), 'doc': ('the index into *table* for each node in the graph. '
+                                                                       'Internodes (i.e. non-leaf nodes) should have a -1')},
+            {'name': 'table', 'type': GenomeTable, 'doc': 'the GenomeTable that the leaves in the tree belong to'})
+    def __init__(self, **kwargs):
+        leaves, table = popargs('leaves', 'table', kwargs)
+        call_docval_func(super(), __init__, kwargs)
+        self.leaves = leaves
+        self.table = table
 
 
 @register_class('DeepIndexFile', NS)

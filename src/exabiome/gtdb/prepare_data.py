@@ -8,6 +8,34 @@ import skbio.io
 import os
 from functools import partial
 
+
+def add_branches(node, mat, names):
+    name = node.name
+    if name.startswith('RS ') or name.startswith('GB '):
+        names[node.id] = name[3:].replace(' ', '_')
+        return
+    names[node.id] = name
+    if len(node.children) != 2:
+        print(node, len(node.children))
+    for c in node.children:
+        if mat[node.id, c.id] != 0:
+            print(node.id, c.id)
+        mat[node.id, c.id] = c.length
+        mat[c.id, node.id] = c.length
+        add_branches(c, mat, names)
+
+
+def get_tree_graph(node, genome_table):
+    adj = sps.lil_matrix((n_nodes, n_nodes))
+    names = np.zeros(n_nodes, dtype='U15')
+    add_branches(root, adj, names)
+
+    tids = genome_table.taxon_id
+    gt_indices = np.ones(len(names)) * -1
+    for i, name in enumerate(names):
+        if name.startswith('GC'):
+            gt_indices[i] = np.where(gt_indices == name)[0][0]
+
 def seqlen(path):
     kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
     l = 0
