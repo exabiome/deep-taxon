@@ -93,8 +93,8 @@ def process_model(args, inference=False, taxa_table=None):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
         _check_hparams(args)
-        if taxa_table is not None:
-            args.labels = taxa_table['phylum'].elements.data[:]
+        #if taxa_table is not None:
+        #    args.labels = taxa_table['phylum'].elements.data[:]
         model = model_cls(args)
 
     return model

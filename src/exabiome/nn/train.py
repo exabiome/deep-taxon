@@ -3,22 +3,80 @@ import os
 import os.path
 import pickle
 import json
+import ruamel.yaml as yaml
 from datetime import datetime
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
 from .loader import add_dataset_arguments, DeepIndexDataModule
+from ..sequence import DeepIndexFile
 from hdmf.utils import docval
 
 import argparse
 import logging
 
 
+from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning.loggers import CSVLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+
+from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
+from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin
+from .lsf_environment import LSFEnvironment
+
+import torch
+
 def parse_train_size(string):
     ret = float(string)
     if ret > 1.0:
         ret = int(ret)
     return ret
+
+
+def get_conf_args():
+    return {
+        'model': dict(help='the model to run. see show-models for a list of available models', choices=list(models._models.keys()), default='resnet18'),
+        'seed': dict(type=parse_seed, default='', help='seed to use for train-test split'),
+        'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns, or ens'),
+        'ens_beta': dict(help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9),
+        'n_outputs': dict(help='the number of outputs in the final layer', default=32),
+        'accumulate': dict(help='accumulate_grad_batches argument to pl.Trainer', default=1),
+        'dropout_rate': dict(help='the dropout rate to use', default=0.5),
+        'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
+        'lr': dict(help='the learning rate for Adam', default=0.001),
+        'lr_scheduler': dict(default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use'),
+        'batch_size': dict(help='batch size', default=64),
+        'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
+        'protein': dict(help='input contains protein sequences', default=False),
+        'window': dict(type=int, help='the window size to use to chunk sequences', default=None),
+        'step': dict(type=int, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)', default=None),
+        'fwd_only': dict(action='store_true', help='use forward strand of sequences only', default=False),
+        'classify': dict(action='store_true', help='run a classification problem', default=False),
+        'manifold': dict(action='store_true', help='run a manifold learning problem', default=False),
+        'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
+                           help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species'),
+    }
+
+
+def print_config_options(argv=None):
+    print("Available options for training config:\n")
+    for k, v in get_conf_args().items():
+        print(f'  {k:<15} {v["help"]} (default={v["default"]})')
+
+
+def print_config_templ(argv=None):
+    for k, v in get_conf_args().items():
+        print(f'{k+":":<15}  # {v["help"]} (default={v["default"]})')
+
+
+def process_config(conf_path, args=None):
+    with open(conf_path, 'r') as f:
+        config = yaml.safe_load(f)
+    args = args or Namespace()
+    for k, v in get_conf_args().items():
+        conf_val = config.pop(k, v.get('default', None))
+        setattr(args, k, conf_val)
+    return args
 
 
 def parse_args(*addl_args, argv=None):
@@ -33,43 +91,36 @@ def parse_args(*addl_args, argv=None):
     """
     desc = "Run network training"
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
-    parser.add_argument('model', type=str, help='the model to run. see show-models for a list of available models',
-                        metavar="model", choices=list(models._models.keys()))
+    parser.add_argument('config', type=str, help='the config file for this training run')
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('output', type=str, help='file to save model', default=None)
 
-    add_dataset_arguments(parser)
+    ##################################################
+    # Add dataset-specific arguments, like tgt_tax_lvl
+    ##################################################
+
     parser.add_argument('-F', '--features_checkpoint', type=str, help='a checkpoint file for previously trained features', default=None)
-
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
-
-    parser.add_argument('-w', '--weighted', nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'], help='weight classes in classification')
-    parser.add_argument('--ens_beta', type=float, help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9)
-    parser.add_argument('-o', '--n_outputs', type=int, help='the number of outputs in the final layer', default=32)
+    parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
-    parser.add_argument('-A', '--accumulate', type=json.loads, help='accumulate_grad_batches argument to pl.Trainer', default=1)
-    parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
-    parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
-    parser.add_argument('-D', '--dropout_rate', type=float, help='the dropout rate to use', default=0.5)
-    parser.add_argument('-p', '--protein', action='store_true', default=False, help='input contains protein sequences')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
-    parser.add_argument('-s', '--seed', type=parse_seed, default='', help='seed to use for train-test split')
-    parser.add_argument('-H', '--hparams', type=json.loads, help='additional hparams for the model. this should be a JSON string', default=None)
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
-    parser.add_argument('-r', '--lr', type=float, default=0.01, help='the learning rate for Adam')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
-    parser.add_argument('--lr_scheduler', default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use')
     grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
     grp.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
     grp.add_argument('--lsf', default=False, action='store_true', help='running on LSF system')
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
 
+    dl_grp = parser.add_argument_group('Data loading')
+    dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
+    dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
+    dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -79,6 +130,7 @@ def parse_args(*addl_args, argv=None):
         sys.exit(1)
 
     args = parser.parse_args(argv)
+    process_config(args.config, args)
 
     return args
 
@@ -108,20 +160,12 @@ def process_args(args=None, return_io=False):
     if not isinstance(args, argparse.Namespace):
         args = parse_args(args)
 
-    # determing number of input channels:
-    # 18 for DNA, 26 for protein
-    # 5 for sanity check (this probably doesn't work anymore)
     input_nc = 18
     if args.protein:
         input_nc = 26
-    if args.sanity:
-        input_nc = 5
     args.input_nc = input_nc
 
     args.loader_kwargs = dict()
-    if args.lsf:
-        args.loader_kwargs['num_workers'] = 6
-        args.loader_kwargs['multiprocessing_context'] = 'spawn'
 
     # classify by default
     if args.manifold == args.classify == False:
@@ -136,17 +180,22 @@ def process_args(args=None, return_io=False):
 
     data_mod = DeepIndexDataModule(args)
 
-    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+    #model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
-    if args.weighted:
-        labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
-        uniq, counts = np.unique(labels, return_counts=True)
+    # n_taxa replaces n_outputs
+    args.n_taxa = len(data_mod.dataset.taxa_labels)
+    model = process_model(args)
+
+    if args.weighted is not None:
+        #labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
         if args.weighted == 'ens':
-            weights = (1 - args.ens_beta)/(1 - args.ens_beta**counts)
+            weights = (1 - args.ens_beta)/(1 - args.ens_beta**data_mod.dataset.taxa_counts)
         elif args.weighted == 'isns':
-            weights = np.sqrt(1/counts)
+            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
+        elif args.weighted == 'ins':
+            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
         else:
-            weights = np.sqrt(1/counts)
+            raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
         model.set_class_weights(weights)
 
     targs = dict(
@@ -159,32 +208,67 @@ def process_args(args=None, return_io=False):
 
     targs['accumulate_grad_batches'] = args.accumulate
 
-    if args.horovod:
-        targs['accelerator'] = 'horovod'
-        if args.gpus:
-            targs['gpus'] = 1
-    else:
-        targs['gpus'] = process_gpus(args.gpus)
-        targs['num_nodes'] = args.num_nodes
-        targs['accelerator'] = 'ddp'
-        if targs['gpus'] != 1 or targs['num_nodes'] > 1:
-            # env = None
-            # if args.lsf:
-            #     env = cenv.LSFEnvironment()
-            # elif args.slurm:
-            #     env = cenv.SLURMEnvironment()
-            # else:
-            #     print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
-            #           file=sys.stderr)
-            #     sys.exit(1)
-            # targs.setdefault('plugins', list()).append(env)
-            pass
+    targs['gpus'] = process_gpus(args.gpus)
+
+    #if args.horovod:
+    #    targs['accelerator'] = 'horovod'
+    #    if args.gpus:
+    #        targs['gpus'] = 1
+    #else:
+    #    targs['num_nodes'] = args.num_nodes
+    #    targs['accelerator'] = 'ddp'
+    #    if targs['gpus'] != 1 or targs['num_nodes'] > 1:
+    #        # env = None
+    #        # if args.lsf:
+    #        #     env = cenv.LSFEnvironment()
+    #        # elif args.slurm:
+    #        #     env = cenv.SLURMEnvironment()
+    #        # else:
+    #        #     print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
+    #        #           file=sys.stderr)
+    #        #     sys.exit(1)
+    #        # targs.setdefault('plugins', list()).append(env)
+    #        pass
     del args.gpus
 
-    if args.debug:
-        targs['limit_train_batches'] = 10
-        targs['limit_val_batches'] =5
-        targs['max_epochs'] = 1
+
+    env = None
+    if args.lsf:
+        ##########################################################################################
+        # Currently coding against pytorch-lightning 1.3.1.
+        ##########################################################################################
+        args.loader_kwargs['num_workers'] = 1
+        args.loader_kwargs['multiprocessing_context'] = 'spawn'
+        env = LSFEnvironment()
+    elif args.slurm:
+        env = SLURMEnvironment()
+
+    if targs['gpus'] is not None:
+        if targs['gpus'] == 1:
+            targs['accelerator'] = GPUAccelerator(
+                precision_plugin = NativeMixedPrecisionPlugin(),
+                training_type_plugin = SingleDevicePlugin(torch.device(0))
+            )
+        else:
+            if env is None:
+                raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
+            parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count())]
+            targs['accelerator'] = GPUAccelerator(
+                precision_plugin = NativeMixedPrecisionPlugin(),
+                training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
+                                                 cluster_environment=env, num_nodes=args.num_nodes)
+            )
+            torch.cuda.set_device(env.local_rank())
+            print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
+    else:
+        targs['accelerator'] = CPUAccelerator(
+            training_type_plugin = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
+        )
+
+    if args.sanity:
+        targs['limit_train_batches'] = 40
+        targs['limit_val_batches'] = 5
+        targs['max_epochs'] = min(args.epochs, 5)
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -207,16 +291,11 @@ def process_args(args=None, return_io=False):
     return tuple(ret)
 
 
-from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
-
-
-from mpi4py import MPI
-
-comm = MPI.COMM_WORLD
-RANK = comm.Get_rank()
-#RANK = 0
+#from mpi4py import MPI
+#
+#comm = MPI.COMM_WORLD
+#RANK = comm.Get_rank()
+RANK = 0
 
 def print0(*msg, **kwargs):
     if RANK == 0:
@@ -266,8 +345,10 @@ def run_lightning(argv=None):
     # dependent on the dataset, such as final number of outputs
 
     targs = dict(
-        checkpoint_callback=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
+        checkpoint_callback=True,
+        callbacks=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
         logger = CSVLogger(save_dir=output('logs')),
+        profiler = "simple",
     )
     targs.update(addl_targs)
 
@@ -332,8 +413,13 @@ def cuda_sum(argv=None):
     print('torch.cuda.is_available:', torch.cuda.is_available())
     print('torch.cuda.device_count:', torch.cuda.device_count())
 
-def print_dataloader(dl):
-    print(dl.dataset.index[0], dl.dataset.index[-1])
+def print_dataloader(dl, name=None):
+    msg = list()
+    if name is not None:
+        msg.append(name)
+    msg.append(dl.dataset.index[0])
+    msg.append(dl.dataset.index[-1])
+    print0(*msg)
 
 def overall_metric(model, loader, metric):
     val = 0.0

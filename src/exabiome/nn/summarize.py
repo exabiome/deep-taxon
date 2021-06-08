@@ -444,6 +444,7 @@ def get_profile_data(argv=None):
 
     args = parser.parse_args(argv)
 
+    N_PROFILE_ROWS = 32
     re_delim = re.compile('\s*\|[_\s]*')
     time_col = -1
     keys =  ['model_forward',
@@ -454,34 +455,50 @@ def get_profile_data(argv=None):
 
     gpu_re = re.compile('_g(\d+)_')
     batch_re = re.compile('_b(\d+)_')
+    nodes_re = re.compile('n(\d+)_')
 
     all_data = list()
+    print(args.log_files, file=sys.stderr)
     for log_file in args.log_files:
-        data = dict()
         found_report = False
+        n_nodes = nodes_re.search(log_file).groups(0)[0].strip()
+        n_gpu = gpu_re.search(log_file).groups(0)[0].strip()
+        batch_size = batch_re.search(log_file).groups(0)[0].strip()
         with open(log_file, 'r', encoding='ISO-8859-1') as f:
+            rank = 0
             for line in f:
                 if line.startswith('Action'):
+                    data = {
+                        'n_nodes': n_nodes,
+                        'n_gpu': n_gpu,
+                        'batch_size': batch_size,
+                        'rank': rank,
+                    }
+                    n_rows_read = 0
                     found_report = True
                     columns = re_delim.split(line)
                     for i, c in enumerate(columns):
                         if 'Total' in c:
                             time_col = i
                 elif found_report:
-                    if line == '\n': # done reading table
-                        break
+                    if n_rows_read == N_PROFILE_ROWS: # done reading table
+                        found_report = False
+                        all_data.append(data)
+                        data = dict()
+                        rank += 1
+                        n_rows_read = 0
+                        continue
+                    elif line.startswith('-----'):
+                        continue
                     if line.startswith('Total'):
-                        data['Total'] = re_delim.split(line)[time_col].strip()
+                        ar = re_delim.split(line)
+                        #if len(ar) < time_col:
+                        #    breakpoint()
+                        data['total'] = ar[time_col].strip()
                     else:
-                        for key in keys:
-                            if line.startswith(key):
-                                data[key] = re_delim.split(line)[time_col].strip()
-                                break
-        if len(data) == 0:
-            break
-        data['n_gpu'] = gpu_re.search(log_file).groups(0)[0].strip()
-        data['batch_size'] = batch_re.search(log_file).groups(0)[0].strip()
-        all_data.append(data)
+                        ar = re_delim.split(line)
+                        data[ar[0]] = ar[time_col].strip()
+                        n_rows_read += 1
     pd.DataFrame(data=all_data).to_csv(sys.stdout)
 
 
