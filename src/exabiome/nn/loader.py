@@ -467,7 +467,7 @@ class LazySeqDataset(Dataset):
             self._label_key = self.hparams.tgt_tax_lvl
             self._label_dtype = torch.int64
         elif hparams.manifold:
-            self.distance = difile.distances.data[:]
+            self.distances = self.difile.distances.data[:]
             if hparams.tgt_tax_lvl != 'species':
                 raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
             self._label_key = 'id'

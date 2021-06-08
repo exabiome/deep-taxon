@@ -23,6 +23,8 @@ command_dict = {
     'sample-nonrep': Command('gtdb.sample.sample_nonrep', 'Get test strain genomes'),
     'sample-gtdb': Command('gtdb.sample.sample_tree', 'Sample taxa from a tree'),
     'train': Command('nn.train.run_lightning', 'Run training with PyTorch Lightning'),
+    'train-conf': Command('nn.train.print_config_options', 'Print the available options for a config file'),
+    'conf-tmpl': Command('nn.train.print_config_templ', 'Print an empty config file'),
     'show-args': Command('nn.train.print_args', 'display input arguments for training run'),
     'lr-find': Command('nn.train.lightning_lr_find', 'Run Lightning Learning Rate finder'),
     'cuda-sum': Command('nn.train.cuda_sum', 'Summarize what Torch sees in CUDA land'),
