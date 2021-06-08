@@ -16,7 +16,7 @@ def check_summit(args):
     if args.nodes is None:
         args.nodes = 2
     if args.outdir is None:
-        args.outdir = os.path.realpath(os.path.expandvars("$PROJWORK/bif115/../scratch/$USER/deep-index"))
+        args.outdir = os.path.realpath(os.path.expandvars("$PROJWORK/bif115/../scratch/$USER/deep-taxon"))
     if args.conda_env is None:
         args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
         if args.conda_env is None:
@@ -30,7 +30,7 @@ def check_cori(args):
     if args.nodes is None:
         args.nodes = 1
     if args.outdir is None:
-        args.outdir = os.path.abspath(os.path.expandvars("$CSCRATCH/exabiome/deep-index"))
+        args.outdir = os.path.abspath(os.path.expandvars("$CSCRATCH/exabiome/deep-taxon"))
     if args.queue is None:
         args.queue = 'regular'
 
@@ -214,7 +214,7 @@ def run_train(argv=None):
 
     input_var = 'INPUT'
 
-    train_cmd = 'deep-index train'
+    train_cmd = 'deep-taxon train'
     if args.summit:
         train_cmd += ' --lsf'
         if job.use_bb:
