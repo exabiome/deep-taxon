@@ -60,7 +60,7 @@ setup_args = {
         "Operating System :: Unix",
         "Topic :: Scientific/Engineering :: Medical Science Apps."
     ],
-    'scripts': ['bin/deep-index',],
+    'scripts': ['bin/deep-taxon',],
     'keywords': 'python '
                 'HDF '
                 'HDF5 '
