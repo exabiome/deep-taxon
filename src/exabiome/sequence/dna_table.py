@@ -371,7 +371,7 @@ class TreeGraph(CSRMatrix):
             {'name': 'table', 'type': GenomeTable, 'doc': 'the GenomeTable that the leaves in the tree belong to'})
     def __init__(self, **kwargs):
         leaves, table = popargs('leaves', 'table', kwargs)
-        call_docval_func(super(), __init__, kwargs)
+        call_docval_func(super().__init__, kwargs)
         self.leaves = leaves
         self.table = table
 
@@ -384,6 +384,7 @@ class DeepIndexFile(Container):
     __fields__ = ({'name': 'seq_table', 'child': True},
                   {'name': 'taxa_table', 'child': True},
                   {'name': 'genome_table', 'child': True},
+                  {'name': 'tree_graph', 'child': True},
                   {'name': 'distances', 'child': True},
                   {'name': 'tree', 'child': True})
 
@@ -391,13 +392,16 @@ class DeepIndexFile(Container):
             {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
             {'name': 'genome_table', 'type': GenomeTable, 'doc': 'the table storing taxonomic information about species in this file'},
             {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'},
+            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree'},
             {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information', 'default': None})
     def __init__(self, **kwargs):
-        seq_table, taxa_table, genome_table, distances, tree = popargs('seq_table', 'taxa_table', 'genome_table', 'distances', 'tree', kwargs)
+        seq_table, taxa_table, genome_table, distances, tree, tree_graph = popargs('seq_table', 'taxa_table', 'genome_table',
+                                                                                   'distances', 'tree', 'tree_graph', kwargs)
         call_docval_func(super().__init__, {'name': 'root'})
         self.seq_table = seq_table
         self.taxa_table = taxa_table
         self.genome_table = genome_table
+        self.tree_graph = tree_graph
         self.__n_outputs = len(taxa_table)
         self.distances = distances
         self.tree = tree

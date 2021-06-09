@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import scipy.sparse as sps
 import skbio.stats.distance as ssd
 from skbio.sequence import DNA, Protein
 from sklearn.preprocessing import LabelEncoder
@@ -11,30 +12,31 @@ from functools import partial
 
 def add_branches(node, mat, names):
     name = node.name
-    if name.startswith('RS ') or name.startswith('GB '):
-        names[node.id] = name[3:].replace(' ', '_')
-        return
     names[node.id] = name
+    if len(node.children) == 0:
+        return
     if len(node.children) != 2:
-        print(node, len(node.children))
+        raise ValueError("Non-binary tree! I do not know how to handle this")
     for c in node.children:
-        if mat[node.id, c.id] != 0:
-            print(node.id, c.id)
         mat[node.id, c.id] = c.length
-        mat[c.id, node.id] = c.length
         add_branches(c, mat, names)
 
 
 def get_tree_graph(node, genome_table):
+    node.to_array()
+    n_nodes = 2 * len(list(node.tips())) - 1
     adj = sps.lil_matrix((n_nodes, n_nodes))
     names = np.zeros(n_nodes, dtype='U15')
-    add_branches(root, adj, names)
+    add_branches(node, adj, names)
 
     tids = genome_table.taxon_id
     gt_indices = np.ones(len(names)) * -1
     for i, name in enumerate(names):
         if name.startswith('GC'):
-            gt_indices[i] = np.where(gt_indices == name)[0][0]
+            gt_indices[i] = np.where(tids.data == name)[0][0]
+
+    return adj.tocsr(), gt_indices
+
 
 def seqlen(path):
     kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
@@ -133,7 +135,7 @@ def prepare_data(argv=None):
 
     from ..utils import get_faa_path, get_fna_path, get_genomic_path
     from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator, DNAVocabGeneIterator
-    from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable
+    from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable, TreeGraph
 
     parser = argparse.ArgumentParser()
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
@@ -420,6 +422,10 @@ def prepare_data(argv=None):
     genome_table = GenomeTable('genome_table', 'information about the genome each sequence comes from',
                                taxa_ids, taxa, taxa_table=taxa_table)
 
+    adj, gt_indices = get_tree_graph(root, genome_table)
+    tree_graph = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
+
+
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
                          io.set_dataio(names,    compression='gzip', chunks=True),
                          io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=True),
@@ -431,7 +437,8 @@ def prepare_data(argv=None):
                          vocab=vocab)
 
 
-    difile = DeepIndexFile(seq_table, taxa_table, genome_table, tree, **di_kwargs)
+
+    difile = DeepIndexFile(seq_table, taxa_table, genome_table, tree, tree_graph, **di_kwargs)
 
     logger.info(f'Sequence totals {sequence.nbytes} bytes')
     before = datetime.now()
