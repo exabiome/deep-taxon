@@ -3,7 +3,7 @@ import pandas as pd
 
 
 _ranks = {'phylum', 'class', 'order', 'family', 'genus'}
-def check_rank(rank)
+def check_rank(rank):
     if rank not in _ranks:
         raise ValueError(f'please choose rank from {_ranks}')
     return rank
