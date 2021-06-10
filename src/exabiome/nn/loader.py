@@ -1,3 +1,6 @@
+import sys
+import warnings
+
 import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
@@ -7,7 +10,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
-from ..sequence import WindowChunkedDIFile, RevCompFilter, DeepIndexFile
+from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence
 from ..utils import parse_seed
 
 
@@ -100,12 +103,11 @@ def read_dataset(path):
     return dataset, hdmfio
 
 
-def process_dataset(args, path=None, inference=False):
+def process_dataset(args, path=None):
     """
     Process *input* argument and return dataset and HDMFIO object
     Args:
         args (Namespace):       command-line arguments passed by parser
-        inference (bool):       load data for inference
     """
     dataset, io = read_dataset(path or args.input)
 
@@ -123,8 +125,6 @@ def process_dataset(args, path=None, inference=False):
     else:
         raise ValueError('classify (-C) or manifold (-M) should be set')
 
-    #if inference:
-    #    dataset.set_classify(True)
     args.window, args.step = check_window(args.window, args.step)
 
     # Process any arguments that impact how we set up the dataset
@@ -339,8 +339,8 @@ class DatasetSubset(Dataset):
     def __len__(self):
         return len(self.index)
 
-    def __getattr__(self, attr):
-        return getattr(self.dataset, attr)
+    # def __getattr__(self, attr):
+    #     return getattr(self.dataset, attr)
 
 
 def train_test_loaders(dataset, random_state=None, downsample=None, distances=False,
@@ -353,7 +353,8 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
         kwargs    : any additional arguments to pass into torch.DataLoader
     """
     index = np.arange(len(dataset))
-    stratify = dataset.difile.labels
+    #stratify = dataset.difile.labels
+    stratify = dataset.sample_labels
     if downsample is not None:
         index, _, stratify, _ = train_test_split(index, stratify,
                                                  train_size=downsample,
@@ -365,16 +366,19 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
 
     collater = collate
     if distances:
-        collater = DistanceCollater(dataset.difile.distances.data[:])
-
-    kwargs['pin_memory'] = True
+        #collater = DistanceCollater(dataset.difile.distances.data[:])
+        collater = DistanceCollater(dataset.distances)
 
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)
     validate_dataset = DatasetSubset(dataset, validate_idx)
-    return (DataLoader(train_dataset, collate_fn=collater, **kwargs),
-            DataLoader(test_dataset, collate_fn=collater, **kwargs),
-            DataLoader(validate_dataset, collate_fn=collater, **kwargs))
+
+    tr_dl = DataLoader(train_dataset, collate_fn=collater, **kwargs)
+    kwargs.pop('shuffle', None)
+    va_dl = DataLoader(test_dataset, collate_fn=collater, **kwargs)
+    te_dl = DataLoader(validate_dataset, collate_fn=collater, **kwargs)
+
+    return (tr_dl, va_dl, te_dl)
 
 def get_loader(dataset, distances=False, **kwargs):
     """
@@ -397,13 +401,24 @@ class DeepIndexDataModule(pl.LightningDataModule):
     def __init__(self, hparams, inference=False):
         super().__init__()
         self.hparams = hparams
-        self.dataset, self.io = process_dataset(self.hparams, inference=inference)
+        # self.dataset, self.io = process_dataset(self.hparams, inference=inference)
+
+        self.dataset = LazySeqDataset(self.hparams, keep_open=self.hparams.num_workers==0)
         if self.hparams.load:
             self.dataset.load()
         kwargs = dict(random_state=self.hparams.seed,
                       batch_size=self.hparams.batch_size,
-                      distances=self.hparams.manifold)
+                      distances=self.hparams.manifold,
+                      pin_memory=False, #self.hparams.pin_memory,
+                      shuffle=self.hparams.shuffle,
+                      num_workers=self.hparams.num_workers)
+        if self.hparams.num_workers > 0:
+            kwargs['multiprocessing_context'] = 'spawn'
+            kwargs['worker_init_fn'] = self.dataset.worker_init
+            kwargs['persistent_workers'] = True
+
         kwargs.update(self.hparams.loader_kwargs)
+        print("------------- DataLoader kwargs:", str(kwargs), file=sys.stderr)
         if inference:
             kwargs['distances'] = False
             kwargs.pop('num_workers', None)
@@ -419,3 +434,144 @@ class DeepIndexDataModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         return self.loaders['test']
+
+class LazySeqDataset(Dataset):
+    """
+    A torch Dataset to handle reading samples read from a DeepIndex file
+    """
+
+    def __init__(self, hparams, path=None, keep_open=False):
+        # difile, classify=True):
+
+        self.path = path or hparams.input
+        self.hparams = hparams
+        self.load_data = hparams.load
+
+        # memoize any chunking we've done so we only need to do it once
+        self._chunkings = dict()
+
+        self.window, self.step = check_window(hparams.window, hparams.step)
+        self.revcomp = not getattr(hparams, 'fwd_only', False)
+
+        # open to get dataset length
+        self.open()
+        self.__len = len(self.difile)
+        self.sample_labels = self.difile.labels # taxa_table[hparams.tgt_tax_lvl].data
+        self.taxa_labels, self.taxa_counts = np.unique(self.sample_labels, return_counts=True)
+
+        self.vocab_len = len(self.orig_difile.seq_table['sequence'].target.elements)
+
+        self.dmat = None
+        if hparams.classify:
+            self.classify = True
+            self._label_key = self.hparams.tgt_tax_lvl
+            self._label_dtype = torch.int64
+        elif hparams.manifold:
+            self.distances = self.difile.distances.data[:]
+            if hparams.tgt_tax_lvl != 'species':
+                raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
+            self._label_key = 'id'
+            self._label_dtype = torch.int64
+        else:
+            raise ValueError('classify (-C) or manifold (-M) should be set')
+
+        self.__ohe = False
+
+        if not keep_open:
+            self.io.close()
+            self.difile = None
+            self.orig_difile = None
+            self.io = None
+
+    def open(self):
+        """Open the HDMF file and set up chunks and taxonomy label"""
+        self.io = get_hdf5io(self.path, 'r')
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.orig_difile = self.io.read()
+        self.difile = self.orig_difile
+
+        self.difile.set_label_key(self.hparams.tgt_tax_lvl)
+
+        self.set_ohe(False)
+        if self.window is not None:
+            self.set_chunks(self.window, self.step)
+        if self.revcomp:
+            self.set_revcomp()
+        if self.load_data:
+            self.load()
+
+
+    def worker_init(self, worker_id):
+        print("------------- Opening DeepIndexFile for worker %s\n\n" % worker_id, file=sys.stderr)
+        self.open()
+
+    def set_chunks(self, window, step=None):
+        chunks = self._chunkings.get((window, step))
+        if chunks is None:
+            self._chunkings[(window, step)] = chunk_sequence(self.difile, window, step)
+        self.difile = AbstractChunkedDIFile(self.difile, *self._chunkings[(window, step)])
+
+    def set_revcomp(self, revcomp=True):
+        self.difile = RevCompFilter(self.difile)
+
+    def set_ohe(self, ohe=True):
+        self.__ohe = ohe
+
+    def __len__(self):
+        return self.__len # len(self.difile)
+
+    @staticmethod
+    def _to_numpy(data):
+        return data[:]
+
+    @staticmethod
+    def _to_torch(device=None, dtype=None):
+        def func(data):
+            return torch.tensor(data, device=device, dtype=dtype)
+        return func
+
+    def _check_load(self, data, transforms):
+        if not isinstance(data.data, torch.Tensor):
+            if not isinstance(transforms, (tuple, list)):
+                transforms = [transforms]
+            for tfm in transforms:
+                data.transform(tfm)
+
+    def load(self, device=None):
+        def _load(data):
+            return data[:]
+
+        tfm = self._to_torch(device)
+        def to_sint(data):
+            return data[:].astype(np.int16)
+        self._check_load(self.orig_difile.seq_table['sequence'].target, [to_sint, tfm])
+        self._check_load(self.orig_difile.taxa_table[self._label_key], tfm)
+        self._check_load(self.orig_difile.distances, tfm)
+
+        for col in self.orig_difile.seq_table.children:
+            if col.name == 'sequence':
+                continue
+            col.transform(_load)
+
+        for col in self.orig_difile.taxa_table.children:
+            if col.name == self._label_key:
+                continue
+            col.transform(_load)
+
+    def __getitem__(self, i):
+        # get sequence
+        item = self.difile[i]
+        idx = item['id']
+        seq = item['seq']
+        label = item['label']
+        seq_id = item.get('seq_idx', -1)
+        ## one-hot encode sequence
+        seq = torch.as_tensor(seq, dtype=torch.int64)
+        if self.__ohe:
+            seq = F.one_hot(seq, num_classes=self.vocab_len).float()
+        seq = seq.T
+        label = torch.as_tensor(label, dtype=self._label_dtype)
+        return (idx, seq, label, seq_id)
+
+

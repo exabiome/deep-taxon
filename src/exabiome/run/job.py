@@ -107,8 +107,10 @@ class AbstractJob(metaclass=ABCMeta):
         self.addl_job_flags[flag] = val
 
     def submit_job(self, path):
+        cmd = f'{self.submit_cmd} {path}'
+        print(cmd)
         output = subprocess.check_output(
-                    f'{self.submit_cmd} {path}',
+                    cmd,
                     stderr=subprocess.STDOUT,
                     shell=True).decode('utf-8')
 
@@ -119,7 +121,13 @@ class AbstractJob(metaclass=ABCMeta):
         Example output:
         Job <338648> is submitted to queue <debug>.
         '''
-        return int(re.search(self.job_id_re, output).groups(0)[0])
+        result = re.search(self.job_id_re, output)
+        ret = None
+        if result is not None:
+            ret = int(result.groups(0)[0])
+        else:
+            print(f'Job submission failed: {output}')
+        return ret
 
     def write_additional(self, f, options):
         pass

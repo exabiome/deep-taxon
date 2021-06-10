@@ -1,7 +1,8 @@
 import sys
-import os.path
+import os
 import argparse
 import shutil
+import ruamel.yaml as yaml
 
 from .summit import LSFJob
 from .cori import SlurmJob
@@ -15,9 +16,11 @@ def check_summit(args):
     if args.nodes is None:
         args.nodes = 2
     if args.outdir is None:
-        args.outdir = os.path.realpath(os.path.expandvars("$PROJWORK/bif115/../scratch/$USER/deep-index"))
+        args.outdir = os.path.realpath(os.path.expandvars("$PROJWORK/bif115/../scratch/$USER/deep-taxon"))
     if args.conda_env is None:
-        args.conda_env = 'exabiome-wml'
+        args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
+        if args.conda_env is None:
+            raise RuntimeError("Cannot determine the conda environment to use")
         #args.conda_env = 'exabiome-wml-1.7.0-3'
 
 
@@ -27,10 +30,16 @@ def check_cori(args):
     if args.nodes is None:
         args.nodes = 1
     if args.outdir is None:
-        args.outdir = os.path.abspath(os.path.expandvars("$CSCRATCH/exabiome/deep-index"))
+        args.outdir = os.path.abspath(os.path.expandvars("$CSCRATCH/exabiome/deep-taxon"))
     if args.queue is None:
         args.queue = 'regular'
 
+
+#def check_args(args):
+#    if args.loss == 'M':
+#        if args.output_dims is None:
+#            args.output_dims = 256
+#
 
 def get_jobargs(args):
     return {k: getattr(args, k) for k in ('queue', 'nodes', 'gpus', 'jobname', 'project', 'time')}
@@ -41,10 +50,11 @@ def run_train(argv=None):
 
     parser = argparse.ArgumentParser()
     parser.add_argument('input', help='the input file to use')
+    parser.add_argument('config', help='the config file to use')
     parser.add_argument('sh', nargs='?', help='the input file to use')
 
+    parser.add_argument('-o', '--outdir',      help="the output directory", default=None)
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
-    parser.add_argument('-O', '--outdir',      help="the output directory", default=None)
     parser.add_argument('--profile',           help="use PTL profiling", action='store_true', default=False)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
@@ -60,34 +70,45 @@ def run_train(argv=None):
     grp.add_argument('--cori',   help='make script for running on NERSC Cori',  action='store_true', default=False)
     grp.add_argument('--summit', help='make script for running on OLCF Summit', action='store_true', default=False)
 
-    parser.add_argument('-r', '--rate',         help="the learning rate to use for training", default=0.001)
-    parser.add_argument('-w', '--weighted',     help='weight classes in classification',
-                         nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'])
-    parser.add_argument('-o', '--output_dims',  help="the number of dimensions to output", default=256)
-    parser.add_argument('-A', '--accum',        help="the number of batches to accumulate", default=1)
-    parser.add_argument('-b', '--batch_size',   help="the number of batches to accumulate", default=64)
-    parser.add_argument('-W', '--window',       help="the size of chunks to use", default=4000)
-    parser.add_argument('-S', '--step',         help="the chunking step size", default=4000)
-    parser.add_argument('-s', '--seed',         help="the seed to use", default=None)
-    parser.add_argument('-L', '--loss',         help="the loss function to use", default='M')
-    parser.add_argument('-M', '--model',        help="the model name", default='roznet')
-    parser.add_argument('-t', '--tgt_tax_lvl',  help='the taxonomic level to use', default=None)
+    parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
+    parser.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
+    parser.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     parser.add_argument('-D', '--dataset',      help="the dataset name", default='default')
     parser.add_argument('-e', '--epochs',       help="the number of epochs to run for", default=10)
-    parser.add_argument('--fwd_only',     help="use only fwd strand", action='store_true', default=False)
-    parser.add_argument('-u', '--scheduler',    help="the learning rate scheduler to use", default=None)
     parser.add_argument('-c', '--checkpoint',   help="a checkpoint file to restart from", default=None)
     parser.add_argument('-F', '--features',     help="a checkpoint file for features", default=None)
     parser.add_argument('-E', '--experiment',   help="the experiment name to use", default=None)
-    parser.add_argument('-d', '--debug',        help="run in debug mode", action='store_true', default=False)
+    parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
+    parser.add_argument('--sanity',             help="run a small number of batches", action='store_true', default=False)
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
 
+
+    #parser.add_argument('-M', '--model',        help="the model name", default='roznet')
+    #parser.add_argument('-s', '--seed',         help="the seed to use", default=None)
+    #parser.add_argument('-w', '--weighted',     help='weight classes in classification',
+    #                     nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'])
+    #parser.add_argument('-o', '--output_dims',  help="the number of dimensions to output", default=None)
+    #parser.add_argument('-A', '--accum',        help="the number of batches to accumulate", default=1)
+    #parser.add_argument('-b', '--batch_size',   help="the number of batches to accumulate", default=64)
+    #parser.add_argument('-W', '--window',       help="the size of chunks to use", default=4000)
+    #parser.add_argument('-S', '--step',         help="the chunking step size", default=4000)
+    #parser.add_argument('-s', '--seed',         help="the seed to use", default=None)
+    #parser.add_argument('-L', '--loss',         help="the loss function to use", default='M')
+    #parser.add_argument('-t', '--tgt_tax_lvl',  help='the taxonomic level to use', default=None)
+    #parser.add_argument('-O', '--optimizer', type=str, choices=['adam', 'lamb'], help='the optimizer to use', default='adam')
+    #parser.add_argument('--fwd_only',     help="use only fwd strand", action='store_true', default=False)
+    #parser.add_argument('-u', '--scheduler',    help="the learning rate scheduler to use", default=None)
+    #parser.add_argument('-r', '--rate',         help="the learning rate to use for training", default=0.001)
+
     args = parser.parse_args(argv)
 
-    if args.seed is None:
-        args.seed = get_seed()
+    with open(args.config, 'r') as f:
+        conf = yaml.safe_load(f)
+
+    if conf.get('seed', None) is None:
+        conf["seed"] = get_seed()
 
     if args.summit:
         check_summit(args)
@@ -123,31 +144,42 @@ def run_train(argv=None):
     options = ''
     if args.debug:
         job.set_debug(True)
-        options = '-d'
+
+    if args.sanity:
+        options = '--sanity'
 
     if args.profile:
         options += f' --profile'
 
-    chunks = f'chunks_W{args.window}_S{args.step}'
+    chunks = f'chunks_W{conf["window"]}_S{conf["step"]}'
 
-    options = (f'{options} -{args.loss} -b {args.batch_size} -g {args.gpus} -n {args.nodes} -o {args.output_dims} '
-               f'-W {args.window} -S {args.step} -r {args.rate} -A {args.accum} -e {args.epochs}')
+    L = None
+    if conf.get('manifold', False):
+        L = 'M'
+    elif conf.get('classify', False):
+        L = 'C'
+    else:
+        raise ValueError("did not find 'classify' or 'manifold' in config file")
 
-    exp = f'n{args.nodes}_g{args.gpus}_A{args.accum}_b{args.batch_size}_r{args.rate}_o{args.output_dims}'
+    options = (f'{options} -g {args.gpus} -n {args.nodes} -e {args.epochs} '
+               f'-k {args.num_workers}')
+
+    exp = f'n{args.nodes}_g{args.gpus}_A{conf["accumulate"]}_b{conf["batch_size"]}_r{conf["lr"]}_O{conf["optimizer"]}'
+
+    if args.pin_memory:
+        options += ' -y'
+
+    if args.shuffle:
+        options += ' -f'
+
+    if conf.get('n_outputs', None) is not None:
+        options = f'{options} -o {conf["n_outputs"]} '
 
     if args.load:
         options += f' -l'
 
-    if args.fwd_only:
-        options += ' --fwd_only'
-        chunks += '_fwd-only'
-
-    if args.seed:
-        options += f' -s {args.seed}'
-
-    if args.scheduler:
-        options += f' --lr_scheduler {args.scheduler}'
-        exp += f'_{args.scheduler}'
+    if conf.get('lr_scheduler', None) is not None:
+        exp += f'_{conf["lr_scheduler"]}'
 
     if args.checkpoint:
         job.set_env_var('CKPT', args.checkpoint)
@@ -157,52 +189,46 @@ def run_train(argv=None):
         job.set_env_var('FEATS_CKPT', args.features)
         options += f' -F $FEATS_CKPT'
 
-    if args.tgt_tax_lvl is not None:
-        options += f' -t {args.tgt_tax_lvl}'
-
-    if args.weighted:
-        if isinstance(args.weighted, str):
-            options += f' -w {args.weighted}'
-        else:
-            options += f' -w'
-
     if args.experiment:
         exp = args.experiment
 
     options += f' -E {exp}'
 
-    expdir = f'{args.outdir}/train/datasets/{args.dataset}/{chunks}/{args.model}/{args.loss}/{exp}'
+
+
+    expdir = f'{args.outdir}/train/datasets/{args.dataset}/{chunks}/{conf["model"]}/{L}/{exp}'
     if not os.path.exists(expdir):
         os.makedirs(expdir)
 
     job.output = f'{expdir}/train.%{job.job_fmt_var}.log'
     job.error = job.output
 
-    if args.nodes > 1:
-        job.set_env_var('OMP_NUM_THREADS', 1)
-        job.set_env_var('NCCL_DEBUG', 'INFO')
+    job.set_env_var('OMP_NUM_THREADS', 1)
+    job.set_env_var('NCCL_DEBUG', 'INFO')
 
     job.set_env_var('OPTIONS', options)
     job.set_env_var('OUTDIR', f'{expdir}/train.$JOB')
+    job.set_env_var('CONF', f'{expdir}/train.$JOB.yml')
     job.set_env_var('INPUT', args.input)
     job.set_env_var('LOG', '$OUTDIR.log')
 
     input_var = 'INPUT'
 
-    train_cmd = 'deep-index train'
+    train_cmd = 'deep-taxon train'
     if args.summit:
         train_cmd += ' --lsf'
         if job.use_bb:
             job.set_env_var('BB_INPUT', '/mnt/bb/$USER/`basename $INPUT`')
-            input_var = 'BB_INPUT'
+            #input_var = 'BB_INPUT'
+            input_var = 'INPUT'
     elif args.cori:
         train_cmd += ' --slurm'
 
-    train_cmd += f' $OPTIONS {args.model} ${input_var} $OUTDIR'
+    train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
 
     if args.summit and job.use_bb:
         job.add_command('echo "$INPUT to $BB_INPUT"')
-        job.add_command('cp $INPUT $BB_INPUT', run='jsrun -n 1')
+        job.add_command('cp $INPUT $BB_INPUT', run=f'jsrun -n {args.nodes}')
         job.add_command('ls /mnt/bb/$USER', run='jsrun -n 1')
         job.add_command('ls $BB_INPUT', run='jsrun -n 1')
 
@@ -227,11 +253,15 @@ def run_train(argv=None):
             job.write(out)
         if args.submit:
             job_id = job.submit_job(args.sh)
-            dest = f'{expdir}/train.{job_id}.sh'
+            jobdir = f'{expdir}/train.{job_id}'
+            cfg_path = f'{jobdir}.yml'
+            print(f'writing config file to {cfg_path}')
+            with open(cfg_path, 'w') as f:
+                yaml.main.safe_dump(conf, f, default_flow_style=False)
+            dest = f'{jobdir}.sh'
             print(f'copying submission script to {os.path.relpath(dest)}')
-            logpath = os.path.relpath(f'{expdir}/train.{job_id}.log')
+            logpath = os.path.relpath(f'{jobdir}.log')
             print(f'logging to {logpath}')
             shutil.copyfile(args.sh, dest)
-
     else:
         job.write(sys.stdout)
