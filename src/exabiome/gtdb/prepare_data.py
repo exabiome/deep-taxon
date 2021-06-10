@@ -382,7 +382,6 @@ def prepare_data(argv=None):
             n_seqs, total_seq_len = np.array(list(zip(*map_func(seqlen, fapaths)))).sum(axis=1)
             logger.info(f'found {total_seq_len} bases across {n_seqs} sequences')
 
-            b = 0
             logger.info(f'allocating uint8 array of length {total_seq_len} for sequences')
 
             tmpdir = tempfile.mkdtemp()
@@ -397,6 +396,7 @@ def prepare_data(argv=None):
             taxa = np.zeros(len(fapaths), dtype=int)
 
             seq_i = 0
+            b = 0
             for genome_i, fa in tqdm(enumerate(fapaths), total=len(fapaths)):
                 kwargs = {'format': 'fasta', 'constructor': skbio_cls, 'validate': False}
                 taxid = taxa_ids[genome_i]
@@ -404,17 +404,15 @@ def prepare_data(argv=None):
                 taxa[genome_i] = np.where(rep_taxdf.index == rep_taxid)[0][0]
                 for seq in skbio.io.read(fa, **kwargs):
                     enc_seq = vocab_it.encode(seq)
-                    #seqlens.append(len(enc_seq))
-                    e = b + len(enc_seq) #seqlens[-1]
+                    e = b + len(enc_seq)
                     sequence[b:e] = enc_seq
-                    seqlens[seq_i] = e
-                    b = e
-                    #names.append(vocab_it.get_seqname(seq))
-                    #genomes.append(genome_i)
-                    names[seq_i] = vocab_it.get_seqname(seq)
+                    seqindex[seq_i] = e
                     genomes[seq_i] = genome_i
+                    seqlens[seq_i] = len(enc_seq)
+                    names[seq_i] = vocab_it.get_seqname(seq)
+                    b = e
                     seq_i += 1
-            ids = tmp_h5_file.create_dataset('ids', data=np.arange(len(seqlens)), dtype=int)
+            ids = tmp_h5_file.create_dataset('ids', data=np.arange(n_seqs), dtype=int)
 
         else:
             raise NotImplementedError('cannot load all data into memory unless using vocab encoding')
