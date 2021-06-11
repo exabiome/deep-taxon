@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import sklearn.neighbors as skn
 
-from hdmf.common import VectorIndex, VectorData, DynamicTable,\
+from hdmf.common import VectorIndex, VectorData, DynamicTable, CSRMatrix,\
                         DynamicTableRegion, register_class, EnumData
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf.data_utils import DataIO
@@ -361,6 +361,22 @@ class NewickString(Data):
     pass
 
 
+@register_class('TreeGraph', NS)
+class TreeGraph(CSRMatrix):
+
+    __fields__ = ('leaves', 'table')
+
+    @docval(*get_docval(CSRMatrix.__init__),
+            {'name': 'leaves', 'type': ('array_data', 'data'), 'doc': ('the index into *table* for each node in the graph. '
+                                                                       'Internodes (i.e. non-leaf nodes) should have a -1')},
+            {'name': 'table', 'type': GenomeTable, 'doc': 'the GenomeTable that the leaves in the tree belong to'})
+    def __init__(self, **kwargs):
+        leaves, table = popargs('leaves', 'table', kwargs)
+        call_docval_func(super().__init__, kwargs)
+        self.leaves = leaves
+        self.table = table
+
+
 @register_class('DeepIndexFile', NS)
 class DeepIndexFile(Container):
 
@@ -369,6 +385,7 @@ class DeepIndexFile(Container):
     __fields__ = ({'name': 'seq_table', 'child': True},
                   {'name': 'taxa_table', 'child': True},
                   {'name': 'genome_table', 'child': True},
+                  {'name': 'tree_graph', 'child': True},
                   {'name': 'distances', 'child': True},
                   {'name': 'tree', 'child': True})
 
@@ -376,13 +393,16 @@ class DeepIndexFile(Container):
             {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
             {'name': 'genome_table', 'type': GenomeTable, 'doc': 'the table storing taxonomic information about species in this file'},
             {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'},
+            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree'},
             {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information', 'default': None})
     def __init__(self, **kwargs):
-        seq_table, taxa_table, genome_table, distances, tree = popargs('seq_table', 'taxa_table', 'genome_table', 'distances', 'tree', kwargs)
+        seq_table, taxa_table, genome_table, distances, tree, tree_graph = popargs('seq_table', 'taxa_table', 'genome_table',
+                                                                                   'distances', 'tree', 'tree_graph', kwargs)
         call_docval_func(super().__init__, {'name': 'root'})
         self.seq_table = seq_table
         self.taxa_table = taxa_table
         self.genome_table = genome_table
+        self.tree_graph = tree_graph
         self.distances = distances
         self.tree = tree
         self._sanity = False
@@ -504,8 +524,7 @@ class AbstractChunkedDIFile(DIFileFilter):
         e = self.end[i]
         item['seq'] = item['seq'][s:e]
         item['seq_idx'] = seq_i
-        item['id'] = i
-        # item['seq_name'] += f'|{s}-{e}'
+        item['id'] = i if i >= 0 else len(self.start) + i
         item['length'] = e - s
         return item
 
@@ -611,9 +630,10 @@ class RevCompFilter(DIFileFilter):
         self.labels = np.concatenate([difile.labels, difile.labels])
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
+        self.__len = 2*len(self.difile)
 
     def __len__(self):
-        return 2*len(self.difile)
+        return self.__len
 
     def __getitem__(self, arg):
         oarg = arg
@@ -624,5 +644,5 @@ class RevCompFilter(DIFileFilter):
                 item['seq'] = self.rcmap[item['seq'].astype(int)]
         except AttributeError as e:
             raise ValueError("Cannot run without loading data. Use -l to load data") from e
-        item['id'] = oarg
+        item['id'] = oarg if oarg >= 0 else self.__len + oarg
         return item

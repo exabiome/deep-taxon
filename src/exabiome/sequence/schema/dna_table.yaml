@@ -36,7 +36,7 @@ groups:
     doc: Packed sequence
   - name: genome
     data_type_inc: DynamicTableRegion
-    doc: integer ID for the genome that each sequence belongs to
+    doc: integer ID for the genome that each sequence belongs to i.e. index into GenomeTable
 
 - data_type_def: SequenceTable
   data_type_inc: AbstractSeqTable
@@ -132,6 +132,21 @@ groups:
     data_type_inc: DynamicTableRegion
     doc: Index of representative taxon in the TaxaTable
 
+- data_type_def: TreeGraph
+  data_type_inc: CSRMatrix
+  doc: A sparse matrix for storing a tree graph
+  attributes:
+   - name: table
+     dtype:
+       reftype: object
+       target_type: GenomeTable
+     doc: The genome table
+  datasets:
+  - name: leaves
+    dtype: int
+    doc: The index into the genome table for each node in the graph. Internodes should
+         contain a -1.
+
 - data_type_def: DeepIndexFile
   data_type_inc: Container
   doc: A file that has taxonomy and sequence information for running deep index
@@ -154,3 +169,6 @@ groups:
   - name: genome_table
     data_type_inc: GenomeTable
     doc: table storing information about the genome from which each sequence comes
+  - name: tree_graph
+    data_type_inc: TreeGraph
+    doc: A sparse form of the adjacency matrix for the phylogenetic tree

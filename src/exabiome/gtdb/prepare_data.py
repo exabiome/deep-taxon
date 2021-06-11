@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import scipy.sparse as sps
 import skbio.stats.distance as ssd
 from skbio.sequence import DNA, Protein
 from sklearn.preprocessing import LabelEncoder
@@ -7,6 +8,35 @@ from hdmf.common import EnumData, VectorData
 import skbio.io
 import os
 from functools import partial
+
+
+def add_branches(node, mat, names):
+    name = node.name
+    names[node.id] = name
+    if len(node.children) == 0:
+        return
+    if len(node.children) != 2:
+        raise ValueError("Non-binary tree! I do not know how to handle this")
+    for c in node.children:
+        mat[node.id, c.id] = c.length
+        add_branches(c, mat, names)
+
+
+def get_tree_graph(node, genome_table):
+    node.to_array()
+    n_nodes = 2 * len(list(node.tips())) - 1
+    adj = sps.lil_matrix((n_nodes, n_nodes))
+    names = np.zeros(n_nodes, dtype='U15')
+    add_branches(node, adj, names)
+
+    tids = genome_table.taxon_id
+    gt_indices = np.ones(len(names)) * -1
+    for i, name in enumerate(names):
+        if name.startswith('GC'):
+            gt_indices[i] = np.where(tids.data == name)[0][0]
+
+    return adj.tocsr(), gt_indices
+
 
 def seqlen(path):
     kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
@@ -108,7 +138,7 @@ def prepare_data(argv=None):
 
     from ..utils import get_faa_path, get_fna_path, get_genomic_path
     from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator, DNAVocabGeneIterator
-    from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable
+    from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable, TreeGraph
 
     parser = argparse.ArgumentParser()
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
@@ -352,7 +382,6 @@ def prepare_data(argv=None):
             n_seqs, total_seq_len = np.array(list(zip(*map_func(seqlen, fapaths)))).sum(axis=1)
             logger.info(f'found {total_seq_len} bases across {n_seqs} sequences')
 
-            b = 0
             logger.info(f'allocating uint8 array of length {total_seq_len} for sequences')
 
             tmpdir = tempfile.mkdtemp()
@@ -367,6 +396,7 @@ def prepare_data(argv=None):
             taxa = np.zeros(len(fapaths), dtype=int)
 
             seq_i = 0
+            b = 0
             for genome_i, fa in tqdm(enumerate(fapaths), total=len(fapaths)):
                 kwargs = {'format': 'fasta', 'constructor': skbio_cls, 'validate': False}
                 taxid = taxa_ids[genome_i]
@@ -374,17 +404,15 @@ def prepare_data(argv=None):
                 taxa[genome_i] = np.where(rep_taxdf.index == rep_taxid)[0][0]
                 for seq in skbio.io.read(fa, **kwargs):
                     enc_seq = vocab_it.encode(seq)
-                    #seqlens.append(len(enc_seq))
-                    e = b + len(enc_seq) #seqlens[-1]
+                    e = b + len(enc_seq)
                     sequence[b:e] = enc_seq
-                    seqlens[seq_i] = e
-                    b = e
-                    #names.append(vocab_it.get_seqname(seq))
-                    #genomes.append(genome_i)
-                    names[seq_i] = vocab_it.get_seqname(seq)
+                    seqindex[seq_i] = e
                     genomes[seq_i] = genome_i
+                    seqlens[seq_i] = len(enc_seq)
+                    names[seq_i] = vocab_it.get_seqname(seq)
+                    b = e
                     seq_i += 1
-            ids = tmp_h5_file.create_dataset('ids', data=np.arange(len(seqlens)), dtype=int)
+            ids = tmp_h5_file.create_dataset('ids', data=np.arange(n_seqs), dtype=int)
 
         else:
             raise NotImplementedError('cannot load all data into memory unless using vocab encoding')
@@ -395,6 +423,10 @@ def prepare_data(argv=None):
 
     genome_table = GenomeTable('genome_table', 'information about the genome each sequence comes from',
                                taxa_ids, taxa, taxa_table=taxa_table)
+
+    adj, gt_indices = get_tree_graph(root, genome_table)
+    tree_graph = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
+
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
                          io.set_dataio(names,    compression='gzip', chunks=True),
@@ -407,7 +439,8 @@ def prepare_data(argv=None):
                          vocab=vocab)
 
 
-    difile = DeepIndexFile(seq_table, taxa_table, genome_table, tree, **di_kwargs)
+
+    difile = DeepIndexFile(seq_table, taxa_table, genome_table, tree, tree_graph, **di_kwargs)
 
     before = datetime.now()
     io.write(difile, exhaust_dci=False, link_data=False)
