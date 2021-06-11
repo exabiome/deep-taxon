@@ -524,8 +524,7 @@ class AbstractChunkedDIFile(DIFileFilter):
         e = self.end[i]
         item['seq'] = item['seq'][s:e]
         item['seq_idx'] = seq_i
-        item['id'] = i
-        # item['seq_name'] += f'|{s}-{e}'
+        item['id'] = i if i >= 0 else len(self.start) + i
         item['length'] = e - s
         return item
 
@@ -631,9 +630,10 @@ class RevCompFilter(DIFileFilter):
         self.labels = np.concatenate([difile.labels, difile.labels])
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
+        self.__len = 2*len(self.difile)
 
     def __len__(self):
-        return 2*len(self.difile)
+        return self.__len
 
     def __getitem__(self, arg):
         oarg = arg
@@ -644,5 +644,5 @@ class RevCompFilter(DIFileFilter):
                 item['seq'] = self.rcmap[item['seq'].astype(int)]
         except AttributeError as e:
             raise ValueError("Cannot run without loading data. Use -l to load data") from e
-        item['id'] = oarg
+        item['id'] = oarg if oarg >= 0 else self.__len + oarg
         return item

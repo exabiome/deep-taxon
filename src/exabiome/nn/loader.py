@@ -357,15 +357,25 @@ class DatasetSubset(Dataset):
     #     return getattr(self.dataset, attr)
 
 
-def train_test_loaders(dataset, random_state=None, downsample=None, distances=False,
-                       node_ids=False, **kwargs):
+def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     """
     Return DataLoaders for training, validation, and test datasets.
-    Args:
-        path (str):                  the path to the DeepIndex file
-        distances (bool):            return distances for the
-        node_ids (bool):             return tree graph node IDs
-        kwargs    : any additional arguments to pass into torch.DataLoader
+
+    Parameters
+    ----------
+    dataset: LazySeqDataset
+        the path to the DeepIndex file
+
+    random_state: int or RandomState, default=None
+        The seed to use for randomly splitting data
+
+    downsample: float, default=None
+        Fraction to downsample data to before setting up DataLoaders
+
+    kwargs:
+        any additional arguments to pass into torch.DataLoader. Note
+        *shuffle* will be ignored for when creating validation and test
+        loaders i.e. no shuffling for validation and testing
     """
     index = np.arange(len(dataset))
     #stratify = dataset.difile.labels
@@ -380,12 +390,19 @@ def train_test_loaders(dataset, random_state=None, downsample=None, distances=Fa
                                                                   random_state=random_state)
 
     collater = collate
-    if distances and node_ids:
-        raise ValueError("Got distances=True and node_ids=True. I cannot collate both!")
-    if distances:
+    if dataset.manifold:
         collater = DistanceCollater(dataset.distances)
-    elif node_ids:
+    elif dataset.graph:
         collater = GraphCollater(dataset.node_ids)
+
+    if kwargs.get('num_workers', None) not in (None, 0):
+        if self.difile is not None:
+            msg = (f'Requesting {kwargs["num_workers"]} workers for loading data -- '
+                   'closing dataset to avoid pickling error. '
+                   'To suppress this warning, Set keep_open=False when constructing LazySeqDataset '
+                   'or call dataset.close before passing to train_test_loaders')
+            warnings.warn(msg)
+            dataset.close()
 
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)
@@ -456,7 +473,8 @@ class DeepIndexDataModule(pl.LightningDataModule):
 
 class LazySeqDataset(Dataset):
     """
-    A torch Dataset to handle reading samples read from a DeepIndex file.
+    A torch Dataset to handle reading samples read from a DeepIndex file when using
+    multiprocessing workers for loading data.
 
     Underlying a DeepIndex file is an HDF5 file, from which data is lazily read.
     If using multiple workers for data loading (i.e. *num_workers* > 0),
@@ -504,7 +522,7 @@ class LazySeqDataset(Dataset):
     load: bool, default=False
         Load data from the underlying HDF5 file into memory
 
-    classify: bool, default=False
+    classify: bool, default=True
         Prep data for a classification loss function. i.e. return taxonomic labels like phylum or genus
 
     manifold: bool, default=False
@@ -519,6 +537,15 @@ class LazySeqDataset(Dataset):
 
     ohe: bool, default=False
         One-hot encode sequences. By default, return indices
+
+
+    References
+    ----------
+
+    PyTorch DataLoaders
+        https://pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader
+
+
     """
     def __init__(self, path=None, keep_open=False, hparams=None, **kwargs):
         kwargs.setdefault('input', None)
@@ -556,12 +583,13 @@ class LazySeqDataset(Dataset):
         # self._label_key - the column from the TaxaTable
         #############################
 
+        self.manifold = False
+        self.graph = False
         self.distances = None
-        if hparams.classify:
-            self.classify = True
-            self._label_key = self.hparams.tgt_tax_lvl
-            self._label_dtype = torch.int64
-        elif hparams.manifold:
+        self.node_ids = None
+
+        if hparams.manifold:
+            self.manifold = True
             self.distances = self.difile.distances.data[:]
             if hparams.tgt_tax_lvl != 'species':
                 raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
@@ -583,6 +611,10 @@ class LazySeqDataset(Dataset):
                     continue
                 node_ids[tid] = i
             self.node_ids = node_ids
+        elif hparams.classify:
+            self.classify = True
+            self._label_key = self.hparams.tgt_tax_lvl
+            self._label_dtype = torch.int64
         else:
             raise ValueError('classify (-C) or manifold (-M) should be set')
 
@@ -686,5 +718,3 @@ class LazySeqDataset(Dataset):
         seq = seq.T
         label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label, seq_id)
-
-
