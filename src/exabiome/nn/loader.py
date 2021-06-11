@@ -360,7 +360,7 @@ class DatasetSubset(Dataset):
 def train_test_loaders(dataset, random_state=None, downsample=None, distances=False,
                        node_ids=False, **kwargs):
     """
-    Return DataLoaders for training and test datasets.
+    Return DataLoaders for training, validation, and test datasets.
     Args:
         path (str):                  the path to the DeepIndex file
         distances (bool):            return distances for the
@@ -593,6 +593,10 @@ class LazySeqDataset(Dataset):
             self.difile = None
             self.orig_difile = None
             self.io = None
+
+    def get_graph(self):
+        """Return a csr_matrix representation of the tree graph"""
+        return self.difile.tree_graph.to_spmat()
 
     def open(self):
         """Open the HDMF file and set up chunks and taxonomy label"""
