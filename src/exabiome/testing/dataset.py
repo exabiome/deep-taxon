@@ -46,8 +46,6 @@ def check_sequences(argv=None):
 
     load_elements(difile.seq_table)
 
-    breakpoint()
-
     seqs = difile.seq_table[indices].sort_values('genome_taxon_id')
 
     taxon_ids = np.unique(seqs['genome_taxon_id'])
