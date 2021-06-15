@@ -39,7 +39,7 @@ def get_conf_args():
         'seed': dict(type=parse_seed, default='', help='seed to use for train-test split'),
         'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns, or ens'),
         'ens_beta': dict(help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9),
-        'n_outputs': dict(help='the number of outputs in the final layer', default=32),
+        'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify', default=32),
         'accumulate': dict(help='accumulate_grad_batches argument to pl.Trainer', default=1),
         'dropout_rate': dict(help='the dropout rate to use', default=0.5),
         'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
@@ -180,14 +180,12 @@ def process_args(args=None, return_io=False):
 
     data_mod = DeepIndexDataModule(args)
 
-    #model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
-
-    # n_taxa replaces n_outputs
-    args.n_taxa = len(data_mod.dataset.taxa_labels)
+    # if classification problem, use the number of taxa as the number of outputs
+    if args.classify:
+        args.n_outputs = len(data_mod.dataset.taxa_labels)
     model = process_model(args)
 
     if args.weighted is not None:
-        #labels = data_mod.dataset.difile.taxa_table[args.tgt_tax_lvl].data
         if args.weighted == 'ens':
             weights = (1 - args.ens_beta)/(1 - args.ens_beta**data_mod.dataset.taxa_counts)
         elif args.weighted == 'isns':

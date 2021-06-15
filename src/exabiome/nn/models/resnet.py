@@ -160,7 +160,7 @@ class ResNet(AbstractLit):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Linear(512 * block.expansion, hparams.n_taxa)
+        self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -209,8 +209,8 @@ class ResNet(AbstractLit):
             outputs_map (array)         : a mapping of original layer output to new layer output
         """
         outputs_map = torch.as_tensor(outputs_map)
-        self.hparams.n_taxa = len(outputs_map)
-        new_fc = nn.Linear(self.fc.in_features, self.hparams.n_taxa)
+        self.hparams.n_outputs = len(outputs_map)
+        new_fc = nn.Linear(self.fc.in_features, self.hparams.n_outputs)
         with torch.no_grad():
             for i in range(self.fc.out_features):
                 mask = outputs_map == i

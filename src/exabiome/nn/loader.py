@@ -396,7 +396,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
         collater = GraphCollater(dataset.node_ids)
 
     if kwargs.get('num_workers', None) not in (None, 0):
-        if self.difile is not None:
+        if dataset.difile is not None:
             msg = (f'Requesting {kwargs["num_workers"]} workers for loading data -- '
                    'closing dataset to avoid pickling error. '
                    'To suppress this warning, Set keep_open=False when constructing LazySeqDataset '
@@ -438,12 +438,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
         self.hparams = hparams
         # self.dataset, self.io = process_dataset(self.hparams, inference=inference)
 
-        self.dataset = LazySeqDataset(self.hparams, keep_open=self.hparams.num_workers==0)
+        self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=self.hparams.num_workers==0)
         if self.hparams.load:
             self.dataset.load()
         kwargs = dict(random_state=self.hparams.seed,
                       batch_size=self.hparams.batch_size,
-                      distances=self.hparams.manifold,
                       pin_memory=False, #self.hparams.pin_memory,
                       shuffle=self.hparams.shuffle,
                       num_workers=self.hparams.num_workers)
@@ -559,7 +558,12 @@ class LazySeqDataset(Dataset):
         kwargs.setdefault('load', False)
         kwargs.setdefault('ohe', False)
 
-        hparams = hparams or argparse.Namespace(**kwargs)
+        if hparams is not None:
+            if not isinstance(hparams, argparse.Namespace):
+                raise ValueError('hparams must be a Namespace object')
+            for k, v in vars(hparams).items():
+                kwargs[k] = v
+        hparams = argparse.Namespace(**kwargs)
 
         self.path = path or hparams.input
         self.hparams = hparams
@@ -569,7 +573,7 @@ class LazySeqDataset(Dataset):
         self._chunkings = dict()
 
         self.window, self.step = check_window(hparams.window, hparams.step)
-        self.revcomp = not getattr(hparams, 'fwd_only', False)
+        self.revcomp = not hparams.fwd_only
 
         # open to get dataset length
         self.open()
