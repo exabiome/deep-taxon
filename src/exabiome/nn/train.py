@@ -18,7 +18,7 @@ import logging
 
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin
@@ -101,6 +101,7 @@ def parse_args(*addl_args, argv=None):
 
     parser.add_argument('-F', '--features_checkpoint', type=str, help='a checkpoint file for previously trained features', default=None)
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
+    parser.add_argument('--early_stop', action='store_true', default=False, help='stop early if validation loss does not improve')
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
@@ -342,9 +343,14 @@ def run_lightning(argv=None):
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
+    callbacks = [ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss)]
+
+    if args.early_stop:
+        callbacks.append(EarlyStopping(monitor=AbstractLit.val_loss, min_delta=0.00, patience=3, verbose=False, mode='min')
+
     targs = dict(
         checkpoint_callback=True,
-        callbacks=ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss),
+        callbacks=callbacks,
         logger = CSVLogger(save_dir=output('logs')),
         profiler = "simple",
     )
