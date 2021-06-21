@@ -3,10 +3,12 @@ import numpy as np
 import os
 from ..utils import check_argv, parse_logger
 from .utils import process_gpus, process_model, process_output
-from .loader import process_dataset, get_loader
+from .train import process_config
+from .loader import process_dataset, get_loader, DeepIndexDataModule
 import glob
 import argparse
 import torch
+import torch.nn as nn
 import logging
 
 
@@ -21,10 +23,9 @@ def parse_args(*addl_args, argv=None):
     """
     desc = "Run network inference"
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
-    parser.add_argument('model', type=str, choices=list(models._models.keys()),
-                        metavar='MODEL',
-                        help='the model type to run inference with')
-    parser.add_argument('checkpoint', type=str, help='read the checkpoint from the given checkpoint file')
+    parser.add_argument('config', type=str, help='the config file used for training')
+    parser.add_argument('input', type=str, help='the input file used for training')
+    parser.add_argument('checkpoint', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
     parser.add_argument('-E', '--experiment', type=str, default='default',
                         help='the experiment name to get the checkpoint from')
@@ -37,12 +38,12 @@ def parse_args(*addl_args, argv=None):
                         help='run in debug mode i.e. only run two batches')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
-    parser.add_argument('-I', '--input', type=str, help='the HDF5 DeepIndex file used to train the model', default=None)
     parser.add_argument('-R', '--train', action='append_const', const='train', dest='loaders',
                         help='do inference on training data')
     parser.add_argument('-V', '--validate', action='append_const', const='validate', dest='loaders',
                         help='do inference on validation data')
     parser.add_argument('-S', '--test', action='append_const', const='test', dest='loaders', help='do inference on test data')
+    parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -52,9 +53,6 @@ def parse_args(*addl_args, argv=None):
         sys.exit(1)
 
     args = parser.parse_args(argv)
-    if not (args.input is None or args.loaders is None):   # don't pass an input file and use the TVT data
-        print('-I/--input cannot be used with any of -R/--train, -V/--validate, -S/--test', file=sys.stderr)
-        sys.exit(1)
 
     return args
 
@@ -68,6 +66,11 @@ def process_args(argv=None):
     else:
         args = argv
 
+    conf_args = process_config(args.config)
+    for k, v in vars(conf_args).items():
+        if not hasattr(args, k):
+            setattr(args, k, v)
+
     logger = args.logger
     # set up logger
     if logger is None:
@@ -77,6 +80,7 @@ def process_args(argv=None):
         logger.setLevel(logging.DEBUG)
     args.logger = logger
 
+
     targs = dict()
 
     # this does not get used in this command,
@@ -85,14 +89,6 @@ def process_args(argv=None):
     targs['gpus'] = process_gpus(args.gpus)
     if targs['gpus'] != 1:
         targs['distributed_backend'] = 'dp'
-    if args.gpus:
-        dev = "cuda:0"
-    else:
-        dev = "cpu"
-    args.logger.info(f'using {dev} device')
-    args.device = torch.device(dev)
-    del args.gpus
-    args.input_nc = 5
 
     if args.debug:
         targs['fast_dev_run'] = True
@@ -129,30 +125,58 @@ def process_args(argv=None):
     if args.batch_size is not None:
         model.hparams.batch_size = args.batch_size
 
+    args.n_outputs = model.hparams.n_outputs
+    args.save_seq_ids = model.hparams.window is not None
+
+    data_mod = DeepIndexDataModule(args, inference=True)
+    args.loaders = {'train': data_mod.train_dataloader(),
+                    'validate': data_mod.val_dataloader(),
+                    'test': data_mod.test_dataloader()}
+
     args.label_map = None
-    if args.input is not None:                          # if an input file is passed in, use that first
-        dset, io  = process_dataset(model.hparams, path=args.input, inference=True)
-        ldr = get_loader(dset, batch_size=args.batch_size, distances=False)
-        args.loaders = {'input': ldr}
-        args.difile = dset.difile
-        #train_dset, train_io = process_dataset(model.hparams, inference=True)
-        #args.label_map = np.zeros(len(dset), dtype=int)
-        #train_tid  = train_dset.difile.taxa_table['taxon_id'][:]
-        #tid2idx = {tid: i for i, tid in enumerate(train_tid)}
-        #rep_tid = dset.difile.taxa_table['rep_taxon_id'][:]
-        #args.label_map = np.array([tid2idx[tid] for tid in rep_tid])
-        #train_io.close()
-    elif args.loaders is None:                           # if an input file is not passed in, do all TVT data
-        args.loaders = {'train': model.train_dataloader(),
-                        'validate': model.val_dataloader(),
-                        'test': model.test_dataloader()}
-        args.difile = model.dataset.difile
-        #args.label_map = None
+    #if args.input is not None:                          # if an input file is passed in, use that first
+    #    dset, io  = process_dataset(model.hparams, path=args.input, inference=True)
+    #    ldr = get_loader(dset, batch_size=args.batch_size, distances=False)
+    #    args.loaders = {'input': ldr}
+    #    args.difile = dset.difile
+    #elif args.loaders is None:                           # if an input file is not passed in, do all TVT data
+    #    args.loaders = {'train': model.train_dataloader(),
+    #                    'validate': model.val_dataloader(),
+    #                    'test': model.test_dataloader()}
+    #    args.difile = model.dataset.difile
 
     # return the model, any arguments, and Lighting Trainer args just in case
     # we want to use them down the line when we figure out how to use Lightning for
     # inference
-    ret = [model, args, targs]
+
+    multi_gpu = False
+    dev = "cpu"
+    args.device = torch.device(dev)
+    device_ids = []
+    if args.gpus is not None:
+        if isinstance(args.gpus, (bool, list)): # use all GPUs
+            multi_gpu = True
+            dev = "cuda"
+            if isinstance(args.gpus, list):
+                device_ids = args.gpus
+            else:
+                device_ids = list(range(torch.cuda.device_count()))
+        else:                                   # use a specific GPU
+            dev = "cuda:%d" % args.gpus
+            device_ids = [args.gpus]
+        args.device = torch.device(dev)
+
+    args.logger.info(f'using {dev} device')
+    model.to(args.device)
+
+    if multi_gpu:
+        model = nn.DataParallel(model, device_ids=device_ids).cuda()
+    model.eval()
+
+    if args.num_workers > 0:
+        data_mod.dataset.close()
+
+    ret = [model, data_mod, args, targs]
 
     return tuple(ret)
 
@@ -163,53 +187,81 @@ def run_inference(argv=None):
         argv: a command-line string or argparse.Namespace object to use for running inference
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
-    model, args, addl_targs = process_args(argv=argv)
+    model, data_mod, args, addl_targs = process_args(argv=argv)
     import h5py
     import numpy as np
     import os
-    model.to(args.device)
-    model.eval()
-    n_outputs = model.hparams.n_outputs
-    n_samples = len(args.difile)
 
     args.logger.info(f'saving outputs to {args.output}')
-    f = h5py.File(args.output, 'w')
 
-    emb_dset = f.create_dataset('outputs', shape=(n_samples, n_outputs), dtype=float)
-    label_dset = f.create_dataset('labels', shape=(n_samples,), dtype=int)
-    olen_dset = f.create_dataset('orig_lens', shape=(n_samples,), dtype=int)
-    f.create_dataset('label_names', data=model.hparams['labels'], dtype=h5py.special_dtype(vlen=str))
-    seq_id_dset = None
-    if model.hparams.window is not None:
-        seq_id_dset = f.create_dataset('seq_ids', shape=(n_samples,), dtype=int)
+    n_samples = len(data_mod.dataset)
+
+    # make temporary datasets and do all I/O at the end
+    tmp_emb = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
+    tmp_label = np.zeros(shape=(n_samples,), dtype=int)
+    tmp_olen = np.zeros(shape=(n_samples,), dtype=int)
+    tmp_seq_id = None
+    if args.save_seq_ids:
+        tmp_seq_id = np.zeros(shape=(n_samples,), dtype=int)
+    indices = list()
+    masks = dict()
 
     for loader_key, loader in args.loaders.items():
-        mask_dset = f.create_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
         args.logger.info(f'computing outputs for {loader_key}')
         idx, outputs, labels, orig_lens, seq_ids = get_outputs(model, loader, args.device, debug=args.debug)
         if args.label_map is not None:
             labels = args.label_map[labels]
         order = np.argsort(idx)
         idx = idx[order]
-        args.logger.info('writing outputs')
-        emb_dset[idx] = outputs[order]
-        args.logger.info('writing labels')
-        label_dset[idx] = labels[order]
-        args.logger.info('writing orig_lens')
-        olen_dset[idx] = orig_lens
-        args.logger.info('writing mask')
-        mask_dset[idx] = True
-        if seq_id_dset is not None:
-            seq_id_dset[idx] = seq_ids[order]
+        args.logger.info('stashing outputs, shape ' + str(outputs[order].shape))
+        tmp_emb[idx] = outputs[order]
+        args.logger.info('stashing labels')
+        tmp_label[idx] = labels[order]
+        args.logger.info('stashing orig_lens')
+        tmp_olen[idx] = orig_lens
+        args.logger.info('stashing mask')
+
+        mask = np.zeros(n_samples, dtype=bool)
+        mask[idx] = True
+        masks[loader_key] = mask
+        if args.save_seq_ids:
+            args.logger.info('stashing seq_ids')
+            tmp_seq_id[idx] = seq_ids[order]
+        indices.append(idx)
+
+    args.logger.info("writing data")
+    f = h5py.File(args.output, 'w')
+    f.create_dataset('label_names', data=data_mod.dataset.label_names, dtype=h5py.special_dtype(vlen=str))
+
+    for k,v in masks.items():
+        f.create_dataset(k, data=v)
+
+    args.logger.info("writing outputs, shape " + str(tmp_emb.shape))
+    f.create_dataset('outputs', data=tmp_emb)
+    args.logger.info("writing labels, shape " + str(tmp_label.shape))
+    f.create_dataset('labels', data=tmp_label)
+    args.logger.info("writing orig_lens, shape " + str(tmp_olen.shape))
+    f.create_dataset('orig_lens', data=tmp_olen)
+    if args.save_seq_ids:
+        args.logger.info("writing seq_ids, shape " + str(tmp_olen.shape))
+        f.create_dataset('seq_ids', data=tmp_seq_id)
+
 
     if args.umap:
+        order = np.s_[:]
+        if args.debug:
+            indices = np.concatenate(indices)
+            order = np.argsort(indices)
+            indices = indices[order]
+        else:
+            indices = np.s_[:]
         # compute UMAP arguments for convenience
         args.logger.info('Running UMAP embedding')
         from umap import UMAP
         umap = UMAP(n_components=2)
-        tfm = umap.fit_transform(emb_dset[:])
+        tfm = umap.fit_transform(tmp_emb[indices])
         umap_dset = f.create_dataset('viz_emb', shape=(n_samples, 2), dtype=float)
-        umap_dset[:] = tfm
+        umap_dset[indices] = tfm
 
 
 def get_outputs(model, loader, device, debug=False):
@@ -221,20 +273,19 @@ def get_outputs(model, loader, device, debug=False):
     labels = list()
     orig_lens = list()
     seq_ids = list()
-    idx = 1
+    max_batches = 100 if debug else sys.maxsize
     from tqdm import tqdm
     file = sys.stdout
-    if debug:
-        it = tqdm([next(iter(loader))], file=sys.stdout)
-    else:
-        it = tqdm(loader, file=sys.stdout)
-    for i, X, y, olen, seq_i in it:
-        idx += 1
-        ret.append(model(X.to(device)).to('cpu').detach())
-        indices.append(i.to('cpu').detach())
-        labels.append(y.to('cpu').detach())
-        orig_lens.append(olen.to('cpu').detach())
-        seq_ids.append(seq_i.to('cpu').detach())
+    it = tqdm(loader, file=sys.stdout)
+    with torch.no_grad():
+        for idx, (i, X, y, olen, seq_i) in enumerate(it):
+            ret.append(model(X.to(device)).to('cpu').detach())
+            indices.append(i.to('cpu').detach())
+            labels.append(y.to('cpu').detach())
+            orig_lens.append(olen.to('cpu').detach())
+            seq_ids.append(seq_i.to('cpu').detach())
+            if idx >= max_batches:
+                break
     ret = (torch.cat(indices).numpy(),
            torch.cat(ret).numpy(),
            torch.cat(labels).numpy(),
