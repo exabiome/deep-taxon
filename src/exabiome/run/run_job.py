@@ -54,6 +54,8 @@ def run_train(argv=None):
     parser.add_argument('sh', nargs='?', help='the input file to use')
 
     parser.add_argument('-o', '--outdir',      help="the output directory", default=None)
+    parser.add_argument('-m', '--message',     help="message to write to log file", default=None)
+    parser.add_argument('-L', '--log',         help="the log file to store run information in", default='jobs.log')
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
     parser.add_argument('--profile',           help="use PTL profiling", action='store_true', default=False)
 
@@ -80,6 +82,7 @@ def run_train(argv=None):
     parser.add_argument('-E', '--experiment',   help="the experiment name to use", default=None)
     parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
     parser.add_argument('--sanity',             help="run a small number of batches", action='store_true', default=False)
+    parser.add_argument('--early_stop',         help="use PL early stopping", action='store_true', default=False)
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
@@ -148,6 +151,9 @@ def run_train(argv=None):
     if args.sanity:
         options = '--sanity'
 
+    if args.early_stop:
+        options += f' --early_stop'
+
     if args.profile:
         options += f' --profile'
 
@@ -164,16 +170,16 @@ def run_train(argv=None):
     options = (f'{options} -g {args.gpus} -n {args.nodes} -e {args.epochs} '
                f'-k {args.num_workers}')
 
-    exp = f'n{args.nodes}_g{args.gpus}_A{conf["accumulate"]}_b{conf["batch_size"]}_r{conf["lr"]}_O{conf["optimizer"]}'
+    if "n_outputs" in conf:
+        exp = f'n{args.nodes}_g{args.gpus}_A{conf["accumulate"]}_b{conf["batch_size"]}_r{conf["lr"]}_o{conf["n_outputs"]}_O{conf["optimizer"]}'
+    else:
+        exp = f'n{args.nodes}_g{args.gpus}_A{conf["accumulate"]}_b{conf["batch_size"]}_r{conf["lr"]}_{conf["tgt_tax_lvl"]}_O{conf["optimizer"]}'
 
     if args.pin_memory:
         options += ' -y'
 
     if args.shuffle:
         options += ' -f'
-
-    if conf.get('n_outputs', None) is not None:
-        options = f'{options} -o {conf["n_outputs"]} '
 
     if args.load:
         options += f' -l'
@@ -219,18 +225,24 @@ def run_train(argv=None):
         train_cmd += ' --lsf'
         if job.use_bb:
             job.set_env_var('BB_INPUT', '/mnt/bb/$USER/`basename $INPUT`')
-            #input_var = 'BB_INPUT'
-            input_var = 'INPUT'
+            input_var = 'BB_INPUT'
+
+            job.add_command('echo "$INPUT to $BB_INPUT"')
+            job.add_command('cp $INPUT $BB_INPUT', run=f'jsrun -n {args.nodes} -r 1 -a 1')
+            job.add_command('ls /mnt/bb/$USER', run='jsrun -n 1')
+            job.add_command('ls $BB_INPUT', run='jsrun -n 1')
     elif args.cori:
         train_cmd += ' --slurm'
+        if job.use_bb:
+            job.set_env_var('BB_INPUT', '/tmp/`basename $INPUT`')
+            input_var = 'BB_INPUT'
+
+            job.add_command('echo "$INPUT to $BB_INPUT"')
+            job.add_command('cp $INPUT $BB_INPUT') #, run=f'srun -n {args.nodes} -r 1 -a 1')
+            job.add_command('ls /tmp') #, run='jsrun -n 1')
+            job.add_command('ls $BB_INPUT') #, run='jsrun -n 1')
 
     train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
-
-    if args.summit and job.use_bb:
-        job.add_command('echo "$INPUT to $BB_INPUT"')
-        job.add_command('cp $INPUT $BB_INPUT', run=f'jsrun -n {args.nodes}')
-        job.add_command('ls /mnt/bb/$USER', run='jsrun -n 1')
-        job.add_command('ls $BB_INPUT', run='jsrun -n 1')
 
     job.set_env_var('CMD', train_cmd)
 
@@ -243,7 +255,9 @@ def run_train(argv=None):
     if args.summit:
         # when using regular DDP, jsrun should be called with one resource per node (-r) and
         # one rank per GPU (-a) to work with PyTorch Lightning
-        jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c 42'
+        n_cores = 42
+        cores_per_task = n_cores//args.gpus
+        jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD > $LOG 2>&1', run=jsrun)
     else:
         job.add_command('$CMD > $LOG 2>&1', run='srun')
@@ -253,15 +267,28 @@ def run_train(argv=None):
             job.write(out)
         if args.submit:
             job_id = job.submit_job(args.sh)
-            jobdir = f'{expdir}/train.{job_id}'
-            cfg_path = f'{jobdir}.yml'
-            print(f'writing config file to {cfg_path}')
-            with open(cfg_path, 'w') as f:
-                yaml.main.safe_dump(conf, f, default_flow_style=False)
-            dest = f'{jobdir}.sh'
-            print(f'copying submission script to {os.path.relpath(dest)}')
-            logpath = os.path.relpath(f'{jobdir}.log')
-            print(f'logging to {logpath}')
-            shutil.copyfile(args.sh, dest)
+            if job_id is None:
+                print("unable to submit job")
+            else:
+                jobdir = f'{expdir}/train.{job_id}'
+                cfg_path = f'{jobdir}.yml'
+                print(f'writing config file to {cfg_path}')
+                with open(cfg_path, 'w') as f:
+                    yaml.main.safe_dump(conf, f, default_flow_style=False)
+                dest = f'{jobdir}.sh'
+                print(f'copying submission script to {os.path.relpath(dest)}')
+                logpath = os.path.relpath(f'{jobdir}.log')
+                print(f'logging to {logpath}')
+                shutil.copyfile(args.sh, dest)
+                with open(args.log, 'a') as logout:
+                    if args.message is None:
+                        args.message = input("please provide a message about this run:\n")
+                    print(f'- {args.message}', file=logout)
+                    print(f'  - job directory: {jobdir}', file=logout)
+                    print(f'  - log file:      {logpath}', file=logout)
+                    print(f'  - config file:   {jobdir}.yml', file=logout)
+                    print(f'  - batch script:  {jobdir}.sh', file=logout)
+                    print('-------------------------------------------------------------------------------', file=logout)
+
     else:
         job.write(sys.stdout)

@@ -72,7 +72,7 @@ def print_config_templ(argv=None):
 def process_config(conf_path, args=None):
     with open(conf_path, 'r') as f:
         config = yaml.safe_load(f)
-    args = args or Namespace()
+    args = args or argparse.Namespace()
     for k, v in get_conf_args().items():
         conf_val = config.pop(k, v.get('default', None))
         setattr(args, k, conf_val)
@@ -346,7 +346,7 @@ def run_lightning(argv=None):
     callbacks = [ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss)]
 
     if args.early_stop:
-        callbacks.append(EarlyStopping(monitor=AbstractLit.val_loss, min_delta=0.00, patience=3, verbose=False, mode='min')
+        callbacks.append(EarlyStopping(monitor=AbstractLit.val_loss, min_delta=0.00, patience=3, verbose=False, mode='min'))
 
     targs = dict(
         checkpoint_callback=True,
