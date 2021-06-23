@@ -433,6 +433,13 @@ class DeepIndexFile(Container):
         genome_idx = self.seq_table['genome'].data[:]
         self.labels = genome_labels[genome_idx]
 
+    def get_label_classes(self, label_key=None):
+        label_key = label_key or self.label_key
+        if label_key in ('species', 'id'):
+            return self.taxa_table['species'].data[:]
+        else:
+            return self.taxa_table[label_key].elements.data[:]
+
     @property
     def n_outputs(self):
         return self.__n_outputs
