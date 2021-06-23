@@ -5,6 +5,8 @@ import os
 import h5py
 import torch.nn as nn
 
+from .. import model
+
 __all__ = ['DepSepBlock', 'InvertedResidualBlock', 'SqueezeExcite',
           'EffNet_b0']
 
@@ -97,7 +99,7 @@ class SqueezeExcite(nn.Module):
         out = self.layer(x)
         return out + x
     
-    
+@model("effnet-b0")    
 class EffNet_b0(nn.Module):
     def __init__(self, param_list=p_list, avg_out=200, out_feats=512, n_classes=18):
         super(EffNet_b0, self).__init__()
