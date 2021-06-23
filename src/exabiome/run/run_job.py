@@ -51,7 +51,7 @@ def run_train(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('input', help='the input file to use')
     parser.add_argument('config', help='the config file to use')
-    parser.add_argument('sh', nargs='?', help='the input file to use')
+    parser.add_argument('sh', nargs='?', help='a path to write the shell script to')
 
     parser.add_argument('-o', '--outdir',      help="the output directory", default=None)
     parser.add_argument('-m', '--message',     help="message to write to log file", default=None)
