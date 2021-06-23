@@ -159,7 +159,8 @@ class DistanceCollater:
         if len(dmat.shape) == 1:
             from scipy.spatial.distance import squareform
             dmat = squareform(dmat)
-        self.dmat = torch.as_tensor(dmat, dtype=torch.float).pow(2)
+        #self.dmat = torch.as_tensor(dmat, dtype=torch.float).pow(2)
+        self.dmat = torch.as_tensor(dmat, dtype=torch.float).sqrt()
 
     def __call__(self, samples):
         """
@@ -383,6 +384,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     if downsample is not None:
         index, _, stratify, _ = train_test_split(index, stratify,
                                                  train_size=downsample,
+                                                 stratify=stratify,
                                                  random_state=random_state)
 
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
@@ -433,30 +435,35 @@ def get_loader(dataset, distances=False, **kwargs):
 
 class DeepIndexDataModule(pl.LightningDataModule):
 
-    def __init__(self, hparams, inference=False):
+    def __init__(self, hparams, inference=False, keep_open=False):
         super().__init__()
         self.hparams = hparams
-        # self.dataset, self.io = process_dataset(self.hparams, inference=inference)
 
-        self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=self.hparams.num_workers==0)
-        if self.hparams.load:
-            self.dataset.load()
         kwargs = dict(random_state=self.hparams.seed,
                       batch_size=self.hparams.batch_size,
-                      pin_memory=False, #self.hparams.pin_memory,
-                      shuffle=self.hparams.shuffle,
-                      num_workers=self.hparams.num_workers)
+                      downsample=self.hparams.downsample)
+        if inference:
+            self.hparams.manifold = False
+            self.hparams.graph = False
+            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open) #getattr(self.hparams, 'num_workers', 0)==0)
+            #kwargs.pop('num_workers', None)
+            #kwargs.pop('multiprocessing_context', None)
+        else:
+            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open) #getattr(self.hparams, 'num_workers', 0)==0)
+            if self.hparams.load:
+                self.dataset.load()
+            kwargs['pin_memory'] = False
+            kwargs['shuffle'] = self.hparams.shuffle
+            kwargs.update(self.hparams.loader_kwargs)
+
+        kwargs['num_workers'] = self.hparams.num_workers
         if self.hparams.num_workers > 0:
             kwargs['multiprocessing_context'] = 'spawn'
             kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
-        kwargs.update(self.hparams.loader_kwargs)
-        print("------------- DataLoader kwargs:", str(kwargs), file=sys.stderr)
-        if inference:
-            kwargs['distances'] = False
-            kwargs.pop('num_workers', None)
-            kwargs.pop('multiprocessing_context', None)
+
+        #print("------------- DataLoader kwargs:", str(kwargs), file=sys.stderr)
         tr, te, va = train_test_loaders(self.dataset, **kwargs)
         self.loaders = {'train': tr, 'test': te, 'validate': va}
 
@@ -575,11 +582,16 @@ class LazySeqDataset(Dataset):
         self.window, self.step = check_window(hparams.window, hparams.step)
         self.revcomp = not hparams.fwd_only
 
+
+        self._label_key = hparams.tgt_tax_lvl if hparams.classify else 'id'
+        self._label_dtype = torch.int64
+
         # open to get dataset length
         self.open()
         self.__len = len(self.difile)
         self.sample_labels = self.difile.labels # taxa_table[hparams.tgt_tax_lvl].data
         self.taxa_labels, self.taxa_counts = np.unique(self.sample_labels, return_counts=True)
+        self.label_names = self.difile.get_label_classes()
 
         self.vocab_len = len(self.orig_difile.seq_table['sequence'].target.elements)
 
@@ -597,14 +609,10 @@ class LazySeqDataset(Dataset):
             self.distances = self.difile.distances.data[:]
             if hparams.tgt_tax_lvl != 'species':
                 raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
-            self._label_key = 'id'
-            self._label_dtype = torch.int64
         elif hparams.graph:
             self.graph = True
             if hparams.tgt_tax_lvl != 'species':
                 raise ValueError("must run graph learning (-M) method with 'species' taxonomic level (-t)")
-            self._label_key = 'id'
-            self._label_dtype = torch.int64
 
             # compute the reverse look up to go from taxon id to node id
             leaves = self.difile.tree_graph.leaves[:]
@@ -617,18 +625,20 @@ class LazySeqDataset(Dataset):
             self.node_ids = node_ids
         elif hparams.classify:
             self.classify = True
-            self._label_key = self.hparams.tgt_tax_lvl
-            self._label_dtype = torch.int64
         else:
             raise ValueError('classify (-C) or manifold (-M) should be set')
 
         self.__ohe = hparams.ohe
 
         if not keep_open:
+            self.close()
+
+    def close(self):
+        if self.io is not None:
             self.io.close()
-            self.difile = None
-            self.orig_difile = None
-            self.io = None
+        self.difile = None
+        self.orig_difile = None
+        self.io = None
 
     def get_graph(self):
         """Return a csr_matrix representation of the tree graph"""
@@ -652,7 +662,6 @@ class LazySeqDataset(Dataset):
             self.load()
 
     def worker_init(self, worker_id):
-        print("------------- Opening DeepIndexFile for DataLoader worker %s\n\n" % worker_id, file=sys.stderr)
         self.open()
 
     def set_chunks(self, window, step=None):
