@@ -37,6 +37,7 @@ def get_conf_args():
     return {
         'model': dict(help='the model to run. see show-models for a list of available models', choices=list(models._models.keys()), default='resnet18'),
         'seed': dict(type=parse_seed, default='', help='seed to use for train-test split'),
+        'downsample': dict(type=float, default=None, help='seed to use for train-test split'),
         'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns, or ens'),
         'ens_beta': dict(help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9),
         'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify', default=32),
