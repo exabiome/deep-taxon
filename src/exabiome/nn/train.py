@@ -22,6 +22,7 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin
+from pytorch_lightning.plugins.environments import SLURMEnvironment
 from .lsf_environment import LSFEnvironment
 
 import torch
