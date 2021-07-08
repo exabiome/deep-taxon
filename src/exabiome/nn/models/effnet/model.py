@@ -5,10 +5,11 @@ import os
 import h5py
 import torch.nn as nn
 
-from .. import model
+from .. import model, AbstractLit
+
 
 __all__ = ['DepSepBlock', 'InvertedResidualBlock', 'SqueezeExcite',
-          'EffNet_b0']
+          'EffNet_b0',]# 'p_list']
 
 p_list = [
         [[16,96,3,24,3,2,1], [24,144,6,24,3,1,1]], #layer 1
@@ -100,13 +101,27 @@ class SqueezeExcite(nn.Module):
         return out + x
     
 @model("effnet-b0")    
+#class EffNet(AbstractLit):
 class EffNet_b0(nn.Module):
-    def __init__(self, param_list=p_list, avg_out=200, out_feats=512, n_classes=18):
+    def __init__(self, #param_list=p_list, 
+                ):#avg_out=200, out_feats=512, n_classes=18):
         super(EffNet_b0, self).__init__()
+        #super(EffNet, self).__init__()
         
-        self.avg_out = avg_out
-        self.out_feats = out_feats
-        self.n_classes = n_classes
+        param_list = [
+        [[16,96,3,24,3,2,1], [24,144,6,24,3,1,1]], #layer 1
+        [[24,144,6,40,5,2,2], [40,240,10,40,5,1,2]], #layer 2 
+        [[40,240,10,80,3,2,1],[80,480,20,80,3,1,1], 
+                                [80,480,20,80,3,1,1]], #layer 3
+        [[80,480,20,112,5,1,2], [112,672,28,112,5,1,2], 
+                                 [112,672,28,112,5,1,2]], #layer 4
+        [[112,672,28,192,5,2,2],[192,1152,48,192,5,1,2],
+         [192,1152,48,192,5,1,2], [192,1152,48,192,5,1,2]], #layer 5
+        [[192,1152,48,320,3,2,1]] #layer 6
+         ]
+        self.avg_out = 20#avg_out
+        self.out_feats = 512#out_feats
+        self.n_classes = 16#n_classes
         self.param_list = param_list
 
         self.conv1 = nn.Conv1d(1, 32, kernel_size=3, stride=2, padding=1)
@@ -120,6 +135,8 @@ class EffNet_b0(nn.Module):
         self.conv2 = nn.Conv1d(320, self.n_classes, 1, 1)
         self.bn2 = nn.BatchNorm1d(self.n_classes)
         self.avgpool = nn.AdaptiveAvgPool1d(output_size=self.avg_out)
+        print(self.avg_out)
+        print(self.out_feats)
         self.fc = nn.Linear(in_features=self.avg_out, 
                             out_features=self.out_feats)
         
@@ -154,3 +171,11 @@ class EffNet_b0(nn.Module):
     
     def forward(self, x):
         return self._forward_impl(x)
+
+    
+    
+#@model('effnet-b0')
+#class EffNetB0(EffNet):
+#    def __init__(self):
+#        super().__init__()
+        
