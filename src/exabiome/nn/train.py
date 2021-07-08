@@ -21,7 +21,7 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
-from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin
+from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
 from pytorch_lightning.plugins.environments import SLURMEnvironment
 from .lsf_environment import LSFEnvironment
 
@@ -263,6 +263,7 @@ def process_args(args=None, return_io=False):
             print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
     else:
         targs['accelerator'] = CPUAccelerator(
+            precision_plugin = PrecisionPlugin(),
             training_type_plugin = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
         )
 
