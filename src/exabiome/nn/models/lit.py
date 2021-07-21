@@ -61,17 +61,34 @@ class AbstractLit(LightningModule):
         self.loaders = {'train': tr, 'test': te, 'validate': va}
 
     def configure_optimizers(self):
+        optimizer = None
         if self.hparams.optimizer == 'lamb':
-            return ptoptim.Lamb(self.parameters(), lr=self.hparams.lr)
-        if self.hparams.lr_scheduler == 'adam':
-            return optim.Adam(self.parameters(), lr=self.hparams.lr)
+            optimizer = ptoptim.Lamb(self.parameters(), lr=self.hparams.lr)
+        elif self.hparams.optimizer == 'adam':
+            optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
+        elif self.hparams.optimizer == 'adamw':
+            optimizer = optim.AdamW(self.parameters(), lr=self.hparams.lr)
         else:
             optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
-            scheduler = None
-            if self.hparams.lr_scheduler == 'cyclic':
-                scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
-            elif self.hparams.lr_scheduler == 'plateau':
-                scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+
+        scheduler = None
+        if self.hparams.lr_scheduler == 'cyclic':
+            scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
+        elif self.hparams.lr_scheduler == 'plateau':
+            print ("USING SCHEDULER")
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+            scheduler = {
+                'scheduler': scheduler,         # The LR scheduler instance (required)
+                'interval': 'epoch',        # The unit of the scheduler's step size, could also be 'step'
+                'frequency': 1,             # The frequency of the scheduler
+                'monitor': self.val_loss,      # Metric for `ReduceLROnPlateau` to monitor
+                'strict': True,             # Whether to crash the training if `monitor` is not found
+                'name': None,               # Custom name for `LearningRateMonitor` to use
+            }
+
+        if scheduler is None:
+            return optimizer
+        else:
             return [optimizer], [scheduler]
 
     @staticmethod
