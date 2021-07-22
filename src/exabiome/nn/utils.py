@@ -69,9 +69,8 @@ def process_model(args, inference=False, taxa_table=None):
 
     if args.checkpoint is not None:
         try:
-            ckpt = torch.load(args.checkpoint)
-            ckpt_hparams = Namespace(**ckpt['hyper_parameters'])
-            model = model_cls.load_from_checkpoint(args.checkpoint, hparams=ckpt_hparams)
+            model = model_cls.load_from_checkpoint(args.checkpoint)
+            ckpt_hparams = model.hparams
             if not inference:
                 if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
                     if taxa_table is None:
@@ -93,8 +92,8 @@ def process_model(args, inference=False, taxa_table=None):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
         _check_hparams(args)
-        if taxa_table is not None:
-            args.labels = taxa_table['phylum'].elements.data[:]
+        #if taxa_table is not None:
+        #    args.labels = taxa_table['phylum'].elements.data[:]
         model = model_cls(args)
 
     return model

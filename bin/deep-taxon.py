@@ -23,6 +23,8 @@ command_dict = {
     'sample-nonrep': Command('gtdb.sample.sample_nonrep', 'Get test strain genomes'),
     'sample-gtdb': Command('gtdb.sample.sample_tree', 'Sample taxa from a tree'),
     'train': Command('nn.train.run_lightning', 'Run training with PyTorch Lightning'),
+    'train-conf': Command('nn.train.print_config_options', 'Print the available options for a config file'),
+    'conf-tmpl': Command('nn.train.print_config_templ', 'Print an empty config file'),
     'show-args': Command('nn.train.print_args', 'display input arguments for training run'),
     'lr-find': Command('nn.train.lightning_lr_find', 'Run Lightning Learning Rate finder'),
     'cuda-sum': Command('nn.train.cuda_sum', 'Summarize what Torch sees in CUDA land'),
@@ -32,6 +34,7 @@ command_dict = {
     'clf-sum': Command('nn.summarize.classifier_summarize', 'Summarize training/inference results'),
     'show-models': Command('nn.utils.show_models', 'Show available models'),
     'train-job': Command('run.run_job.run_train', 'Run a training job'),
+    'test-dist': Command('run.disttest.test_dist', 'Broadcast a tensor to test the system'),
     'probe': Command('nn.probe.probe', 'Probe the environment of the system'),
     'test-input': Command('testing.dataset.check_sequences', 'Test input file against original fasta files'),
     'dset-info': Command('nn.loader.dataset_stats', 'Read a dataset and print the number of samples to stdout'),
@@ -51,9 +54,10 @@ def print_help():
     print()
 
 
-if len(sys.argv) == 1:
-    print_help()
-else:
-    cmd = sys.argv[1]
-    func = command_dict[cmd].get_func()
-    func(sys.argv[2:])
+if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        print_help()
+    else:
+        cmd = sys.argv[1]
+        func = command_dict[cmd].get_func()
+        func(sys.argv[2:])

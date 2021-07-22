@@ -1,3 +1,17 @@
+import numpy as np
+
+from hdmf.common import DynamicTableRegion, EnumData, VectorIndex
+
+
+def load_elements(table):
+    for colname in table.colnames:
+        col = table[colname]
+        if isinstance(col, VectorIndex):
+            col = col.target
+        if isinstance(col, EnumData):
+            col.elements.transform(np.asarray)
+        elif isinstance(col, DynamicTableRegion):
+            load_elements(col.table)
 
 def check_sequences(argv=None):
 
@@ -29,16 +43,16 @@ def check_sequences(argv=None):
 
     indices = np.sort(indices)
 
-    seqs = difile.seq_table[indices].sort_values('taxon_taxon_id')
 
-    #seqs = [difile.seq_table.get(i, df=False) for i in indices]
-    #seqs = [difile.seq_table.get(i) for i in indices]
+    load_elements(difile.seq_table)
 
-    taxon_ids = np.unique(seqs['taxon_taxon_id'])
+    seqs = difile.seq_table[indices].sort_values('genome_taxon_id')
+
+    taxon_ids = np.unique(seqs['genome_taxon_id'])
     bad_seqs = list()
     for tid in taxon_ids:
         path = get_genomic_path(tid, args.fadir)
-        subdf = seqs[seqs['taxon_taxon_id'] == tid]
+        subdf = seqs[seqs['genome_taxon_id'] == tid]
         for seq in skbio.io.read(path, format='fasta'):
             mask = subdf['sequence_name'] == seq.metadata['id']
             if mask.any():

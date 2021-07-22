@@ -48,7 +48,10 @@ class SlurmJob(AbstractJob):
         self.add_addl_jobflag('-gpus-per-task', 1)
 
         n_gpus = self.gpus
+        self.use_bb = False
 
+    def set_use_bb(self, use_bb=True):
+        self.use_bb = use_bb
 
     def write_run(self, f, command, command_options, options):
         print(f'srun -u {command}', file=f)

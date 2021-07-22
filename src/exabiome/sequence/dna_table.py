@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import sklearn.neighbors as skn
 
-from hdmf.common import VectorIndex, VectorData, DynamicTable,\
+from hdmf.common import VectorIndex, VectorData, DynamicTable, CSRMatrix,\
                         DynamicTableRegion, register_class, EnumData
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf.data_utils import DataIO
@@ -19,7 +19,8 @@ __all__ = ['DeepIndexFile',
            'RevCompFilter',
            'SequenceTable',
            'GenomeTable',
-           'TaxaTable']
+           'TaxaTable',
+           'chunk_sequence']
 
 NS = 'deep-index'
 
@@ -360,6 +361,22 @@ class NewickString(Data):
     pass
 
 
+@register_class('TreeGraph', NS)
+class TreeGraph(CSRMatrix):
+
+    __fields__ = ('leaves', 'table')
+
+    @docval(*get_docval(CSRMatrix.__init__),
+            {'name': 'leaves', 'type': ('array_data', 'data'), 'doc': ('the index into *table* for each node in the graph. '
+                                                                       'Internodes (i.e. non-leaf nodes) should have a -1')},
+            {'name': 'table', 'type': GenomeTable, 'doc': 'the GenomeTable that the leaves in the tree belong to'})
+    def __init__(self, **kwargs):
+        leaves, table = popargs('leaves', 'table', kwargs)
+        call_docval_func(super().__init__, kwargs)
+        self.leaves = leaves
+        self.table = table
+
+
 @register_class('DeepIndexFile', NS)
 class DeepIndexFile(Container):
 
@@ -368,6 +385,7 @@ class DeepIndexFile(Container):
     __fields__ = ({'name': 'seq_table', 'child': True},
                   {'name': 'taxa_table', 'child': True},
                   {'name': 'genome_table', 'child': True},
+                  {'name': 'tree_graph', 'child': True},
                   {'name': 'distances', 'child': True},
                   {'name': 'tree', 'child': True})
 
@@ -375,19 +393,22 @@ class DeepIndexFile(Container):
             {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
             {'name': 'genome_table', 'type': GenomeTable, 'doc': 'the table storing taxonomic information about species in this file'},
             {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'},
+            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree'},
             {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information', 'default': None})
     def __init__(self, **kwargs):
-        seq_table, taxa_table, genome_table, distances, tree = popargs('seq_table', 'taxa_table', 'genome_table', 'distances', 'tree', kwargs)
+        seq_table, taxa_table, genome_table, distances, tree, tree_graph = popargs('seq_table', 'taxa_table', 'genome_table',
+                                                                                   'distances', 'tree', 'tree_graph', kwargs)
         call_docval_func(super().__init__, {'name': 'root'})
         self.seq_table = seq_table
         self.taxa_table = taxa_table
         self.genome_table = genome_table
-        self.__n_outputs = len(taxa_table)
+        self.tree_graph = tree_graph
         self.distances = distances
         self.tree = tree
         self._sanity = False
         self._sanity_features = 5
-        self.__labels = None
+        self.labels = None
+        self.__n_outputs = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
         self.set_label_key('id')
         self.__rev = False
@@ -395,11 +416,29 @@ class DeepIndexFile(Container):
 
     def set_label_key(self, val):
         self.label_key = val
-        if val == 'species':         # if species is specified, just use the id column
+        genome_labels = None
+        if val in ('species', 'id'):         # if species is specified, just use the id column
             self.label_key = 'id'
+            genome_labels = self.genome_table['rep_idx'].data[:]
+            self.__n_outputs = len(self.taxa_table)
+
         elif val in self.taxonomic_levels:
             self.__get_kwargs['index'] = True
             self.__n_outputs = len(self.taxa_table[self.label_key].elements)
+            genome_labels = self.genome_table['rep_idx'].data[:]
+            genome_labels = self.taxa_table[val].data[genome_labels]
+        else:
+            raise ValueError("Unrecognized label key: '%s'" % val)
+
+        genome_idx = self.seq_table['genome'].data[:]
+        self.labels = genome_labels[genome_idx]
+
+    def get_label_classes(self, label_key=None):
+        label_key = label_key or self.label_key
+        if label_key in ('species', 'id'):
+            return self.taxa_table['species'].data[:]
+        else:
+            return self.taxa_table[label_key].elements.data[:]
 
     @property
     def n_outputs(self):
@@ -413,14 +452,6 @@ class DeepIndexFile(Container):
         if revcomp and self.seq_table.vocab_type != 'dna':
                 raise ValueError("Can only set reverse complement on DNA sequence data")
         self.__rev = revcomp
-
-    @property
-    def labels(self):
-        if self.__labels is None:
-            reps = self.genome_table['rep_idx'].data[:]
-            genome_idx = self.seq_table['genome'].data[:]
-            self.__labels = reps[genome_idx]
-        return self.__labels
 
     @property
     def n_emb_components(self):
@@ -500,8 +531,7 @@ class AbstractChunkedDIFile(DIFileFilter):
         e = self.end[i]
         item['seq'] = item['seq'][s:e]
         item['seq_idx'] = seq_i
-        item['id'] = i
-        # item['seq_name'] += f'|{s}-{e}'
+        item['id'] = i if i >= 0 else len(self.start) + i
         item['length'] = e - s
         return item
 
@@ -514,36 +544,57 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
     """
 
     def __init__(self, difile, wlen, step=None, min_seq_len=100):
-        if not isinstance(difile, (DeepIndexFile, DIFileFilter)):
-            raise ValueError(f'difile must be a DeepIndexFile or a DIFileFilter, got {type(difile)}')
-        if step is None:
-            step = wlen
+        seq_idx, chunk_start, chunk_end, labels = chunk_sequence(difile, wlen, step=step, min_seq_len=min_seq_len)
         self.wlen = wlen
         self.step = step
         self.min_seq_len = min_seq_len
-
-        lengths = difile.seq_table['length'][:].astype(int)
-        # compute the number of chunks proced by each sequecne by adding
-        # the number of full chunks in each sequence to the number of incomplete chunks
-        n_chunks = ((lengths // self.step) +
-                    (lengths % self.step > 0))                  # the number of chunks each sequence will produce
-        labels = np.repeat(difile.labels, n_chunks)             # the labels for each chunks
-        seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
-        chunk_start = list()
-        for i in range(len(difile)):
-            chunk_start.append(np.arange(0, lengths[i], self.step))
-        chunk_start = np.concatenate(chunk_start)               # the start of each chunk in it's respective sequence
-        chunk_end = chunk_start + self.wlen                     # the end of each chunk in it's respective sequence
-        chunk_end = np.min(np.array([chunk_end,                 # trim any ends that go over the end of a sequence
-                                     np.repeat(lengths, n_chunks)]), axis=0)
-
-        mask = (chunk_end - chunk_start) >= self.min_seq_len    # get rid of any sequences that are less than the minimum length
-        labels = labels[mask]
-        seq_idx = seq_idx[mask]
-        chunk_start = chunk_start[mask]
-        chunk_end = chunk_end[mask]
-
         super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
+
+def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
+    """
+    Compute start and ends for a chunked sequence
+
+    Args:
+        difile (DeepIndexFile)      : the DeepIndexFile with the sequence data to chunk
+        wlen (int)                  : the window length to chunk into
+        step (int)                  : the step between window starts. by default this is wlen
+                                      i.e. non-overlapping windows
+        min_seq_len (int)           : the minimum sequence length to keep
+
+    Returns:
+        A tuple of (seq_idx, chunk-start, chunk_end, labels)
+        seq_idx (array)             : the index of the sequence that each chunk is derived from
+        chunk_start (array)         : the start of each chunk in its respective sequence
+        chunk_end (array)           : the end of each chunk in its respective sequence
+        labels (array)              : the taxonomic labels of each chunk
+    """
+    if not isinstance(difile, (DeepIndexFile, DIFileFilter)):
+        raise ValueError(f'difile must be a DeepIndexFile or a DIFileFilter, got {type(difile)}')
+    if step is None:
+        step = wlen
+
+    lengths = difile.seq_table['length'][:].astype(int)
+    # compute the number of chunks proced by each sequecne by adding
+    # the number of full chunks in each sequence to the number of incomplete chunks
+    n_chunks = ((lengths // step) +
+                (lengths % step > 0))                  # the number of chunks each sequence will produce
+    labels = np.repeat(difile.labels, n_chunks)             # the labels for each chunks
+    seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
+    chunk_start = list()
+    for i in range(len(difile)):
+        chunk_start.append(np.arange(0, lengths[i], step))
+    chunk_start = np.concatenate(chunk_start)               # the start of each chunk in it's respective sequence
+    chunk_end = chunk_start + wlen                     # the end of each chunk in it's respective sequence
+    chunk_end = np.min(np.array([chunk_end,                 # trim any ends that go over the end of a sequence
+                                 np.repeat(lengths, n_chunks)]), axis=0)
+
+    mask = (chunk_end - chunk_start) >= min_seq_len    # get rid of any sequences that are less than the minimum length
+    labels = labels[mask]
+    seq_idx = seq_idx[mask]
+    chunk_start = chunk_start[mask]
+    chunk_end = chunk_end[mask]
+    return seq_idx, chunk_start, chunk_end, labels
+
 
 
 class RevCompFilter(DIFileFilter):
@@ -583,12 +634,13 @@ class RevCompFilter(DIFileFilter):
 
     def __init__(self, difile):
         super().__init__(difile)
-        self.labels = np.concatenate([self.labels, self.labels])
+        self.labels = np.concatenate([difile.labels, difile.labels])
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
+        self.__len = 2*len(self.difile)
 
     def __len__(self):
-        return 2*len(self.difile)
+        return self.__len
 
     def __getitem__(self, arg):
         oarg = arg
@@ -596,8 +648,8 @@ class RevCompFilter(DIFileFilter):
         item = self.difile[arg]
         try:
             if rev:
-                item['seq'] = self.rcmap[item['seq'].long()]
+                item['seq'] = self.rcmap[item['seq'].astype(int)]
         except AttributeError as e:
             raise ValueError("Cannot run without loading data. Use -l to load data") from e
-        item['id'] = oarg
+        item['id'] = oarg if oarg >= 0 else self.__len + oarg
         return item

@@ -20,11 +20,11 @@ python setup.py install
 ```
 
 ## Commands
-All commands can be accessed with the `deep-index` executable. Below is the `deep-index` usage statement, which
+All commands can be accessed with the `deep-taxon` executable. Below is the `deep-taxon` usage statement, which
 lists the available commands.
 
 ```bash
-Usage: deep-index <command> [options]
+Usage: deep-taxon <command> [options]
 Available commands are:
 
     train           Run training with PyTorch Lightning
@@ -42,26 +42,26 @@ Available commands are:
 ## Sampling taxa to train with
 This command will sample taxa from a GTDB tree.
 ```bash
-deep-index sample-gtdb
+deep-taxon sample-gtdb
 ```
 
 ## Downloading data from NCBI
 This command will retrieve sequence files from NCBI. 
 ```bash
-deep-index ncbi-fetch
+deep-taxon ncbi-fetch
 ```
 
 ## Converting Data
 This command can be used to convert sequence data into an aggregated file with data prepared for training.
 ```bash
-deep-index prepare-data
+deep-taxon prepare-data
 ```
 
 ## Training neural networks
 To train neural networks, we use PyTorch Lightning. This code can be executed with the following command.
 
 ```bash
-deep-index train
+deep-taxon train
 ```
 This command will split up the input dataset into training, validation, and testing data. The seed used to do this
 will be saved in the checkpoint, so subsequent use, such as for testing, will have the same split.
@@ -73,7 +73,7 @@ this command with the checkpoint produced during training. When it is finished, 
 the same directory that the input checkpoint file was saved.
 
 ```bash
-deep-index infer
+deep-taxon infer
 ```
 
 ## Network output summary
@@ -83,7 +83,7 @@ PNG figure with a scatter plot of a 2D UMAP embedding if the model outputs. It w
 random forest classifier and plot a classification report 
 
 ```bash
-deep-index summarize
+deep-taxon summarize
 ```
 
 # Example workflow
@@ -98,7 +98,7 @@ will need to download the metadata file (i.e. `*_metadata*`) and the tree file (
 Once you have a metadata file and a tree file, you can run `sample-gtdb` to generate a list of NCBI accessions.
 
 ```bash
-$ deep-index sample-gtdb ar122_metadata_r89.tsv ar122_r89.tree > my_accessions.txt
+$ deep-taxon sample-gtdb ar122_metadata_r89.tsv ar122_r89.tree > my_accessions.txt
 ```
 
 ### Step 2 - Download files from NCBI
@@ -108,7 +108,7 @@ have chosen. If you already have files downloaded, you can skip this step. This 
 so if you already have the files downloaded, it will not re-download them.
 
 ```bash 
-$ deep-index ncbi-fetch -f my_accessions.txt ncbi_sequences
+$ deep-taxon ncbi-fetch -f my_accessions.txt ncbi_sequences
 ```
 
 Note that you will need to use the `-f` flag to indication that first arguemnt is a file containing a 
@@ -124,7 +124,7 @@ downloads in parallel.
 Now that sequence files are downloaded, sequence data can be converted into a input file for training.
 
 ```bash
-$ deep-index prepare-data -V -G my_accessions.txt ncbi_sequences ar122_metadata_r89.tsv ar122_r89.tree my_input.h5
+$ deep-taxon prepare-data -V -G my_accessions.txt ncbi_sequences ar122_metadata_r89.tsv ar122_r89.tree my_input.h5
 ```
 
 This will convert *genomic* sequence (i.e. `-G` flag) for the accessions you stored in `my_accessions.txt`. Data
@@ -133,10 +133,10 @@ will be read from the directory `ncbi_sequences`.
 ## Getting non-representative genomes
 
 The previous workflow will generate an input file for *representative* genomes. You may want to use non-representatives.
-To do this, you can use the command `deep-index sample-nonrep`
+To do this, you can use the command `deep-taxon sample-nonrep`
 
 ```bash
-$ deep-index sample-nonrep my_accessions.txt ar122_metadata_r89.tsv > nonrep_accessions.txt
+$ deep-taxon sample-nonrep my_accessions.txt ar122_metadata_r89.tsv > nonrep_accessions.txt
 ```
 
 This will print the accessions of non-representative genomes to the file `nonrep_accessions.txt`. You can also 

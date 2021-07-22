@@ -1,5 +1,6 @@
 from .. import train_test_loaders
 from pytorch_lightning import LightningModule
+import torch_optimizer as ptoptim
 import torch.optim as optim
 import torch.nn as nn
 import torch
@@ -24,7 +25,8 @@ class AbstractLit(LightningModule):
 
     def __init__(self, hparams):
         super().__init__()
-        self.hparams = self.check_hparams(hparams)
+        #self.hparams = self.check_hparams(hparams)
+        self.save_hyperparameters(hparams)
         if self.hparams.manifold:
             self._loss = DistMSELoss()
         elif self.hparams.classify:
@@ -59,15 +61,34 @@ class AbstractLit(LightningModule):
         self.loaders = {'train': tr, 'test': te, 'validate': va}
 
     def configure_optimizers(self):
-        if self.hparams.lr_scheduler == 'adam':
-            return optim.Adam(self.parameters(), lr=self.hparams.lr)
+        optimizer = None
+        if self.hparams.optimizer == 'lamb':
+            optimizer = ptoptim.Lamb(self.parameters(), lr=self.hparams.lr)
+        elif self.hparams.optimizer == 'adam':
+            optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
+        elif self.hparams.optimizer == 'adamw':
+            optimizer = optim.AdamW(self.parameters(), lr=self.hparams.lr)
         else:
             optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
-            scheduler = None
-            if self.hparams.lr_scheduler == 'cyclic':
-                scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
-            elif self.hparams.lr_scheduler == 'plateau':
-                scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+
+        scheduler = None
+        if self.hparams.lr_scheduler == 'cyclic':
+            scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
+        elif self.hparams.lr_scheduler == 'plateau':
+            print ("USING SCHEDULER")
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+            scheduler = {
+                'scheduler': scheduler,         # The LR scheduler instance (required)
+                'interval': 'epoch',        # The unit of the scheduler's step size, could also be 'step'
+                'frequency': 1,             # The frequency of the scheduler
+                'monitor': self.val_loss,      # Metric for `ReduceLROnPlateau` to monitor
+                'strict': True,             # Whether to crash the training if `monitor` is not found
+                'name': None,               # Custom name for `LearningRateMonitor` to use
+            }
+
+        if scheduler is None:
+            return optimizer
+        else:
             return [optimizer], [scheduler]
 
     @staticmethod

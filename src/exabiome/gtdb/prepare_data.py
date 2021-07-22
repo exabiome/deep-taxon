@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import scipy.sparse as sps
 import skbio.stats.distance as ssd
 from skbio.sequence import DNA, Protein
 from sklearn.preprocessing import LabelEncoder
@@ -8,12 +9,43 @@ import skbio.io
 import os
 from functools import partial
 
+
+def add_branches(node, mat, names):
+    name = node.name
+    names[node.id] = name
+    if len(node.children) == 0:
+        return
+    if len(node.children) != 2:
+        raise ValueError("Non-binary tree! I do not know how to handle this")
+    for c in node.children:
+        mat[node.id, c.id] = c.length
+        add_branches(c, mat, names)
+
+
+def get_tree_graph(node, genome_table):
+    node.to_array()
+    n_nodes = 2 * len(list(node.tips())) - 1
+    adj = sps.lil_matrix((n_nodes, n_nodes))
+    names = np.zeros(n_nodes, dtype='U15')
+    add_branches(node, adj, names)
+
+    tids = genome_table.taxon_id
+    gt_indices = np.ones(len(names)) * -1
+    for i, name in enumerate(names):
+        if name.startswith('GC'):
+            gt_indices[i] = np.where(tids.data == name)[0][0]
+
+    return adj.tocsr(), gt_indices
+
+
 def seqlen(path):
     kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
     l = 0
+    i = 0
     for seq in skbio.io.read(path, **kwargs):
         l += len(seq)
-    return l
+        i += 1
+    return i, l
 
 def readseq(path):
     kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
@@ -89,6 +121,7 @@ def prepare_data(argv=None):
     import argparse
     import io
     import sys
+    import tempfile
     import logging
     import h5py
     import pandas as pd
@@ -105,7 +138,7 @@ def prepare_data(argv=None):
 
     from ..utils import get_faa_path, get_fna_path, get_genomic_path
     from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator, DNAVocabGeneIterator
-    from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable
+    from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable, TreeGraph
 
     parser = argparse.ArgumentParser()
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
@@ -117,6 +150,7 @@ def prepare_data(argv=None):
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
     parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
+    parser.add_argument('-T', '--total_seq_len', type=int, default=None, help='the total sequence length')
     rep_grp = parser.add_mutually_exclusive_group()
     rep_grp.add_argument('-n', '--nonrep', action='store_true', default=False, help='keep non-representative genomes only. keep both by default')
     rep_grp.add_argument('-r', '--rep', action='store_true', default=False, help='keep representative genomes only. keep both by default')
@@ -293,8 +327,9 @@ def prepare_data(argv=None):
     h5path = args.out
 
     logger.info("reading %d Fasta files" % len(fapaths))
-    logger.info("Total size: %d", sum(os.path.getsize(f) for f in fapaths))
+    logger.info("Total size: %d", sum(list(map_func(os.path.getsize,  fapaths))))
 
+    tmp_h5_file = None
     vocab = None
     if args.iter:
         if args.vocab:
@@ -343,45 +378,42 @@ def prepare_data(argv=None):
             if not args.protein:
                 np.testing.assert_array_equal(vocab, list('ACYWSKDVNTGRWSMHBN'))
 
-            sequence = list()
-            names = list()
-            taxa = list()
-            seqlens = list()
-
             logger.info('counting total number of sqeuences')
+            n_seqs, total_seq_len = np.array(list(zip(*map_func(seqlen, fapaths)))).sum(axis=1)
+            logger.info(f'found {total_seq_len} bases across {n_seqs} sequences')
 
-            map_func = map
-            if args.num_procs > 1:
-                logger.info(f'using {args.num_procs} processes to count sequences')
-                import multiprocessing as mp
-                map_func = mp.Pool(processes=args.num_procs).imap
+            logger.info(f'allocating uint8 array of length {total_seq_len} for sequences')
 
-            lengths = list(map_func(seqlen, fapaths))
-            total_seq_len = sum(lengths)
-            del map_func
-            logger.info(f'found {total_seq_len} bases across {len(lengths)} genomes')
+            tmpdir = tempfile.mkdtemp()
 
+            tmp_h5_file = h5py.File(os.path.join(tmpdir, 'sequences.h5'), 'w')
+            sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression='gzip')
+            seqindex = tmp_h5_file.create_dataset('sequences_index', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
+            genomes = tmp_h5_file.create_dataset('genomes', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
+            seqlens = tmp_h5_file.create_dataset('seqlens', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
+            names = tmp_h5_file.create_dataset('seqnames', shape=(n_seqs,), dtype=h5py.special_dtype(vlen=str), compression='gzip')
+
+            taxa = np.zeros(len(fapaths), dtype=int)
+
+            seq_i = 0
             b = 0
-            sequence = np.zeros(total_seq_len, dtype=np.uint8)
-            seqlens = list()
-            genomes = list()
             for genome_i, fa in tqdm(enumerate(fapaths), total=len(fapaths)):
                 kwargs = {'format': 'fasta', 'constructor': skbio_cls, 'validate': False}
                 taxid = taxa_ids[genome_i]
                 rep_taxid = taxdf['gtdb_genome_representative'][genome_i]
-                taxa.append(np.where(rep_taxdf.index == rep_taxid)[0][0])
+                taxa[genome_i] = np.where(rep_taxdf.index == rep_taxid)[0][0]
                 for seq in skbio.io.read(fa, **kwargs):
                     enc_seq = vocab_it.encode(seq)
-                    seqlens.append(len(enc_seq))
-                    e = b + seqlens[-1]
+                    e = b + len(enc_seq)
                     sequence[b:e] = enc_seq
+                    seqindex[seq_i] = e
+                    genomes[seq_i] = genome_i
+                    seqlens[seq_i] = len(enc_seq)
+                    names[seq_i] = vocab_it.get_seqname(seq)
                     b = e
-                    names.append(vocab_it.get_seqname(seq))
-                    genomes.append(genome_i)
-            #seqlens = np.array([len(s) for s in sequence])
-            seqindex = np.cumsum(seqlens).astype(int)
-            #sequence = np.concatenate(sequence)
-            ids = np.arange(len(seqlens))
+                    seq_i += 1
+            ids = tmp_h5_file.create_dataset('ids', data=np.arange(n_seqs), dtype=int)
+
         else:
             raise NotImplementedError('cannot load all data into memory unless using vocab encoding')
 
@@ -391,6 +423,10 @@ def prepare_data(argv=None):
 
     genome_table = GenomeTable('genome_table', 'information about the genome each sequence comes from',
                                taxa_ids, taxa, taxa_table=taxa_table)
+
+    adj, gt_indices = get_tree_graph(root, genome_table)
+    tree_graph = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
+
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
                          io.set_dataio(names,    compression='gzip', chunks=True),
@@ -403,15 +439,20 @@ def prepare_data(argv=None):
                          vocab=vocab)
 
 
-    difile = DeepIndexFile(seq_table, taxa_table, genome_table, tree, **di_kwargs)
 
-    logger.info(f'Sequence totals {sequence.nbytes} bytes')
+    difile = DeepIndexFile(seq_table, taxa_table, genome_table, tree, tree_graph, **di_kwargs)
+
     before = datetime.now()
-    io.write(difile, exhaust_dci=False)
+    io.write(difile, exhaust_dci=False, link_data=False)
     io.close()
     after = datetime.now()
     delta = (after - before).total_seconds()
+
+    logger.info(f'Sequence totals {sequence.dtype.itemsize * sequence.size} bytes')
     logger.info(f'Took {delta} seconds to write after read')
+
+    if tmp_h5_file is not None:
+        tmp_h5_file.close()
 
     logger.info("reading %s" % (h5path))
     h5size = os.path.getsize(h5path)
