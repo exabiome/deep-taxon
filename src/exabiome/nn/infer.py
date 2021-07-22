@@ -170,16 +170,10 @@ def run_inference(argv=None):
     from hdmf.common import load_namespaces, get_class
 
     load_namespaces(join(resource_filename(__name__, '../hdmf-ml'), 'schema', 'ml', 'namespace.yaml'))
-    # TrainValidationTestMask = get_class('TrainValidationTestMask', 'hdmf-ml')
-    # ClassLabel = get_class('ClassLabel', 'hdmf-ml')
-    # EmbeddedValues = get_class('EmbeddedValues', 'hdmf-ml')
     ResultsTable = get_class('ResultsTable', 'hdmf-ml')
 
-    # tvt_mask = TrainValidationTestMask(name='tvt_mask', description='tvt mask', elements=['train', 'validate', 'test'])
-    # class_label = ClassLabel(name='class_label', description='', training_label=phylum_col)  # TODO where are training labels column?
-    # embedded_vals = EmbeddedValues(name='embedded_vals', description='')
-    # cols = [tvt_mask, tvt_mask.elements, class_label, embedded_vals]
     table = ResultsTable(name='results', description='ml results')
+    table.class_label = phylum_col  # TODO how to access the training labels column?
 
     from hdmf.backends.hdf5 import HDF5IO
 
