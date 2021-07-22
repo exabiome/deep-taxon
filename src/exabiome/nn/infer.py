@@ -180,6 +180,7 @@ def process_args(argv=None):
 
     return tuple(ret)
 
+
 def run_inference(argv=None):
     """Run inference using PyTorch
 
@@ -187,11 +188,9 @@ def run_inference(argv=None):
         argv: a command-line string or argparse.Namespace object to use for running inference
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
-
     model, data_mod, args, addl_targs = process_args(argv=argv)
-    import h5py
-    import os
 
+    import h5py  # noqa: F401
     from pkg_resources import resource_filename
     from hdmf.common import load_namespaces, get_class
     from hdmf.backends.hdf5 import HDF5IO
@@ -210,12 +209,11 @@ def run_inference(argv=None):
     tmp_emb = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
     tmp_label = np.zeros(shape=(n_samples,), dtype=int)
     tmp_olen = np.zeros(shape=(n_samples,), dtype=int)  # original lengths
-    tmp_tvt_mask = np.empty(shape=(n_samples,), dtype=str)
+    tmp_tvt_mask = np.zeros(shape=(n_samples,), dtype=str)
     tmp_seq_id = None
     if args.save_seq_ids:
         tmp_seq_id = np.zeros(shape=(n_samples,), dtype=int)
     indices = list()
-    masks = dict()
 
     for loader_key, loader in args.loaders.items():
         # separate loaders for train, validate, test
@@ -241,7 +239,6 @@ def run_inference(argv=None):
     args.logger.info("writing data")
     # f.create_dataset('label_names', data=data_mod.dataset.label_names, dtype=h5py.special_dtype(vlen=str))
 
-    umap_dset = None
     if args.umap:
         order = np.s_[:]
         if args.debug:
@@ -255,19 +252,22 @@ def run_inference(argv=None):
         from umap import UMAP
         umap = UMAP(n_components=2)
         tfm = umap.fit_transform(tmp_emb[indices])
-        umap_dset = np.empty(shape=(n_samples, 2), dtype=float)
+        umap_dset = np.zeros(shape=(n_samples, 2), dtype=float)
         umap_dset[indices] = tfm
 
+    # create and set up results table
     table = ResultsTable(name='results', description='ml results')
     table.add_column(name='orig_lens', description='original lengths')
     if args.save_seq_ids:
         table.add_column(name='seq_ids', description='sequential ids')
     if args.umap:
         table.add_column(name='viz_emb', description='umap visualization embedding')
+
     for i in range(n_samples):
-        args.logger.info("writing outputs, shape " + str(tmp_emb.shape))
-        args.logger.info("writing labels, shape " + str(tmp_label.shape))
+        args.logger.info("writing embedded_vals, shape " + str(tmp_emb.shape))
+        args.logger.info("writing class_label, shape " + str(tmp_label.shape))
         args.logger.info("writing orig_lens, shape " + str(tmp_olen.shape))
+        args.logger.info("writing tvt_mask, shape " + str(tmp_tvt_mask.shape))
         rkwargs = dict(
             embedded_vals=tmp_emb[i, :],
             class_label=tmp_label[i],
@@ -281,7 +281,7 @@ def run_inference(argv=None):
             args.logger.info("writing viz_emb, shape " + str(umap_dset.shape))
             rkwargs['viz_emb'] = umap_dset[i, :]
         table.add_row(**rkwargs)
-        # TODO consider putting all data for all columns in at once rather than row by row
+        # TODO make more efficient by putting all data for all columns in at once rather than row by row?
 
     args.logger.info(f'saving outputs to {args.output}')
     with HDF5IO(args.output, 'w') as io:
