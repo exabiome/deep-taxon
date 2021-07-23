@@ -510,7 +510,10 @@ def plot_loss(argv=None):
     import pandas as pd
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('csv', type=str, help='the metrics.csv file')
+    parser.add_argument('csv', type=str, nargs='+', help='the metrics.csv file')
+    parser.add_argument('-o', '--outdir', type=str, help='the output directory', default=None)
+    parser.add_argument('-f', '--force', action='store_true', help='overwrite existing plots if they exist', default=False)
+    parser.add_argument('-L', '--labels', type=str, help='a comma-separated string with labels for each CSV', default=None)
     #parser.add_argument('cols', nargs='*', type=str, help='the metrics.csv file')
     args = parser.parse_args(argv)
 
@@ -520,41 +523,111 @@ def plot_loss(argv=None):
         y = y[mask]
         ax.plot(x, y, **kwargs)
 
-    df = pd.read_csv(args.csv, header=0)
+    outdir = args.outdir
 
-    outdir = os.path.dirname(args.csv)
-
-    x = df.step.values
-    tr_loss = df.training_loss.values
-    va_loss = df.validation_loss.values
-    epoch = df.epoch.values
-    epoch = epoch / epoch.max()
-
-    fig, ax = plt.subplots(1)
-    plot(ax, x, tr_loss, color='k', label='training')
-    plot(ax, x, va_loss, color='r', label='validation')
-    ep = epoch*max(np.nanmax(tr_loss), np.nanmax(va_loss))
-    plot(ax, x, ep, color='gray', ls='--', alpha=0.5)
-    ax.set_title('Loss')
-    path = os.path.join(outdir, 'loss.png')
-    print(f'saving loss figure to {path}')
-    fig.savefig(path, dpi=100)
-
-    columns = df.columns
-    if 'validation_acc' in df.columns or 'training_acc' in df.columns:
-        tr_acc = df.training_acc.values
-        va_acc = df.validation_acc.values
-        fig, ax = plt.subplots(1)
-        plot(ax, x, tr_acc, color='k', label='training')
-        plot(ax, x, va_acc, color='r', label='validation')
-        ep = epoch*max(np.nanmax(tr_acc), np.nanmax(va_acc))
-        plot(ax, x, ep, color='gray', ls='--', alpha=0.5)
-        ax.set_title('Accuracy')
-        path = os.path.join(outdir, 'accuracy.png')
-        print(f'saving accuracy figure to {path}')
-        fig.savefig(path, dpi=100)
+    if outdir is None:
+        if len(args.csv) == 1:
+            outdir = os.path.dirname(args.csv[0])
+        else:
+            outdir = '.'
+    loss_path = os.path.join(outdir, 'loss.png')
+    acc_path = os.path.join(outdir, 'accuracy.png')
+    if (os.path.exists(loss_path) or os.path.exists(acc_path)) and not args.force:
+        badpath = loss_path
+        if os.path.exists(acc_path):
+            badpath = acc_path
+        print(f'Output file {badpath} exists - exiting. Use -f or remove file and rerun', file=sys.stderr)
+        sys.exit(1)
 
 
+    if args.labels is not None:
+        labels = args.labels.split(',')
+        if len(labels) != len(args.csv):
+            print(f'found {len(labels)} labels, but found {len(args.csv)} CSV files', file=sys.stderr)
+            sys.exit(1)
+    else:
+        labels = [f'csv-{d}' for d in range(len(args.csv))]
+
+
+    loss_fig, loss_ax = plt.subplots(1)
+    epoch_max = 0
+    loss_max = 0
+    epoch_ratio = None
+    epoch_x = None
+
+
+    acc_fig, acc_ax = None, None
+    acc_max = 0
+
+    colors = np.array(sns.color_palette('tab20', len(args.csv) * 2).as_hex()).reshape((len(args.csv),2)).tolist()
+    for col, csv, label in zip(colors, args.csv, labels):
+        df = pd.read_csv(csv, header=0)
+
+        x = df.step.values
+        tr_loss = df.training_loss.values
+        epoch = df.epoch.values
+        if epoch_ratio is None or epoch.max() > epoch_max:
+            epoch_max = epoch.max()
+            epoch_ratio = epoch
+            epoch_x = x
+
+        plot(loss_ax, x, tr_loss, color=col[1], label=f'{label} (tr)')
+        if 'validation_loss' in df:
+            va_loss = df.validation_loss.values
+            plot(loss_ax, x, va_loss, color=col[0], ls='--', label=f'{label} (val)')
+            loss_max = max(loss_max, np.nanmax(tr_loss))
+
+        columns = df.columns
+        if 'training_acc' in df.columns:
+            if acc_fig is None:
+                acc_fig, acc_ax = plt.subplots(1)
+
+            tr_acc = df.training_acc.values
+            plot(acc_ax, x, tr_acc, color=col[1], label=f'{label} (tr)')
+            if 'validation_acc' in df.columns:
+                va_acc = df.validation_acc.values
+                plot(acc_ax, x, va_acc, color=col[0], ls='--', label=f'{label} (val)')
+
+    def add_epoch(ax, maxval, leg_loc):
+        # calculate epoch values to fit on Axes
+        epoch_ax = ax.twinx()
+        ep = epoch_ratio
+        plot(epoch_ax, epoch_x, ep, color='gray', ls=':', alpha=0.5, label='epoch')
+
+        # set the limits
+        ymin, ymax = epoch_ax.get_ylim()
+        if ymin < 0:
+            ymin = -0.05 * ep.max()
+        if ymax < 1:
+            ymax = 1.05 * ep.max()
+        epoch_ax.set_ylim(ymin, ymax)
+
+        # clean up the ticks
+        if ep.max() < 8:
+            ticks = np.arange(ep.max()).astype(int)
+        else:
+            ticks = np.arange(0, ep.max(), ep.max()//8).astype(int)
+        epoch_ax.set_yticks(ticks)
+        epoch_ax.set_yticklabels([str(_) for _ in ticks])
+
+        # Add legend to epoch Axes so legend gets drawn over epoch line
+        handles, labels = ax.get_legend_handles_labels()
+        epoch_ax.legend(handles, labels, loc=leg_loc)
+        epoch_ax.set_ylabel('Epoch')
+
+    loss_ax.set_ylabel('Loss')
+    add_epoch(loss_ax, loss_max, 'upper right')
+
+    print(f'saving loss figure to {loss_path}')
+    loss_fig.savefig(loss_path, dpi=100)
+
+
+    if acc_ax is not None:
+        acc_ax.set_ylabel('Accuracy')
+        add_epoch(acc_ax, acc_max, 'lower right')
+
+        print(f'saving accuracy figure to {acc_path}')
+        acc_fig.savefig(acc_path, dpi=100)
 
 
 if __name__ == '__main__':
