@@ -623,9 +623,12 @@ class RevCompFilter(DIFileFilter):
 
     @classmethod
     def get_revcomp_map(cls, vocab):
+        vocab = [x.decode('utf-8') if isinstance(x, bytes) else x for x in vocab]
         d = {c: i for i, c in enumerate(vocab)}
         rcmap = np.zeros(len(vocab), dtype=int)
         for i, base in enumerate(vocab):
+            #if isinstance(base, bytes):
+            #    base = base.decode('utf-8')
             rc_base = cls.chars[base]
             base_i = d[base]
             rc_base_i = d[rc_base]

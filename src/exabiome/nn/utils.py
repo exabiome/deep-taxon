@@ -9,7 +9,6 @@ from ..utils import check_directory
 from pytorch_lightning.core.decorators import auto_move_data
 import torch
 
-
 def show_models(argv=None):
     '''Summarize what Torch sees in CUDA land'''
     def get_desc(m):
@@ -63,6 +62,7 @@ def process_model(args, inference=False, taxa_table=None):
 
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
+    
     model_cls = models._models[args.model]
     if inference:
         model_cls.forward = auto_move_data(model_cls.forward)
@@ -93,6 +93,7 @@ def process_model(args, inference=False, taxa_table=None):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
         _check_hparams(args)
+        
         #if taxa_table is not None:
         #    args.labels = taxa_table['phylum'].elements.data[:]
         model = model_cls(args)

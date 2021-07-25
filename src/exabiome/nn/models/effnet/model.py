@@ -4,6 +4,7 @@ import pandas as pd
 import os
 import h5py
 import torch.nn as nn
+import pdb
 
 from .. import model, AbstractLit
 
@@ -67,7 +68,7 @@ class InvertedResidualBlock(nn.Module):
         self.conv5 = nn.Conv1d(mid_ch, out_ch, kernel_size=1, stride=1, bias=False) 
         self.bn3 = nn.BatchNorm1d(out_ch)
         
-        self.downsample = nn.Conv1d(in_ch, out_ch,1, stride=stride)
+        #self.downsample = nn.Conv1d(in_ch, out_ch,1, stride=stride)
         
     def forward(self, x):
         identity = x
@@ -81,8 +82,8 @@ class InvertedResidualBlock(nn.Module):
         out = self.conv5(out)
         out = self.bn3(out)
         
-        identity = self.downsample(x)
-        out += identity
+        #identity = self.downsample(x)
+        #out += identity
         out = self.act(out)
         
         return out
@@ -100,13 +101,13 @@ class SqueezeExcite(nn.Module):
         out = self.layer(x)
         return out + x
     
-@model("effnet-b0")    
-#class EffNet(AbstractLit):
-class EffNet_b0(nn.Module):
-    def __init__(self, #param_list=p_list, 
+#@model("effnet-b0")    
+class EffNet(AbstractLit):
+#class EffNet_b0(nn.Module):
+    def __init__(self, hparams,#param_list=p_list, 
                 ):#avg_out=200, out_feats=512, n_classes=18):
-        super(EffNet_b0, self).__init__()
-        #super(EffNet, self).__init__()
+        #super(EffNet_b0, self).__init__()
+        super(EffNet, self).__init__(hparams)
         
         param_list = [
         [[16,96,3,24,3,2,1], [24,144,6,24,3,1,1]], #layer 1
@@ -119,12 +120,13 @@ class EffNet_b0(nn.Module):
          [192,1152,48,192,5,1,2], [192,1152,48,192,5,1,2]], #layer 5
         [[192,1152,48,320,3,2,1]] #layer 6
          ]
+        self.embedding = nn.Embedding(20, 8)
         self.avg_out = 20#avg_out
-        self.out_feats = 512#out_feats
-        self.n_classes = 16#n_classes
+        self.out_feats = 1#out_feats
+        self.n_classes = 20#n_classes
         self.param_list = param_list
 
-        self.conv1 = nn.Conv1d(1, 32, kernel_size=3, stride=2, padding=1)
+        self.conv1 = nn.Conv1d(8, 32, kernel_size=3, stride=2, padding=1)
         self.bn1 = nn.BatchNorm1d(32)
         self.silu = nn.SiLU(inplace=True)
         self.layer0 = DepSepBlock()
@@ -135,8 +137,6 @@ class EffNet_b0(nn.Module):
         self.conv2 = nn.Conv1d(320, self.n_classes, 1, 1)
         self.bn2 = nn.BatchNorm1d(self.n_classes)
         self.avgpool = nn.AdaptiveAvgPool1d(output_size=self.avg_out)
-        print(self.avg_out)
-        print(self.out_feats)
         self.fc = nn.Linear(in_features=self.avg_out, 
                             out_features=self.out_feats)
         
@@ -157,6 +157,10 @@ class EffNet_b0(nn.Module):
         return nn.Sequential(*layers)
         
     def _forward_impl(self, x):
+        #pdb.set_trace()
+        #x = x.unsqueeze(1).to(torch.half)
+        x = self.embedding(x)
+        x = x.permute(0,2,1)
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.silu(x)
@@ -167,6 +171,8 @@ class EffNet_b0(nn.Module):
         x = self.bn2(x)
         x = self.avgpool(x)
         x = self.fc(x)
+        
+        x = x.squeeze()
         return x
     
     def forward(self, x):
@@ -174,8 +180,8 @@ class EffNet_b0(nn.Module):
 
     
     
-#@model('effnet-b0')
-#class EffNetB0(EffNet):
-#    def __init__(self):
-#        super().__init__()
+@model('effnet-b0')
+class EffNetB0(EffNet):
+    def __init__(self, hparams):
+        super().__init__(hparams)
         

@@ -355,7 +355,7 @@ def run_lightning(argv=None):
         checkpoint_callback=True,
         callbacks=callbacks,
         logger = CSVLogger(save_dir=output('logs')),
-        profiler = "simple",
+        #profiler = "simple",
     )
     targs.update(addl_targs)
 
