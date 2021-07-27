@@ -199,17 +199,17 @@ def run_inference(argv=None):
     ResultsTable = get_class('ResultsTable', 'hdmf-ml')
 
     table = ResultsTable(name='results', description='ml results')
-    # table.class_label = phylum_col  # TODO how to access the training labels column?
 
     args.logger.info(f'saving outputs to {args.output}')
 
     n_samples = len(data_mod.dataset)
 
     # make temporary datasets and do all I/O at the end
-    tmp_emb = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
-    tmp_label = np.zeros(shape=(n_samples,), dtype=int)
-    tmp_olen = np.zeros(shape=(n_samples,), dtype=int)  # original lengths
-    tmp_tvt_mask = np.zeros(shape=(n_samples,), dtype=str)
+    tmp_output = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
+    tmp_pred_class = np.zeros(shape=(n_samples,), dtype=int)
+    tmp_true_label = np.zeros(shape=(n_samples,), dtype=int)
+    tmp_orig_length = np.zeros(shape=(n_samples,), dtype=int)
+    tmp_tvt_split = np.zeros(shape=(n_samples,), dtype=str)
     tmp_seq_id = None
     if args.save_seq_ids:
         tmp_seq_id = np.zeros(shape=(n_samples,), dtype=int)
@@ -224,13 +224,17 @@ def run_inference(argv=None):
         order = np.argsort(idx)
         idx = idx[order]
         args.logger.info('stashing outputs, shape ' + str(outputs[order].shape))
-        tmp_emb[idx] = outputs[order]
+        tmp_output[idx] = outputs[order]
+        if args.classify:
+            pred_class = np.amax(outputs[order], axis=1)
+            args.logger.info('stashing predicted class, shape ' + str(pred_class.shape))
+            tmp_pred_class[idx] = pred_class
         args.logger.info('stashing labels')
-        tmp_label[idx] = labels[order]
+        tmp_true_label[idx] = labels[order]
         args.logger.info('stashing orig_lens')
-        tmp_olen[idx] = orig_lens
+        tmp_orig_length[idx] = orig_lens
         args.logger.info('stashing mask')
-        tmp_tvt_mask[idx] = loader_key
+        tmp_tvt_split[idx] = loader_key
         if args.save_seq_ids:
             args.logger.info('stashing seq_ids')
             tmp_seq_id[idx] = seq_ids[order]
@@ -251,34 +255,44 @@ def run_inference(argv=None):
         args.logger.info('Running UMAP embedding')
         from umap import UMAP
         umap = UMAP(n_components=2)
-        tfm = umap.fit_transform(tmp_emb[indices])
+        tfm = umap.fit_transform(tmp_output[indices])
         umap_dset = np.zeros(shape=(n_samples, 2), dtype=float)
         umap_dset[indices] = tfm
 
     # create and set up results table
-    table = ResultsTable(name='results', description='ml results')
-    table.add_column(name='orig_lens', description='original lengths')
+    table = ResultsTable(name='results', description='ML results')
+    table.add_column(name='orig_length', description='original lengths')
     if args.save_seq_ids:
-        table.add_column(name='seq_ids', description='sequential ids')
+        table.add_column(name='seq_id', description='sequential ids')
     if args.umap:
         table.add_column(name='viz_emb', description='umap visualization embedding')
 
+    if args.classify:
+        args.logger.info("writing predicted_proba, shape " + str(tmp_output.shape))
+        args.logger.info("writing predicted_class, shape " + str(tmp_pred_class.shape))
+    else:  # embedding
+        args.logger.info("writing embedding, shape " + str(tmp_output.shape))
+    args.logger.info("writing true_label, shape " + str(tmp_true_label.shape))
+    args.logger.info("writing orig_length, shape " + str(tmp_orig_length.shape))
+    args.logger.info("writing tvt_split, shape " + str(tmp_tvt_split.shape))
+    if args.save_seq_ids:
+        args.logger.info("writing seq_ids, shape " + str(tmp_seq_id.shape))
+    if args.umap:
+        args.logger.info("writing viz_emb, shape " + str(umap_dset.shape))
+
     for i in range(n_samples):
-        args.logger.info("writing embedded_vals, shape " + str(tmp_emb.shape))
-        args.logger.info("writing class_label, shape " + str(tmp_label.shape))
-        args.logger.info("writing orig_lens, shape " + str(tmp_olen.shape))
-        args.logger.info("writing tvt_mask, shape " + str(tmp_tvt_mask.shape))
-        rkwargs = dict(
-            embedded_vals=tmp_emb[i, :],
-            class_label=tmp_label[i],
-            orig_lens=tmp_olen[i],
-            tvt_mask=tmp_tvt_mask[i],
-        )
+        rkwargs = dict()
+        if args.classify:
+            rkwargs['predicted_proba'] = tmp_output[i, :]
+            rkwargs['predicted_class'] = tmp_pred_class[i]
+        else:  # embedding
+            rkwargs['embedding'] = tmp_output[i, :]
+        rkwargs['true_label'] = tmp_true_label[i]
+        rkwargs['orig_length'] = tmp_orig_length[i]
+        rkwargs['tvt_split'] = tmp_tvt_split[i]
         if args.save_seq_ids:
-            args.logger.info("writing seq_ids, shape " + str(tmp_seq_id.shape))
-            rkwargs['seq_ids'] = tmp_seq_id[i]
+            rkwargs['seq_id'] = tmp_seq_id[i]
         if args.umap:
-            args.logger.info("writing viz_emb, shape " + str(umap_dset.shape))
             rkwargs['viz_emb'] = umap_dset[i, :]
         table.add_row(**rkwargs)
         # TODO make more efficient by putting all data for all columns in at once rather than row by row?
