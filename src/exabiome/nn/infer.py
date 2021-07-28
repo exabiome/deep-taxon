@@ -192,13 +192,15 @@ def run_inference(argv=None):
 
     import h5py  # noqa: F401
     from pkg_resources import resource_filename
-    from hdmf.common import load_namespaces, get_class
+    from hdmf.common import load_namespaces, get_class, VectorData, EnumData
     from hdmf.backends.hdf5 import HDF5IO
 
     load_namespaces(os.path.join(resource_filename(__name__, '../hdmf-ml'), 'schema', 'ml', 'namespace.yaml'))
     ResultsTable = get_class('ResultsTable', 'hdmf-ml')
-
-    table = ResultsTable(name='results', description='ml results')
+    ClassProbability = get_class('ClassProbability', 'hdmf-ml')
+    ClassLabel = get_class('ClassLabel', 'hdmf-ml')
+    TrainValidationTestSplit = get_class('TrainValidationTestSplit', 'hdmf-ml')
+    EmbeddedValues = get_class('EmbeddedValues', 'hdmf-ml')
 
     args.logger.info(f'saving outputs to {args.output}')
 
@@ -260,42 +262,87 @@ def run_inference(argv=None):
         umap_dset[indices] = tfm
 
     # create and set up results table
-    table = ResultsTable(name='results', description='ML results')
-    table.add_column(name='orig_length', description='original lengths')
-    if args.save_seq_ids:
-        table.add_column(name='seq_id', description='sequential ids')
-    if args.umap:
-        table.add_column(name='viz_emb', description='umap visualization embedding')
+    columns = list()
+
+    args.logger.info("writing tvt_split, shape " + str(tmp_tvt_split.shape))
+    tvt_split_col = TrainValidationTestSplit(
+        name='tvt_split',
+        description='A column to indicate if a sample was used for training, testing or validation',
+        data=tmp_tvt_split
+    )
+    columns.append(tvt_split_col)
+
+    args.logger.info("writing orig_length, shape " + str(tmp_orig_length.shape))
+    orig_lens_col = VectorData(
+        name='orig_length',
+        description='Original lengths',
+        data=tmp_orig_length
+    )
+    columns.append(orig_lens_col)
+
+    args.logger.info("writing true_label, shape " + str(tmp_true_label.shape))
+    true_label_elements_col = EnumData(
+        name='true_label_elements',
+        description='Fixed set of true label strings referenced by true_label EnumData column',
+        data=[]  # TODO
+    )
+    columns.append(true_label_elements_col)
+
+    args.logger.info("writing true_label, shape " + str(tmp_true_label.shape))
+    true_label_col = EnumData(
+        name='true_label',
+        description='A column to store the true label for each sample',
+        data=tmp_true_label,
+        elements=true_label_elements_col  # TODO
+    )
+    columns.append(true_label_col)
 
     if args.classify:
         args.logger.info("writing predicted_proba, shape " + str(tmp_output.shape))
+        predicted_proba_col = ClassProbability(
+            name='predicted_proba',
+            description='A column to store the class probability for each class across the samples',
+            data=tmp_output,
+            training_labels=true_label_col
+        )
+        columns.append(predicted_proba_col)
+
         args.logger.info("writing predicted_class, shape " + str(tmp_pred_class.shape))
-    else:  # embedding
+        predicted_class_col = ClassLabel(
+            name='predicted_class',
+            description='A column to store which class a sample was classified as',
+            data=tmp_pred_class,
+            training_labels=true_label_col
+        )
+        columns.append(predicted_class_col)
+    else:
         args.logger.info("writing embedding, shape " + str(tmp_output.shape))
-    args.logger.info("writing true_label, shape " + str(tmp_true_label.shape))
-    args.logger.info("writing orig_length, shape " + str(tmp_orig_length.shape))
-    args.logger.info("writing tvt_split, shape " + str(tmp_tvt_split.shape))
+        embedding_col = EmbeddedValues(
+            name='embedding',
+            description='A column to store embeddings for each sample',
+            data=tmp_output
+        )
+        columns.append(embedding_col)
+
     if args.save_seq_ids:
         args.logger.info("writing seq_ids, shape " + str(tmp_seq_id.shape))
+        embedding_col = VectorData(
+            name='seq_id',
+            description='Sequential IDs',
+            data=tmp_seq_id
+        )
+        columns.append(embedding_col)
+
     if args.umap:
         args.logger.info("writing viz_emb, shape " + str(umap_dset.shape))
+        viz_emb_col = VectorData(
+            name='viz_emb',
+            description='UMAP visualization embedding',
+            data=umap_dset
+        )
+        columns.append(viz_emb_col)
 
-    for i in range(n_samples):
-        rkwargs = dict()
-        if args.classify:
-            rkwargs['predicted_proba'] = tmp_output[i, :]
-            rkwargs['predicted_class'] = tmp_pred_class[i]
-        else:  # embedding
-            rkwargs['embedding'] = tmp_output[i, :]
-        rkwargs['true_label'] = tmp_true_label[i]
-        rkwargs['orig_length'] = tmp_orig_length[i]
-        rkwargs['tvt_split'] = tmp_tvt_split[i]
-        if args.save_seq_ids:
-            rkwargs['seq_id'] = tmp_seq_id[i]
-        if args.umap:
-            rkwargs['viz_emb'] = umap_dset[i, :]
-        table.add_row(**rkwargs)
-        # TODO make more efficient by putting all data for all columns in at once rather than row by row?
+    table = ResultsTable(name='results', description='ML results', columns=columns)
 
     args.logger.info(f'saving outputs to {args.output}')
     with HDF5IO(args.output, 'w') as io:
