@@ -75,7 +75,6 @@ class AbstractLit(LightningModule):
         if self.hparams.lr_scheduler == 'cyclic':
             scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
         elif self.hparams.lr_scheduler == 'plateau':
-            print ("USING SCHEDULER")
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             scheduler = {
                 'scheduler': scheduler,         # The LR scheduler instance (required)
