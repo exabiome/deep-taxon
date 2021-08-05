@@ -426,7 +426,7 @@ class DeepIndexFile(Container):
             self.__get_kwargs['index'] = True
             self.__n_outputs = len(self.taxa_table[self.label_key].elements)
             genome_labels = self.genome_table['rep_idx'].data[:]
-            genome_labels = self.taxa_table[val].data[genome_labels]
+            genome_labels = self.taxa_table[val].data[:][genome_labels]
         else:
             raise ValueError("Unrecognized label key: '%s'" % val)
 
