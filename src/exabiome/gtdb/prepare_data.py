@@ -22,18 +22,18 @@ def add_branches(node, mat, names):
         add_branches(c, mat, names)
 
 
-def get_tree_graph(node, genome_table):
+def get_tree_graph(node, rep_taxdf):
     node.to_array()
     n_nodes = 2 * len(list(node.tips())) - 1
     adj = sps.lil_matrix((n_nodes, n_nodes))
     names = np.zeros(n_nodes, dtype='U15')
     add_branches(node, adj, names)
 
-    tids = genome_table.taxon_id
+    tids = rep_taxdf.index
     gt_indices = np.ones(len(names)) * -1
     for i, name in enumerate(names):
         if name.startswith('GC'):
-            gt_indices[i] = np.where(tids.data == name)[0][0]
+            gt_indices[i] = np.where(tids == name)[0][0]
 
     return adj.tocsr(), gt_indices
 
@@ -145,21 +145,24 @@ def prepare_data(argv=None):
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('out', type=str, help='output HDF5')
-    parser.add_argument('-a', '--accessions', type=str, default=None, help='file of the NCBI accessions of the genomes to convert')
+    parser.add_argument('-A', '--accessions', type=str, default=None, help='file of the NCBI accessions of the genomes to convert')
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
     parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
     parser.add_argument('-T', '--total_seq_len', type=int, default=None, help='the total sequence length')
+    parser.add_argument('-N', '--n_seqs', type=int, default=None, help='the total number of sequences')
     rep_grp = parser.add_mutually_exclusive_group()
     rep_grp.add_argument('-n', '--nonrep', action='store_true', default=False, help='keep non-representative genomes only. keep both by default')
     rep_grp.add_argument('-r', '--rep', action='store_true', default=False, help='keep representative genomes only. keep both by default')
+    parser.add_argument('-a', '--all', action='store_true', default=False,
+                        help='keep all non-representative genomes. By default, only non-reps with the highest and lowest contig count are kept')
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
     dep_grp = parser.add_argument_group(title="Legacy options you probably do not need")
-    dep_grp.add_argument('-N', '--non_vocab', action='store_false', dest='vocab', default=True, help='bitpack sequences -- it is unlikely this works')
+    dep_grp.add_argument('--non_vocab', action='store_false', dest='vocab', default=True, help='bitpack sequences -- it is unlikely this works')
     dep_grp.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
     dep_grp.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
 
@@ -168,6 +171,15 @@ def prepare_data(argv=None):
         sys.exit(1)
 
     args = parser.parse_args(args=argv)
+
+
+    if args.total_seq_len is not None:
+        if args.n_seqs is None:
+            sys.stderr.write("If using --total_seq_len, you must also use --n_seqs\n")
+    if args.n_seqs is not None:
+        if args.total_seq_len is None:
+            sys.stderr.write("If using --n_seqs, you must also use --total_seq_len\n")
+
 
     if not any([args.protein, args.cds, args.genomic]):
         args.genomic = True
@@ -180,14 +192,17 @@ def prepare_data(argv=None):
     #############################
     logger.info('Reading taxonomies from %s' % args.metadata)
     taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    extra_cols = ['contig_count', 'checkm_completeness']
     def func(row):
         dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
         dat['species'] = dat['species'] # .split(' ')[1]
         dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
         dat['accession'] = row['accession'][3:]
+        for k in extra_cols:
+            dat[k] = row[k]
         return pd.Series(data=dat)
 
-    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']]\
+    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative', 'contig_count', 'checkm_completeness']]\
                         .apply(func, axis=1)
 
     taxdf = taxdf.set_index('accession')
@@ -211,11 +226,21 @@ def prepare_data(argv=None):
     if args.nonrep:
         taxdf = taxdf[taxdf.index != taxdf['gtdb_genome_representative']]
         logger.info('Discarded %d representative genomes' % (dflen - len(taxdf)))
+        dflen = len(taxdf)
+        if not args.all:
+            groups = taxdf[['gtdb_genome_representative', 'contig_count']].groupby('gtdb_genome_representative')
+            min_ctgs = groups.idxmin()['contig_count']
+            max_ctgs = groups.idxmax()['contig_count']
+            accessions = np.unique(np.concatenate([min_ctgs, max_ctgs]))
+            taxdf = taxdf.filter(accessions, axis=0)
+            logger.info('Discarded %d extra non-representative genomes' % (dflen - len(taxdf)))
     elif args.rep:
         taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
         logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
 
-
+    repdflen = len(rep_taxdf)
+    rep_taxdf = rep_taxdf.filter(np.unique(taxdf['gtdb_genome_representative']), axis=0)
+    logger.info('Discarded %d leftover representative genomes' % (repdflen - len(rep_taxdf)))
 
     dflen = len(taxdf)
     logger.info('%d remaining genomes' % dflen)
@@ -378,9 +403,14 @@ def prepare_data(argv=None):
             if not args.protein:
                 np.testing.assert_array_equal(vocab, list('ACYWSKDVNTGRWSMHBN'))
 
-            logger.info('counting total number of sqeuences')
-            n_seqs, total_seq_len = np.array(list(zip(*map_func(seqlen, fapaths)))).sum(axis=1)
-            logger.info(f'found {total_seq_len} bases across {n_seqs} sequences')
+
+            if args.total_seq_len is None:
+                logger.info('counting total number of sqeuences')
+                n_seqs, total_seq_len = np.array(list(zip(*tqdm(map_func(seqlen, fapaths), total=len(fapaths))))).sum(axis=1)
+                logger.info(f'found {total_seq_len} bases across {n_seqs} sequences')
+            else:
+                n_seqs, total_seq_len = args.n_seqs, args.total_seq_len
+                logger.info(f'As specified, there are {total_seq_len} bases across {n_seqs} sequences')
 
             logger.info(f'allocating uint8 array of length {total_seq_len} for sequences')
 
@@ -424,7 +454,7 @@ def prepare_data(argv=None):
     genome_table = GenomeTable('genome_table', 'information about the genome each sequence comes from',
                                taxa_ids, taxa, taxa_table=taxa_table)
 
-    adj, gt_indices = get_tree_graph(root, genome_table)
+    adj, gt_indices = get_tree_graph(root, rep_taxdf)
     tree_graph = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
 
 
