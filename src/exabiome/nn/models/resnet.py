@@ -215,7 +215,7 @@ class ResNet(AbstractLit):
             for i in range(self.fc.out_features):
                 mask = outputs_map == i
                 new_fc.weight[mask, :] = self.fc.weight[i, :]
-                new_fc.bias[mask] = self.fc.bias[i]
+                new_fc.bias[mask] = self.fc.bias[i] - torch.log(mask.sum().float())
         self.fc = new_fc
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
