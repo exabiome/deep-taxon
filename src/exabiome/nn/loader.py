@@ -445,11 +445,9 @@ class DeepIndexDataModule(pl.LightningDataModule):
         if inference:
             self.hparams.manifold = False
             self.hparams.graph = False
-            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open) #getattr(self.hparams, 'num_workers', 0)==0)
-            #kwargs.pop('num_workers', None)
-            #kwargs.pop('multiprocessing_context', None)
+            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open)
         else:
-            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open) #getattr(self.hparams, 'num_workers', 0)==0)
+            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open)
             if self.hparams.load:
                 self.dataset.load()
             kwargs['pin_memory'] = False
@@ -462,18 +460,24 @@ class DeepIndexDataModule(pl.LightningDataModule):
             kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
+        self._loader_kwargs = kwargs
+        self.loaders = None
 
-        #print("------------- DataLoader kwargs:", str(kwargs), file=sys.stderr)
-        tr, te, va = train_test_loaders(self.dataset, **kwargs)
-        self.loaders = {'train': tr, 'test': te, 'validate': va}
+    def _check_loaders(self):
+        if self.loaders is None:
+            tr, te, va = train_test_loaders(self.dataset, **self._loader_kwargs)
+            self.loaders = {'train': tr, 'test': te, 'validate': va}
 
     def train_dataloader(self):
+        self._check_loaders()
         return self.loaders['train']
 
     def val_dataloader(self):
+        self._check_loaders()
         return self.loaders['validate']
 
     def test_dataloader(self):
+        self._check_loaders()
         return self.loaders['test']
 
 

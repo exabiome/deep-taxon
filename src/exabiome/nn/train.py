@@ -180,12 +180,12 @@ def process_args(args=None, return_io=False):
             raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
         args.classify = True
 
-    data_mod = DeepIndexDataModule(args)
+    data_mod = DeepIndexDataModule(args, keep_open=True)
 
     # if classification problem, use the number of taxa as the number of outputs
     if args.classify:
         args.n_outputs = len(data_mod.dataset.taxa_labels)
-    model = process_model(args)
+    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
     if args.weighted is not None:
         if args.weighted == 'ens':
@@ -197,6 +197,8 @@ def process_args(args=None, return_io=False):
         else:
             raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
         model.set_class_weights(weights)
+
+    data_mod.dataset.close()
 
     targs = dict(
         max_epochs=args.epochs,
@@ -304,6 +306,7 @@ def print0(*msg, **kwargs):
 
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
+    global RANK
 
     import signal
     import traceback
@@ -317,6 +320,7 @@ def run_lightning(argv=None):
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+    RANK = addl_targs['accelerator'].training_type_plugin.cluster_environment.global_rank()
 
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
@@ -345,7 +349,7 @@ def run_lightning(argv=None):
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
-    callbacks = [ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=1, monitor=AbstractLit.val_loss)]
+    callbacks = [ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, monitor=AbstractLit.val_loss)]
 
     if args.early_stop:
         callbacks.append(EarlyStopping(monitor=AbstractLit.val_loss, min_delta=0.00, patience=3, verbose=False, mode='min'))
