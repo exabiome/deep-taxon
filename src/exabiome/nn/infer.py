@@ -11,8 +11,10 @@ from pytorch_lightning.plugins.environments import SLURMEnvironment
 
 
 import glob
+import h5py
 import argparse
 import torch
+from torch.utils.data import Subset
 import torch.nn as nn
 import logging
 
@@ -50,9 +52,11 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-S', '--test', action='append_const', const='test', dest='loaders', help='do inference on test data')
     parser.add_argument('-N', '--nonrep', action='append_const', const='nonrep', dest='loaders', help='the dataset is nonrepresentative species')
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
+    parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
+    parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=0)
     env_grp = parser.add_argument_group("Resource Manager").add_mutually_exclusive_group()
-    env_grp.add_argument("--lsf", default='False', action='store_true', help='running in an LSF environment')
-    env_grp.add_argument("--slurm", default='False', action='store_true', help='running in a SLURM environment')
+    env_grp.add_argument("--lsf", default=False, action='store_true', help='running in an LSF environment')
+    env_grp.add_argument("--slurm", default=False, action='store_true', help='running in a SLURM environment')
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -100,7 +104,7 @@ def process_args(argv=None):
         targs['distributed_backend'] = 'ddp'
         if args.slurm:
             targs['environment'] = SLURMEnvironment()
-        else:
+        elif args.lsf:
             targs['environment'] = LSFEnvironment()
 
     if args.debug:
@@ -145,10 +149,11 @@ def process_args(argv=None):
         args.loaders = ['train', 'validate', 'test']
 
     if 'nonrep' in args.loaders:
-        #dataset, io  = process_dataset(model.hparams, path=args.input)
-        breakpoint()
         dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
-        ldr = get_loader(dataset, batch_size=args.batch_size, distances=False)
+        tmp_dset = dataset
+        if args.start > 0:
+            tmp_dset = Subset(dataset, np.arange(args.start, len(dataset)))
+        ldr = get_loader(tmp_dset, batch_size=args.batch_size, distances=False)
         args.loaders = {'input': ldr}
         args.difile = dataset.difile
     else:
@@ -173,6 +178,7 @@ def process_args(argv=None):
 
     return tuple(ret)
 
+
 def run_inference(argv=None):
     """Run inference using PyTorch
 
@@ -181,14 +187,112 @@ def run_inference(argv=None):
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
     model, dataset, args, addl_targs = process_args(argv=argv)
-    import h5py
-    import numpy as np
-    import os
 
-    args.logger.info(f'saving outputs to {args.output}')
+    if args.in_memory:
+        args.logger.info(f'running in-memory inference')
+        in_memory_inference(model, dataset, args, addl_targs)
+    else:
+        args.logger.info(f'running chunked inference')
+        chunked_inference(model, dataset, args, addl_targs)
+
+
+def chunked_inference(model, dataset, args, addl_targs):
+    n_samples = len(dataset)
+    f = h5py.File(args.output, 'a')
+    f.require_dataset('label_names', data=dataset.label_names, shape=dataset.label_names.shape, dtype=h5py.special_dtype(vlen=str))
+
+    outputs = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+
+    labels = f.require_dataset('labels', shape=(n_samples,), dtype=int)
+
+    orig_lens = f.require_dataset('orig_lens', shape=(n_samples,), dtype=int)
+
+    seq_ids = f.require_dataset('seq_ids', shape=(n_samples,), dtype=int)
+
+    # make temporary datasets and do all I/O at the end
+    masks = dict()
+
+    model.to(args.device)
+    #model.cuda()
+    #model = nn.DataParallel(model, device_ids=[0, 1, 2, 3])
+
+    for loader_key, loader in args.loaders.items():
+        args.logger.info(f'computing outputs for {loader_key}')
+        mask = f.require_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
+        for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=100):
+            order = np.argsort(idx)
+            idx = idx[order]
+            outputs[idx] = _outputs[order]
+            labels[idx] = _labels[order]
+            orig_lens[idx] = _orig_lens[order]
+            seq_ids[idx] = _seq_ids[order]
+            mask[idx] = True
+        masks[loader_key] = mask
+
+    f.close()
+    args.logger.info(f'closing {args.output}')
+
+
+def get_outputs(model, loader, device, debug=False, chunks=None):
+    """
+    Get model outputs for all samples in the given loader
+
+    Parameters
+    ----------
+    model: torch.Module
+        the PyTorch model to get outputs for
+
+    loader: torch.DataLoader
+        the PyTorch DataLoader to get data from
+
+    device: torch.device
+        the PyTorch device to run computation on
+
+    debug: bool
+        run 100 batches and return
+
+    chunks: int
+        if not None, return a subsets of batches of size *chunks* as a
+        generator
+
+    """
+    indices, outputs, labels, orig_lens, seq_ids = [], [], [], [], []
+    max_batches = 100 if debug else sys.maxsize
+    from tqdm import tqdm
+    file = sys.stdout
+    it = tqdm(loader, file=sys.stdout)
+    with torch.no_grad():
+        for idx, (i, X, y, olen, seq_i) in enumerate(it):
+            X = X.to(device)
+            outputs.append(model(X).to('cpu').detach())
+            indices.append(i.to('cpu').detach())
+            labels.append(y.to('cpu').detach())
+            orig_lens.append(olen.to('cpu').detach())
+            seq_ids.append(seq_i.to('cpu').detach())
+            if idx >= max_batches:
+                break
+            if chunks and (idx+1) % chunks == 0:
+                yield cat(indices, outputs, labels, orig_lens, seq_ids)
+                indices, outputs, labels, orig_lens, seq_ids = [], [], [], [], []
+    if chunks is None:
+        return cat(indices, outputs, labels, orig_lens, seq_ids)
+    else:
+        if len(indices) > 0:
+            yield cat(indices, outputs, labels, orig_lens, seq_ids)
+
+
+def cat(indices, outputs, labels, orig_lens, seq_ids):
+    ret = (torch.cat(indices).numpy(),
+           torch.cat(outputs).numpy(),
+           torch.cat(labels).numpy(),
+           torch.cat(orig_lens).numpy(),
+           torch.cat(seq_ids).numpy())
+    return ret
+
+
+def in_memory_inference(model, dataset, args, addl_targs):
 
     n_samples = len(dataset)
-
     # make temporary datasets and do all I/O at the end
     tmp_emb = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
     tmp_label = np.zeros(shape=(n_samples,), dtype=int)
@@ -237,54 +341,6 @@ def run_inference(argv=None):
     if args.save_seq_ids:
         args.logger.info("writing seq_ids, shape " + str(tmp_olen.shape))
         f.create_dataset('seq_ids', data=tmp_seq_id)
-
-
-    if args.umap:
-        order = np.s_[:]
-        if args.debug:
-            indices = np.concatenate(indices)
-            order = np.argsort(indices)
-            indices = indices[order]
-        else:
-            indices = np.s_[:]
-        # compute UMAP arguments for convenience
-        args.logger.info('Running UMAP embedding')
-        from umap import UMAP
-        umap = UMAP(n_components=2)
-        tfm = umap.fit_transform(tmp_emb[indices])
-        umap_dset = f.create_dataset('viz_emb', shape=(n_samples, 2), dtype=float)
-        umap_dset[indices] = tfm
-
-
-def get_outputs(model, loader, device, debug=False, chunks=None):
-    """
-    Get model outputs for all samples in the given loader
-    """
-    outputs = list()
-    indices = list()
-    labels = list()
-    orig_lens = list()
-    seq_ids = list()
-    max_batches = 100 if debug else sys.maxsize
-    from tqdm import tqdm
-    file = sys.stdout
-    it = tqdm(loader, file=sys.stdout)
-    with torch.no_grad():
-        for idx, (i, X, y, olen, seq_i) in enumerate(it):
-            outputs.append(model(X.to(device)).to('cpu').detach())
-            indices.append(i.to('cpu').detach())
-            labels.append(y.to('cpu').detach())
-            orig_lens.append(olen.to('cpu').detach())
-            seq_ids.append(seq_i.to('cpu').detach())
-            if idx >= max_batches:
-                break
-    ret = (torch.cat(indices).numpy(),
-           torch.cat(outputs).numpy(),
-           torch.cat(labels).numpy(),
-           torch.cat(orig_lens).numpy(),
-           torch.cat(seq_ids).numpy())
-    return ret
-
 
 from . import models  # noqa: E402
 
