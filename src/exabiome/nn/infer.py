@@ -18,6 +18,7 @@ from torch.utils.data import Subset
 import torch.nn as nn
 import logging
 
+from mpi4py import MPI
 
 def parse_args(*addl_args, argv=None):
     """
@@ -70,7 +71,7 @@ def parse_args(*addl_args, argv=None):
     return args
 
 
-def process_args(argv=None):
+def process_args(argv=None, size=1, rank=0, comm=None):
     """
     Process arguments for running inference
     """
@@ -102,10 +103,11 @@ def process_args(argv=None):
     targs['gpus'] = process_gpus(args.gpus)
     if targs['gpus'] != 1:
         targs['distributed_backend'] = 'ddp'
-        if args.slurm:
-            targs['environment'] = SLURMEnvironment()
-        elif args.lsf:
-            targs['environment'] = LSFEnvironment()
+
+    if args.slurm:
+        targs['environment'] = SLURMEnvironment()
+    elif args.lsf:
+        targs['environment'] = LSFEnvironment()
 
     if args.debug:
         targs['fast_dev_run'] = True
@@ -149,10 +151,18 @@ def process_args(argv=None):
         args.loaders = ['train', 'validate', 'test']
 
     if 'nonrep' in args.loaders:
-        dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+        if size > 1:
+            dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm)
+        else:
+            dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
         tmp_dset = dataset
         if args.start > 0:
-            tmp_dset = Subset(dataset, np.arange(args.start, len(dataset)))
+            tmp_dset = Subset(tmp_dset, np.arange(args.start, len(dataset)))
+
+        if size > 1:
+            tmp_dset = Subset(tmp_dset, np.arange(rank, len(tmp_dset), size))
+
+
         ldr = get_loader(tmp_dset, batch_size=args.batch_size, distances=False)
         args.loaders = {'input': ldr}
         args.difile = dataset.difile
@@ -174,7 +184,13 @@ def process_args(argv=None):
 
     ret = [model, dataset, args, targs]
 
-    args.device = torch.device('cuda:0')
+    if size > 1:
+        if 'environment' not in targs:
+            print(f'rank {rank} - Please specify --lsf or --slurm if running distributed', file=sys.stderr)
+            sys.exit(1)
+        args.device = torch.device('cuda:%d' % targs['environment'].local_rank())
+    else:
+        args.device = torch.device('cuda:0')
 
     return tuple(ret)
 
@@ -186,14 +202,23 @@ def run_inference(argv=None):
         argv: a command-line string or argparse.Namespace object to use for running inference
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
-    model, dataset, args, addl_targs = process_args(argv=argv)
+
+    COMM = MPI.COMM_WORLD
+    RANK = COMM.Get_rank()
+    SIZE = COMM.Get_size()
+
+    model, dataset, args, addl_targs = process_args(argv=argv, size=SIZE, rank=RANK)
 
     if args.in_memory:
         args.logger.info(f'running in-memory inference')
         in_memory_inference(model, dataset, args, addl_targs)
     else:
-        args.logger.info(f'running chunked inference')
-        chunked_inference(model, dataset, args, addl_targs)
+        if SIZE > 1:
+            args.logger.info(f'running parallel chunked inference')
+            parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK)
+        else:
+            args.logger.info(f'running serial chunked inference')
+            chunked_inference(model, dataset, args, addl_targs)
 
 
 def chunked_inference(model, dataset, args, addl_targs):
@@ -232,8 +257,50 @@ def chunked_inference(model, dataset, args, addl_targs):
     f.close()
     args.logger.info(f'closing {args.output}')
 
+def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, rank):
+    n_samples = len(dataset)
+    f = h5py.File(args.output, 'w', driver='mpio', comm=comm)
 
-def get_outputs(model, loader, device, debug=False, chunks=None):
+    lbl_names = f.require_dataset('label_names', shape=dataset.label_names.shape, dtype=h5py.special_dtype(vlen=str))
+    if rank == 0:
+        lbl_names[:] = data=dataset.label_names
+
+    outputs = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+
+    labels = f.require_dataset('labels', shape=(n_samples,), dtype=int)
+
+    orig_lens = f.require_dataset('orig_lens', shape=(n_samples,), dtype=int)
+
+    seq_ids = f.require_dataset('seq_ids', shape=(n_samples,), dtype=int)
+
+    model.to(args.device)
+
+    comm.Barrier()
+
+    for loader_key, loader in args.loaders.items():
+        if rank == 0:
+            args.logger.info(f'computing outputs for {loader_key}')
+        mask = f.require_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
+        for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=100, prog_bar=rank==0):
+            order = np.argsort(idx)
+            idx = idx[order]
+            with outputs.collective:
+                outputs[idx] = _outputs[order]
+            with labels.collective:
+                labels[idx] = _labels[order]
+            with orig_lens.collective:
+                orig_lens[idx] = _orig_lens[order]
+            with seq_ids.collective:
+                seq_ids[idx] = _seq_ids[order]
+            with mask.collective:
+                mask[idx] = True
+
+    comm.Barrier()
+
+    f.close()
+    args.logger.info(f'closing {args.output}')
+
+def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
     """
     Get model outputs for all samples in the given loader
 
@@ -260,7 +327,8 @@ def get_outputs(model, loader, device, debug=False, chunks=None):
     max_batches = 100 if debug else sys.maxsize
     from tqdm import tqdm
     file = sys.stdout
-    it = tqdm(loader, file=sys.stdout)
+    if prog_bar:
+        it = tqdm(loader, file=sys.stdout)
     with torch.no_grad():
         for idx, (i, X, y, olen, seq_i) in enumerate(it):
             X = X.to(device)

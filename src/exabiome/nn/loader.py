@@ -569,6 +569,8 @@ class LazySeqDataset(Dataset):
         kwargs.setdefault('load', False)
         kwargs.setdefault('ohe', False)
 
+        self.comm = kwargs.pop('comm', None)
+
         if hparams is not None:
             if not isinstance(hparams, argparse.Namespace):
                 raise ValueError('hparams must be a Namespace object')
@@ -650,7 +652,10 @@ class LazySeqDataset(Dataset):
 
     def open(self):
         """Open the HDMF file and set up chunks and taxonomy label"""
-        self.io = get_hdf5io(self.path, 'r')
+        if self.comm is not None:
+            self.io = get_hdf5io(self.path, 'r', comm=self.comm, driver='mpio')
+        else:
+            self.io = get_hdf5io(self.path, 'r')
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.orig_difile = self.io.read()
