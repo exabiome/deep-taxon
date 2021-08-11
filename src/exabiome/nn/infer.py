@@ -15,6 +15,7 @@ import h5py
 import argparse
 import torch
 from torch.utils.data import Subset
+from torch.cuda.amp import autocast
 import torch.nn as nn
 import logging
 
@@ -54,6 +55,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-N', '--nonrep', action='append_const', const='nonrep', dest='loaders', help='the dataset is nonrepresentative species')
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
+    parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk')
     parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=0)
     env_grp = parser.add_argument_group("Resource Manager").add_mutually_exclusive_group()
     env_grp.add_argument("--lsf", default=False, action='store_true', help='running in an LSF environment')
@@ -69,6 +71,18 @@ def parse_args(*addl_args, argv=None):
     args = parser.parse_args(argv)
 
     return args
+
+
+def split(dset_len, size, rank):
+    q, r = divmod(dset_len, size)
+    if rank < r:
+        q += 1
+        b = rank*q
+        return np.arange(b, b+q)
+    else:
+        offset = (q+1)*r
+        b = (rank - r)*q + offset
+        return np.arange(b, b+q)
 
 
 def process_args(argv=None, size=1, rank=0, comm=None):
@@ -160,8 +174,9 @@ def process_args(argv=None, size=1, rank=0, comm=None):
             tmp_dset = Subset(tmp_dset, np.arange(args.start, len(dataset)))
 
         if size > 1:
-            tmp_dset = Subset(tmp_dset, np.arange(rank, len(tmp_dset), size))
-
+            subset = split(len(tmp_dset), size, rank)
+            tmp_dset = Subset(tmp_dset, subset)
+            args.logger.info(f'rank {rank} - processing {len(subset)} samples subset')
 
         ldr = get_loader(tmp_dset, batch_size=args.batch_size, distances=False)
         args.loaders = {'input': ldr}
@@ -261,9 +276,9 @@ def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, ran
     n_samples = len(dataset)
     f = h5py.File(args.output, 'w', driver='mpio', comm=comm)
 
-    lbl_names = f.require_dataset('label_names', shape=dataset.label_names.shape, dtype=h5py.special_dtype(vlen=str))
-    if rank == 0:
-        lbl_names[:] = data=dataset.label_names
+    # lbl_names = f.require_dataset('label_names', shape=dataset.label_names.shape, dtype=h5py.special_dtype(vlen=str))
+    # if rank == 0:
+    #     lbl_names[:] = data=dataset.label_names
 
     outputs = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
 
@@ -281,17 +296,23 @@ def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, ran
         if rank == 0:
             args.logger.info(f'computing outputs for {loader_key}')
         mask = f.require_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
-        for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=100, prog_bar=rank==0):
+        for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=rank==0):
             order = np.argsort(idx)
             idx = idx[order]
+            #args.logger.info(f'rank {rank} - {idx}')
+            #args.logger.info(f'rank {rank} - writing outputs')
             with outputs.collective:
                 outputs[idx] = _outputs[order]
+            #args.logger.info(f'rank {rank} - writing labels')
             with labels.collective:
                 labels[idx] = _labels[order]
+            #args.logger.info(f'rank {rank} - writing lens')
             with orig_lens.collective:
                 orig_lens[idx] = _orig_lens[order]
+            #args.logger.info(f'rank {rank} - writing seq_ids')
             with seq_ids.collective:
                 seq_ids[idx] = _seq_ids[order]
+            #args.logger.info(f'rank {rank} - writing mask')
             with mask.collective:
                 mask[idx] = True
 
@@ -327,12 +348,15 @@ def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
     max_batches = 100 if debug else sys.maxsize
     from tqdm import tqdm
     file = sys.stdout
+    it = loader
     if prog_bar:
-        it = tqdm(loader, file=sys.stdout)
+        it = tqdm(it, file=sys.stdout)
     with torch.no_grad():
         for idx, (i, X, y, olen, seq_i) in enumerate(it):
             X = X.to(device)
-            outputs.append(model(X).to('cpu').detach())
+            with autocast():
+                out = model(X).to('cpu').detach()
+            outputs.append(out)
             indices.append(i.to('cpu').detach())
             labels.append(y.to('cpu').detach())
             orig_lens.append(olen.to('cpu').detach())
