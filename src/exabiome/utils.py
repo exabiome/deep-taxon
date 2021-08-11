@@ -28,6 +28,10 @@ def parse_logger(string):
     return ret
 
 
+def get_logger():
+    return parse_logger('')
+
+
 def check_directory(path):
     if os.path.exists(path):
         if not os.path.isdir(path):
