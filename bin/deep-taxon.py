@@ -41,6 +41,7 @@ command_dict = {
     'extract-profile': Command('nn.summarize.get_profile_data', 'Extract profile data from log files'),
     'plot-loss': Command('nn.summarize.plot_loss', 'Plot loss curves from metrics file'),
     'show-hparams': Command('nn.train.show_hparams', 'Print hparams from a checkpoint file'),
+    'to-onnx': Command('nn.deploy.to_onnx', 'convert checkpoint to ONNX format'),
 }
 
 
