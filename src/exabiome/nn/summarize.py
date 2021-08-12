@@ -514,8 +514,15 @@ def plot_loss(argv=None):
     parser.add_argument('-o', '--outdir', type=str, help='the output directory', default=None)
     parser.add_argument('-f', '--force', action='store_true', help='overwrite existing plots if they exist', default=False)
     parser.add_argument('-L', '--labels', type=str, help='a comma-separated string with labels for each CSV', default=None)
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-V', '--validation', action='store_true', default=False, help='only plot validation')
+    grp.add_argument('-R', '--training', action='store_true', default=False, help='only plot training')
     #parser.add_argument('cols', nargs='*', type=str, help='the metrics.csv file')
     args = parser.parse_args(argv)
+
+    if not (args.validation or args.training):
+        args.validation = True
+        args.training = True
 
     def plot(ax, x, y, **kwargs):
         mask = np.logical_not(np.logical_or(np.isnan(x), np.isnan(y)))
@@ -549,7 +556,7 @@ def plot_loss(argv=None):
         labels = [f'csv-{d}' for d in range(len(args.csv))]
 
 
-    loss_fig, loss_ax = plt.subplots(1)
+    loss_fig, loss_ax = plt.subplots(1, figsize=(7, 5))
     epoch_max = 0
     loss_max = 0
     epoch_ratio = None
@@ -571,24 +578,27 @@ def plot_loss(argv=None):
             epoch_ratio = epoch
             epoch_x = x
 
-        plot(loss_ax, x, tr_loss, color=col[1], label=f'{label} (tr)')
-        if 'validation_loss' in df:
+        if args.training:
+            plot(loss_ax, x, tr_loss, color=col[1], label=f'{label} (tr)')
+        if 'validation_loss' in df and args.validation:
             va_loss = df.validation_loss.values
             plot(loss_ax, x, va_loss, color=col[0], ls='--', label=f'{label} (val)')
             loss_max = max(loss_max, np.nanmax(tr_loss))
 
         columns = df.columns
-        if 'training_acc' in df.columns:
+        if 'training_acc' in df.columns and args.training:
             if acc_fig is None:
-                acc_fig, acc_ax = plt.subplots(1)
+                acc_fig, acc_ax = plt.subplots(1, figsize=(7, 5))
 
             tr_acc = df.training_acc.values
             plot(acc_ax, x, tr_acc, color=col[1], label=f'{label} (tr)')
-            if 'validation_acc' in df.columns:
-                va_acc = df.validation_acc.values
-                plot(acc_ax, x, va_acc, color=col[0], ls='--', label=f'{label} (val)')
+        if 'validation_acc' in df.columns and args.validation:
+            if acc_fig is None:
+                acc_fig, acc_ax = plt.subplots(1, figsize=(7, 5))
+            va_acc = df.validation_acc.values
+            plot(acc_ax, x, va_acc, color=col[0], ls='--', label=f'{label} (val)')
 
-    def add_epoch(ax, maxval, leg_loc):
+    def add_epoch(ax, maxval):
         # calculate epoch values to fit on Axes
         epoch_ax = ax.twinx()
         ep = epoch_ratio
@@ -612,20 +622,22 @@ def plot_loss(argv=None):
 
         # Add legend to epoch Axes so legend gets drawn over epoch line
         handles, labels = ax.get_legend_handles_labels()
-        epoch_ax.legend(handles, labels, loc=leg_loc)
+        epoch_ax.legend(handles, labels, bbox_to_anchor=(1.1,1), loc="upper left")
         epoch_ax.set_ylabel('Epoch')
 
     loss_ax.set_ylabel('Loss')
-    add_epoch(loss_ax, loss_max, 'upper right')
+    add_epoch(loss_ax, loss_max)
 
+    loss_fig.tight_layout()
     print(f'saving loss figure to {loss_path}')
     loss_fig.savefig(loss_path, dpi=100)
 
 
     if acc_ax is not None:
         acc_ax.set_ylabel('Accuracy')
-        add_epoch(acc_ax, acc_max, 'lower right')
+        add_epoch(acc_ax, acc_max)
 
+        acc_fig.tight_layout()
         print(f'saving accuracy figure to {acc_path}')
         acc_fig.savefig(acc_path, dpi=100)
 
