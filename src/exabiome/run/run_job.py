@@ -1,7 +1,8 @@
-import sys
-import os
 import argparse
+from datetime import datetime
+import os
 import shutil
+import sys
 import ruamel.yaml as yaml
 
 from .summit import LSFJob
@@ -284,6 +285,7 @@ def run_train(argv=None):
                     if args.message is None:
                         args.message = input("please provide a message about this run:\n")
                     print(f'- {args.message}', file=logout)
+                    print(f'  - date:          %s' % datetime.now().strftime("%c"), file=logout)
                     print(f'  - job directory: {jobdir}', file=logout)
                     print(f'  - log file:      {logpath}', file=logout)
                     print(f'  - config file:   {jobdir}.yml', file=logout)
