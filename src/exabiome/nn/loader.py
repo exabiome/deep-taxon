@@ -437,25 +437,24 @@ class DeepIndexDataModule(pl.LightningDataModule):
 
     def __init__(self, hparams, inference=False, keep_open=False):
         super().__init__()
-        self.hparams = hparams
 
-        kwargs = dict(random_state=self.hparams.seed,
-                      batch_size=self.hparams.batch_size,
-                      downsample=self.hparams.downsample)
+        kwargs = dict(random_state=hparams.seed,
+                      batch_size=hparams.batch_size,
+                      downsample=hparams.downsample)
         if inference:
-            self.hparams.manifold = False
-            self.hparams.graph = False
-            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open)
+            hparams.manifold = False
+            hparams.graph = False
+            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
         else:
-            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open)
-            if self.hparams.load:
+            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
+            if hparams.load:
                 self.dataset.load()
             kwargs['pin_memory'] = False
-            kwargs['shuffle'] = self.hparams.shuffle
-            kwargs.update(self.hparams.loader_kwargs)
+            kwargs['shuffle'] = hparams.shuffle
+            kwargs.update(hparams.loader_kwargs)
 
-        kwargs['num_workers'] = self.hparams.num_workers
-        if self.hparams.num_workers > 0:
+        kwargs['num_workers'] = hparams.num_workers
+        if hparams.num_workers > 0:
             kwargs['multiprocessing_context'] = 'spawn'
             kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
