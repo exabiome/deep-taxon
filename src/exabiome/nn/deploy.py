@@ -3,6 +3,8 @@ import os
 import sys
 
 import torch
+import torch.nn as nn
+import torch.onnx
 
 from ..utils import get_logger
 from .loader import LazySeqDataset
@@ -18,6 +20,16 @@ def process_args(argv=None, size=1, rank=0, comm=None):
     else:
         args = argv
 
+class SoftmaxModel(nn.Module):
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.sm = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = self.model(x)
+        return self.sm(x)
 
 def to_onnx(argv=None):
     """
@@ -34,6 +46,7 @@ def to_onnx(argv=None):
     parser.add_argument('checkpoint', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
     parser.add_argument('-f', '--force', action='store_true', default=False, help='overwrite output if it exists')
+    parser.add_argument('-s', '--softmax', action='store_true', default=False, help='add softmax layer to model before exporting')
 
     if len(argv) == 0:
         parser.print_help()
@@ -49,7 +62,7 @@ def to_onnx(argv=None):
             setattr(args, k, v)
 
     if args.output is None:
-        args.output = f'{args.checkpoint.strip(".ckpt")}.onnx'
+        args.output = f'{args.checkpoint.rstrip(".ckpt")}.onnx'
 
     if os.path.exists(args.output) and not args.force:
         print(f'ONNX file {args.output} already exists. Use -f to overwrite', file=sys.stderr)
@@ -59,11 +72,31 @@ def to_onnx(argv=None):
 
     # load the model and override batch size
     model = process_model(args, inference=True)
-    model.eval()
 
     logger.info(f'loading sample input from {args.input}')
     dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
-    input_sample = torch.stack([dataset[i][1] for i in range(10)])
+    input_sample = torch.stack([dataset[i][1] for i in range(16)])
 
+    if args.softmax:
+        logger.info(f'adding softmax to {model.__class__.__name__} model')
+        model = SoftmaxModel(model)
+
+    model.eval()
+
+    logger.info(f'checking input sample: shape = {input_sample.shape}')
+    output = model(input_sample)
+    logger.info(f'output shape = {output.shape}')
+
+
+    logger.info(f'input shape: {input_sample.shape}')
     logger.info(f'writing ONNX file to {args.output}')
-    model.to_onnx(args.output, input_sample, export_params=True)
+    torch.onnx.export(model,                                            # model being run
+                      input_sample,                                     # model input (or a tuple for multiple inputs)
+                      args.output,                                      # where to save the model (can be a file or file-like object)
+                      export_params=True,                               # store the trained parameter weights inside the model file
+                      opset_version=10,                                 # the ONNX version to export the model to
+                      do_constant_folding=True,                         # whether to execute constant folding for optimization
+                      input_names = ['input'],                          # the model's input names
+                      output_names = ['output'],                        # the model's output names
+                      dynamic_axes={'input' : {0 : 'batch_size'},       # variable length axes
+                                    'output' : {0 : 'batch_size'}})
