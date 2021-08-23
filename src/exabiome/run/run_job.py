@@ -84,6 +84,7 @@ def run_train(argv=None):
     parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
     parser.add_argument('--sanity',             help="run a small number of batches", action='store_true', default=False)
     parser.add_argument('--early_stop',         help="use PL early stopping", action='store_true', default=False)
+    parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
@@ -154,6 +155,9 @@ def run_train(argv=None):
 
     if args.early_stop:
         options += f' --early_stop'
+
+    if args.swa:
+        options += f' --swa'
 
     if args.profile:
         options += f' --profile'
