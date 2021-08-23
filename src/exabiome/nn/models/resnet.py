@@ -306,6 +306,16 @@ class ResNet50(ResNet):
         super().__init__(hparams)
 
 
+@model('resnet74')
+class ResNet74(ResNet):
+
+    def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
+        hparams.block = Bottleneck
+        hparams.layers = [3, 4, 14, 3]
+        super().__init__(hparams)
+
+
 @model('resnet101')
 class ResNet101(ResNet):
 
@@ -322,7 +332,7 @@ class ResNet152(ResNet):
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
-        hparams.layers = [3, 4, 36, 3]
+        hparams.layers = [3, 8, 36, 3]
         super().__init__(hparams)
 
 
