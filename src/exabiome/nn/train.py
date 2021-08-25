@@ -106,7 +106,9 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--early_stop', action='store_true', default=False, help='stop early if validation loss does not improve')
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
-    parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-i', '--init', type=str, help='a checkpoint to initalize a model from', default=None)
+    grp.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
@@ -214,27 +216,7 @@ def process_args(args=None, return_io=False):
 
     targs['gpus'] = process_gpus(args.gpus)
 
-    #if args.horovod:
-    #    targs['accelerator'] = 'horovod'
-    #    if args.gpus:
-    #        targs['gpus'] = 1
-    #else:
-    #    targs['num_nodes'] = args.num_nodes
-    #    targs['accelerator'] = 'ddp'
-    #    if targs['gpus'] != 1 or targs['num_nodes'] > 1:
-    #        # env = None
-    #        # if args.lsf:
-    #        #     env = cenv.LSFEnvironment()
-    #        # elif args.slurm:
-    #        #     env = cenv.SLURMEnvironment()
-    #        # else:
-    #        #     print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
-    #        #           file=sys.stderr)
-    #        #     sys.exit(1)
-    #        # targs.setdefault('plugins', list()).append(env)
-    #        pass
     del args.gpus
-
 
     env = None
     if args.lsf:
@@ -284,12 +266,12 @@ def process_args(args=None, return_io=False):
         targs['precision'] = 16
     del args.fp16
 
+    if args.checkpoint is not None:
+        targs['resume_from_checkpoint'] = args.checkpoint
+
     ret = [model, args, targs]
     if return_io:
         ret.append(io)
-
-    if args.checkpoint:
-        args.experiment += '_restart'
 
     ret.append(data_mod)
 
@@ -333,11 +315,18 @@ def run_lightning(argv=None):
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
 
-    if args.checkpoint is not None:
+    if args.init is not None:
+        checkpoint = args.init
+        link_dest = 'init.ckpt'
+    elif args.checkpoint is not None:
+        checkpoint = args.checkpoint
+        link_dest = 'resumed_from.ckpt'
+
+    if checkpoint is not None:
         if RANK == 0:
             print0(f'symlinking to {args.checkpoint} from {outdir}')
-            dest = output('start.ckpt')
-            src = os.path.relpath(args.checkpoint, start=outdir)
+            dest = output(link_dest)
+            src = os.path.relpath(checkpoint, start=outdir)
             if os.path.exists(dest):
                 existing_src = os.readlink(dest)
                 if existing_src != src:

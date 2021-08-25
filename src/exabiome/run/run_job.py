@@ -79,6 +79,7 @@ def run_train(argv=None):
     parser.add_argument('-D', '--dataset',      help="the dataset name", default='default')
     parser.add_argument('-e', '--epochs',       help="the number of epochs to run for", default=10)
     parser.add_argument('-c', '--checkpoint',   help="a checkpoint file to restart from", default=None)
+    parser.add_argument('-i', '--init',         help="a checkpoint file to initialize models from", default=None)
     parser.add_argument('-F', '--features',     help="a checkpoint file for features", default=None)
     parser.add_argument('-E', '--experiment',   help="the experiment name to use", default=None)
     parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
@@ -195,6 +196,10 @@ def run_train(argv=None):
     if args.checkpoint:
         job.set_env_var('CKPT', args.checkpoint)
         options += f' -c $CKPT'
+
+    elif args.init:
+        job.set_env_var('CKPT', args.init)
+        options += f' -i $CKPT'
 
     if args.features:
         job.set_env_var('FEATS_CKPT', args.features)

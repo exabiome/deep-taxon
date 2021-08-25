@@ -67,15 +67,15 @@ def process_model(args, inference=False, taxa_table=None):
     if inference:
         model_cls.forward = auto_move_data(model_cls.forward)
 
-    if args.checkpoint is not None:
+    if args.init is not None:
         try:
-            model = model_cls.load_from_checkpoint(args.checkpoint)
+            model = model_cls.load_from_checkpoint(args.init)
             ckpt_hparams = model.hparams
             if not inference:
                 if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
                     if taxa_table is None:
                         msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
-                              "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.checkpoint}. You must provide the TaxaTable for "
+                              "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.init}. You must provide the TaxaTable for "
                               "computing the taxonomy mapping for reconfiguring the final output layer")
 
                         raise ValueError(msg)
@@ -84,7 +84,7 @@ def process_model(args, inference=False, taxa_table=None):
                     model.hparams.tgt_tax_lvl = args.tgt_tax_lvl
         except RuntimeError as e:
             if 'Missing key(s)' in e.args[0]:
-                raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
+                raise RuntimeError(f'Unable to load checkpoint. Make sure {args.init} is a checkpoint for {args.model}') from e
             else:
                 raise e
     else:
