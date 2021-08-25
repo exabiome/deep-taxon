@@ -140,22 +140,63 @@ def process_dataset(args, path=None):
     return dataset, io
 
 
+class SeqCollater:
+
+    def __init__(self, padval):
+        self.padval = padval
+
+    def __call__(self, samples):
+        maxlen = 0
+        l_idx = -1
+        if isinstance(samples, tuple):
+            samples = [samples]
+        for i, X, y, seq_id in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+        X_ret = list()
+        y_ret = list()
+        idx_ret = list()
+        size_ret = list()
+        seq_id_ret = list()
+        for i, X, y, seq_id in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif), value=self.padval)
+            X_ret.append(X_)
+            y_ret.append(y)
+            size_ret.append(X.shape[l_idx])
+            idx_ret.append(i)
+            seq_id_ret.append(seq_id)
+        X_ret = torch.stack(X_ret)
+        y_ret = torch.stack(y_ret)
+        size_ret = torch.tensor(size_ret)
+        idx_ret = torch.tensor(idx_ret)
+        seq_id_ret = torch.tensor(seq_id_ret)
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+
+
 class GraphCollater:
-    def __init__(self, node_ids):
+
+    def __init__(self, node_ids, padval):
+        self.collater = SeqCollater(padval)
         self.node_ids = torch.as_tensor(node_ids, dtype=torch.long)
 
     def __call__(self, samples):
         """
         A function to collate samples and return a sub-distance matrix
         """
-        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = collate(samples)
+        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = self.collater(samples)
 
         # Get distances
         y_ret = self.node_ids[y_idx]
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
+
 class DistanceCollater:
-    def __init__(self, dmat):
+
+    def __init__(self, dmat, padval):
+        self.collater = SeqCollater(padval)
         if len(dmat.shape) == 1:
             from scipy.spatial.distance import squareform
             dmat = squareform(dmat)
@@ -166,44 +207,11 @@ class DistanceCollater:
         """
         A function to collate samples and return a sub-distance matrix
         """
-        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = collate(samples)
+        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = self.collater(samples)
 
         # Get distances
         y_ret = self.dmat[y_idx][:, y_idx]
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
-
-def collate(samples):
-    """
-    A function to collate variable length sequence samples
-    """
-    maxlen = 0
-    l_idx = -1
-    if isinstance(samples, tuple):
-        samples = [samples]
-    for i, X, y, seq_id in samples:
-        if maxlen < X.shape[l_idx]:
-            maxlen = X.shape[l_idx]
-    X_ret = list()
-    y_ret = list()
-    idx_ret = list()
-    size_ret = list()
-    seq_id_ret = list()
-    for i, X, y, seq_id in samples:
-        dif = maxlen - X.shape[l_idx]
-        X_ = X
-        if dif > 0:
-            X_ = F.pad(X, (0, dif))
-        X_ret.append(X_)
-        y_ret.append(y)
-        size_ret.append(X.shape[l_idx])
-        idx_ret.append(i)
-        seq_id_ret.append(seq_id)
-    X_ret = torch.stack(X_ret)
-    y_ret = torch.stack(y_ret)
-    size_ret = torch.tensor(size_ret)
-    idx_ret = torch.tensor(idx_ret)
-    seq_id_ret = torch.tensor(seq_id_ret)
-    return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
 class SeqDataset(Dataset):
@@ -391,11 +399,12 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
                                                                   stratify=stratify,
                                                                   random_state=random_state)
 
-    collater = collate
     if dataset.manifold:
-        collater = DistanceCollater(dataset.distances)
+        collater = DistanceCollater(dataset.distances, dataset.padval)
     elif dataset.graph:
-        collater = GraphCollater(dataset.node_ids)
+        collater = GraphCollater(dataset.node_ids, dataset.padval)
+    else:
+        collater = SeqCollater(dataset.padval)
 
     if kwargs.get('num_workers', None) not in (None, 0):
         if dataset.difile is not None:
@@ -598,7 +607,24 @@ class LazySeqDataset(Dataset):
         self.taxa_labels, self.taxa_counts = np.unique(self.sample_labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
 
-        self.vocab_len = len(self.orig_difile.seq_table['sequence'].target.elements)
+        self.vocab = np.chararray.upper(self.orig_difile.seq_table['sequence'].target.elements[:].astype('U1'))
+        if len(self.vocab) > 18:
+            self.protein = True
+            idx = np.where(self.vocab == '-')[0]
+            if len(idx) > 0:
+                self.padval = idx[0]
+            else:
+                warnings.warn("Could not find null value for protein sequences. Looking for '-'. Padding with %s" % self.vocab[0])
+                self.padval = 0
+        else:
+            self.protein = False
+            idx = np.where(self.vocab == 'N')[0]
+            if len(idx) > 0:
+                self.padval = idx[0]
+            else:
+                warnings.warn("Could not find null value for DNA sequences. Looking for 'N'. Padding with %s" % self.vocab[0])
+                self.padval = 0
+        self.vocab_len = len(self.vocab)
 
         #############################
         # self._label_key - the column from the TaxaTable
