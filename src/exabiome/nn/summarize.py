@@ -1,3 +1,4 @@
+import argparse
 import sys
 import glob
 import os.path
@@ -319,7 +320,6 @@ def classification_aggregate(path, verbose=False):
 
 def classifier_summarize(argv=None):
     '''Summarize training/inference results'''
-    import argparse
     import pickle
     from ..utils import parse_logger
     parser = argparse.ArgumentParser()
@@ -640,6 +640,273 @@ def plot_loss(argv=None):
         acc_fig.tight_layout()
         print(f'saving accuracy figure to {acc_path}')
         acc_fig.savefig(acc_path, dpi=100)
+
+
+def aggregate_chunks(argv=None):
+    from mpi4py import MPI
+    import torch
+    import torch.nn.functional as F
+
+    from exabiome.utils import parse_logger
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input", type=str, help="the inference file with individual sample (i.e. chunks) outputs")
+    parser.add_argument("output", type=str, help="the file to save aggregated outputs to")
+    parser.add_argument('--fwd_only', action='store_true', help='only forward strand was used', default=False)
+
+    args = parser.parse_args(argv)
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    logger = parse_logger('')
+
+    f = h5py.File(sys.argv[1], 'r', driver='mpio', comm=comm)
+
+    logger.info(f'rank {rank} - loading network outputs')
+    chunk_seq_ids = f['seq_ids'][:]
+    chunk_outputs = f['outputs']
+    chunk_labels = f['labels'][:]
+    chunk_lens = f['orig_lens'][:]
+
+    uniq_seqs = np.unique(chunk_seq_ids)
+    total_seqs = len(uniq_seqs)
+
+    seq_idx = split(len(uniq_seqs), size, rank)
+    q, r = divmod(total_seqs, size)
+    if rank < r:
+        q += 1
+        b = rank * q
+        seq_idx = np.arange(b, b + q)
+    else:
+        offset = (q + 1) * r
+        b = (rank - r) * q + offset
+        seq_idx = np.arange(b, b + q)
+
+    N = len(seq_idx)
+
+    if args.prob:
+        seq_preds = np.zeros(N, dtype=int)
+    seq_labels = np.zeros(N, dtype=int)
+    seq_lens = np.zeros(N, dtype=int)
+    seq_outputs = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
+
+    uniq_seqs = uniq_seqs[seq_idx]
+
+    gpu = torch.device('cuda:%d' % (rank % torch.cuda.device_count()))
+
+    logger.info(f'rank {rank} - aggregating chunk outputs by sequence')
+    for i, seq in enumerate(uniq_seqs):
+        mask = chunk_seq_ids == seq
+        idx = np.where(mask)[0]
+
+        prob = F.softmax(torch.tensor(chunk_outputs[idx], device=gpu), dim=1).mean(dim=0)
+        if args.prob:
+            seq_preds[i] = prob.argmax().cpu()
+        seq_outputs[i] = prob.cpu()
+        seq_labels[i] = chunk_labels[mask][0]
+        seq_lens[i] = chunk_lens[mask].sum()
+
+    if args.fwd_only:
+        seq_lens = seq_lens // 2
+
+    comm.Barrier()
+
+    f.close()
+
+    out = h5py.File(sys.argv[2], 'w', driver='mpio', comm=comm)
+
+    N = total_seqs
+    seq_outputs_dset = out.create_dataset('outputs', shape=(N, outputs.shape[1]), dtype=float)
+    if args.prob:
+        seq_preds_dset = out.create_dataset('preds', shape=(N,), dtype=float)
+    seq_labels_dset = out.create_dataset('labels', shape=(N,), dtype=int)
+    seq_lens_dset = out.create_dataset('lengths', shape=(N,), dtype=int)
+    seq_ids_dset = out.create_dataset('seq_ids', shape=(N,), dtype=int)
+
+
+    logger.info(f'rank {rank} - writing outputs')
+    with seq_outputs_dset.collective:
+        seq_outputs_dset[seq_idx] = seq_outputs
+
+    logger.info(f'rank {rank} - writing labels')
+    with seq_labels_dset.collective:
+        seq_labels_dset[seq_idx] = seq_labels
+
+    if args.prob:
+        logger.info(f'rank {rank} - writing predictions')
+        with seq_preds.collective:
+            seq_preds_dset[seq_idx] = seq_preds
+
+    logger.info(f'rank {rank} - writing sequence lengths')
+    with seq_lens_dset.collective:
+        seq_lens_dset[seq_idx] = seq_lens
+
+    logger.info(f'rank {rank} - writing sequence ids')
+    with seq_ids_dset.collective:
+        seq_ids_dset[seq_idx] = uniq_seqs
+
+
+    comm.Barrier()
+
+    logger.info(f'rank {rank} - done')
+    out.close()
+
+
+def taxonomic_accuracy(argv=None):
+    #import ..sequence as seq
+    from ..sequence import DeepIndexFile
+    from ..utils import get_logger
+    from hdmf.common import get_hdf5io
+    import h5py
+    import numpy as np
+    import pandas as pd
+    from sklearn.preprocessing import LabelEncoder
+
+
+    levels = DeepIndexFile.taxonomic_levels
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("summary", type=str, help='the summarized sequence NN outputs')
+    parser.add_argument("input", type=str, help='the training input data')
+    parser.add_argument("output", type=str, help="the path to save resutls to")
+    parser.add_argument("-l", "--level", type=str, choices=levels, help='the taxonomic level')
+
+    args = parser.parse_args(argv)
+
+    logger = get_logger()
+
+    logger.info(f'reading {args.input}')
+    io = get_hdf5io(args.input, 'r')
+    difile = io.read()
+
+    f = h5py.File(args.summary, 'r')
+
+    logger.info(f'loading summary results from {args.summary}')
+    seq_preds = f['preds'][:].astype(int)
+    seq_labels = f['labels'][:].astype(int)
+    seq_lens = f['lengths'][:].astype(int)
+
+    n_classes = f['outputs'].shape[1]
+    f.close()
+
+    ## I used this code to double check that genus elements were correct
+    # seq_ids = f['seq_ids'][:]
+    # genome_ids = difile.seq_table['genome'].data[:][seq_ids]
+    # taxon_ids = difile.genome_table['taxon_id'].data[:][genome_ids]
+    # classes = difile.taxa_table['genus'].elements.data[:]
+
+    logger.info('loading taxonomy table')
+    # do this because h5py.Datasets cannot point-index with non-unique indices
+    for col in difile.taxa_table.columns:
+        col.transform(lambda x: x[:])
+
+    level = None
+    if args.level is None:
+        for lvl in levels[:-1]:
+            n_classes_lvl = difile.taxa_table[lvl].elements.data.shape[0]
+            if n_classes == n_classes_lvl:
+                level = lvl
+        if level is None:
+            print("Cannot determine which level to use. Please specify with --level option", file=sys.stderr)
+            exit(1)
+    else:
+        level = args.level
+
+    classes = difile.taxa_table[level].elements.data
+    to_drop = ['taxon_id']
+    for lvl in levels[::-1]:
+        if lvl == level:
+            break
+        to_drop.append(lvl)
+
+    # orient table to index it by the taxonomic level and remove columns we cannot get predictions for
+    taxdf = difile.taxa_table.to_dataframe()
+    taxdf = taxdf.drop(to_drop, axis=1).\
+                  set_index(level).\
+                  groupby(level).\
+                  nth(0).\
+                  filter(classes, axis=0)
+
+    logger.info('encoding taxonomy for quicker comparisons')
+    # encode into integers for faster comparisons
+    encoders = dict()
+    new_dat = dict()
+    for col in taxdf.columns:
+        enc = LabelEncoder().fit(taxdf[col])
+        encoders[col] = enc
+        new_dat[col] = enc.transform(taxdf[col])
+    enc_df = pd.DataFrame(data=new_dat, index=taxdf.index)
+
+    # a helper function to transform results into a DataFrame
+    def get_results(true, pred, lens):
+        mask = true == pred
+        return {'seq-level': mask.mean(), 'base-level': lens[mask].sum()/lens.sum()}
+
+    results = dict()
+    for colname in enc_df.columns:
+        logger.info(f'computing results for {colname}')
+        col = enc_df[colname].values
+        results[colname] = get_results(col[seq_labels], col[seq_preds], seq_lens)
+
+    logger.info(f'computing results for {level}')
+    results[level] = get_results(seq_labels, seq_preds, seq_lens)
+
+    results['n'] = {'seq-level': len(seq_lens), 'base-level': seq_lens.sum()}
+
+    results = pd.DataFrame(data=results)
+    results.to_csv(args.output, sep=',')
+    print(results)
+
+def aggregate_seqs(argv=None):
+    #import ..sequence as seq
+    from ..sequence import DeepIndexFile
+    from ..utils import get_logger
+    from hdmf.common import get_hdf5io
+    import h5py
+    import numpy as np
+    import pandas as pd
+    from sklearn.preprocessing import LabelEncoder
+    from tqdm import tqdm
+
+
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("summary", type=str, help='the summarized sequence NN outputs')
+    parser.add_argument("output", type=str, help="the path to save resutls to")
+
+    args = parser.parse_args(argv)
+
+    logger = get_logger()
+
+    f = h5py.File(args.summary, 'r')
+
+    logger.info(f'loading summary results from {args.summary}')
+    seq_outputs = f['outputs']
+    seq_labels = f['labels'][:].astype(int)
+    seq_lens = f['lengths'][:].astype(int)
+
+    uniq_labels = np.unique(seq_labels)
+    n_labels = len(uniq_labels)
+
+    outf = h5py.File(args.output, 'w')
+    agg_outputs = outf.create_dataset('outputs', shape=(n_labels, seq_outputs.shape[1]), dtype=float)
+    agg_lens = outf.create_dataset('lengths', shape=(n_labels,), dtype=int)
+    agg_labels = outf.create_dataset('labels', shape=(n_labels,), dtype=int)
+
+    for i, lbl in tqdm(enumerate(uniq_labels), total=n_labels):
+        mask = np.where(uniq_labels == lbl)[0]
+        lens = seq_lens[mask]
+        outputs = seq_outputs[mask]
+        wave = np.average(outputs, weights=lens, axis=0)
+        agg_outputs[i] = wave
+        agg_lens[i] = lens.sum()
+        agg_labels[i] = lbl
+
+    outf.close()
+    f.close()
+
 
 
 if __name__ == '__main__':

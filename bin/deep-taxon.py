@@ -42,6 +42,9 @@ command_dict = {
     'plot-loss': Command('nn.summarize.plot_loss', 'Plot loss curves from metrics file'),
     'show-hparams': Command('nn.train.show_hparams', 'Print hparams from a checkpoint file'),
     'to-onnx': Command('nn.deploy.to_onnx', 'convert checkpoint to ONNX format'),
+    'agg-chunks': Command('nn.summarize.aggregate_chunks', 'aggregate sequence chunks to get NN outputs for individual sequences'),
+    'agg-seqs': Command('nn.summarize.aggregate_seqs', 'aggregate sequence chunks to get NN outputs for individual sequences'),
+    'tax-acc': Command('nn.summarize.taxonomic_accuracy', 'calculate classificaiton accuracy across all possible taxonomic levels'),
 }
 
 
