@@ -68,14 +68,15 @@ def to_onnx(argv=None):
         print(f'ONNX file {args.output} already exists. Use -f to overwrite', file=sys.stderr)
         sys.exit(1)
 
-    logger.info(f'loading model from {args.input} using config {args.config}')
 
-    # load the model and override batch size
-    model = process_model(args, inference=True)
 
     logger.info(f'loading sample input from {args.input}')
-    dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
     input_sample = torch.stack([dataset[i][1] for i in range(16)])
+
+    # load the model and override batch size
+    logger.info(f'loading model from {args.input} using config {args.config}')
+    model = process_model(args, inference=True, taxa_table=dataset.difile.taxa_table)
 
     if args.softmax:
         logger.info(f'adding softmax to {model.__class__.__name__} model')
@@ -88,15 +89,15 @@ def to_onnx(argv=None):
     logger.info(f'output shape = {output.shape}')
 
 
-    logger.info(f'input shape: {input_sample.shape}')
     logger.info(f'writing ONNX file to {args.output}')
-    torch.onnx.export(model,                                            # model being run
-                      input_sample,                                     # model input (or a tuple for multiple inputs)
-                      args.output,                                      # where to save the model (can be a file or file-like object)
-                      export_params=True,                               # store the trained parameter weights inside the model file
-                      opset_version=10,                                 # the ONNX version to export the model to
-                      do_constant_folding=True,                         # whether to execute constant folding for optimization
-                      input_names = ['input'],                          # the model's input names
-                      output_names = ['output'],                        # the model's output names
-                      dynamic_axes={'input' : {0 : 'batch_size'},       # variable length axes
-                                    'output' : {0 : 'batch_size'}})
+    with torch.no_grad():
+        torch.onnx.export(model,                                            # model being run
+                          input_sample,                                     # model input (or a tuple for multiple inputs)
+                          args.output,                                      # where to save the model (can be a file or file-like object)
+                          export_params=True,                               # store the trained parameter weights inside the model file
+                          opset_version=10,                                 # the ONNX version to export the model to
+                          do_constant_folding=True,                         # whether to execute constant folding for optimization
+                          input_names = ['input'],                          # the model's input names
+                          output_names = ['output'],                        # the model's output names
+                          dynamic_axes={'input' : {0 : 'batch_size'},       # variable length axes
+                                        'output' : {0 : 'batch_size'}})
