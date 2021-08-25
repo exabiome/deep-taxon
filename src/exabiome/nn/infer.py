@@ -19,8 +19,6 @@ from torch.cuda.amp import autocast
 import torch.nn as nn
 import logging
 
-from mpi4py import MPI
-
 def parse_args(*addl_args, argv=None):
     """
     Parse arguments for running inference
@@ -88,15 +86,10 @@ def split(dset_len, size, rank):
         return np.arange(b, b+q)
 
 
-def process_args(argv=None, size=1, rank=0, comm=None):
+def process_args(args, size=1, rank=0, comm=None):
     """
     Process arguments for running inference
     """
-    if not isinstance(argv, argparse.Namespace):
-        args = parse_args(argv=argv)
-    else:
-        args = argv
-
     conf_args = process_config(args.config)
     for k, v in vars(conf_args).items():
         if not hasattr(args, k):
@@ -229,11 +222,15 @@ def run_inference(argv=None):
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
 
+    args = parse_args(argv=argv)
+
+    from mpi4py import MPI
+
     COMM = MPI.COMM_WORLD
     RANK = COMM.Get_rank()
     SIZE = COMM.Get_size()
 
-    model, dataset, args, addl_targs = process_args(argv=argv, size=SIZE, rank=RANK)
+    model, dataset, args, addl_targs = process_args(args, size=SIZE, rank=RANK)
 
     if args.in_memory:
         args.logger.info(f'running in-memory inference')
