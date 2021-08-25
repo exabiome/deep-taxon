@@ -293,7 +293,10 @@ class TaxaTable(DynamicTable, TorchableMixin):
         if self.__taxmap[in_tax] >= self.__taxmap[out_tax]:
             raise ValueError(f'got in_tax={in_tax} and out_tax={out_tax} -- in_tax should be a higher taxonomic level than out_tax')
         in_ids = np.asarray(self[in_tax].data)
-        out_ids = np.asarray(self[out_tax].data)
+        if out_tax == 'species':
+            out_ids = np.arange(len(self))
+        else:
+            out_ids = np.asarray(self[out_tax].data)
         ret = np.ones(len(np.unique(out_ids)), dtype=int) * -1
         for in_id in np.unique(in_ids):
             mask = in_ids == in_id
