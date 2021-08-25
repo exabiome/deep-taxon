@@ -96,6 +96,10 @@ class AbstractLit(LightningModule):
         acc = (pred == target).float().sum()/len(target)
         return acc
 
+    def predict_step(self, batch, batch_idx, dataloader_idx=None):
+        idx, seqs, target, olen, seq_id = batch
+        return self.forward(seqs)
+
     # TRAIN
     def training_step(self, batch, batch_idx):
         idx, seqs, target, olen, seq_id = batch
