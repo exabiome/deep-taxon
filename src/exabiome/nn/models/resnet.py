@@ -382,7 +382,7 @@ class Wide_ResNet101_2(ResNet):
         super().__init__(hparams)
 
 
-class ResNetFeat(nn.Module):
+class ResNetFeatures(nn.Module):
     """
     A class for using only the convolutional layers of a ResNet.
     This model should not be trained. See resnet_feat.py for
@@ -425,7 +425,7 @@ class ResNetFeat(nn.Module):
         return x
 
 
-class ResNetClf(nn.Module):
+class ResNetClassifier(nn.Module):
     """
     A class for using only the fully-connected classifier layer of a ResNet.
     """

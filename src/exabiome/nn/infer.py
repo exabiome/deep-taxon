@@ -36,6 +36,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('input', type=str, help='the input file to run inference on')
     parser.add_argument('checkpoint', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
+    parser.add_argument('-f', '--features', action='store_true', help='drop classifier from ResNet model before inference', default=False)
     parser.add_argument('-E', '--experiment', type=str, default='default',
                         help='the experiment name to get the checkpoint from')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
@@ -69,6 +70,8 @@ def parse_args(*addl_args, argv=None):
         sys.exit(1)
 
     args = parser.parse_args(argv)
+
+    args.init == args.checkpoint
 
     return args
 
@@ -160,6 +163,14 @@ def process_args(argv=None, size=1, rank=0, comm=None):
 
     args.n_outputs = model.hparams.n_outputs
     args.save_seq_ids = model.hparams.window is not None
+
+    # remove ResNet features
+    if args.features:
+        if 'ResNet' not in model.__class__.__name__:
+            raise ValueError("Cannot use -f without ResNet model - got %s" % model.__class__.__name__)
+        from .models.resnet import ResNetFeatures
+        args.n_outputs = model.fc.in_features
+        model = ResNetFeatures(model)
 
     if args.loaders is None or len(args.loaders) == 0:
         args.loaders = ['train', 'validate', 'test']
