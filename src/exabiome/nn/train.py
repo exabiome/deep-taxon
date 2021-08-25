@@ -41,7 +41,7 @@ def get_conf_args():
         'downsample': dict(type=float, default=None, help='amount to downsample dataset to'),
         'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns, or ens'),
         'ens_beta': dict(help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9),
-        'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify', default=32),
+        'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify', default=None),
         'accumulate': dict(help='accumulate_grad_batches argument to pl.Trainer', default=1),
         'dropout_rate': dict(help='the dropout rate to use', default=0.5),
         'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
@@ -72,12 +72,26 @@ def print_config_templ(argv=None):
 
 
 def process_config(conf_path, args=None):
+    """
+    Process arguments that are defined in the config file
+    """
     with open(conf_path, 'r') as f:
         config = yaml.safe_load(f)
     args = args or argparse.Namespace()
     for k, v in get_conf_args().items():
         conf_val = config.pop(k, v.get('default', None))
         setattr(args, k, conf_val)
+
+    # set number if input channels
+    input_nc = 18
+    if args.protein:
+        input_nc = 26
+    args.input_nc = input_nc
+
+    # classify by default
+    if args.manifold == args.classify == False:
+        args.classify = True
+
     return args
 
 
@@ -140,25 +154,6 @@ def parse_args(*addl_args, argv=None):
 
     return args
 
-def which(program):
-    """
-    Use to check for resource managers
-    """
-    def is_exe(fpath):
-        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
-
-    fpath, fname = os.path.split(program)
-    if fpath:
-        if is_exe(program):
-            return program
-    else:
-        for path in os.environ["PATH"].split(os.pathsep):
-            exe_file = os.path.join(path, program)
-            if is_exe(exe_file):
-                return exe_file
-
-    return None
-
 def process_args(args=None, return_io=False):
     """
     Process arguments for running training
@@ -166,16 +161,7 @@ def process_args(args=None, return_io=False):
     if not isinstance(args, argparse.Namespace):
         args = parse_args(args)
 
-    input_nc = 18
-    if args.protein:
-        input_nc = 26
-    args.input_nc = input_nc
-
     args.loader_kwargs = dict()
-
-    # classify by default
-    if args.manifold == args.classify == False:
-        args.classify = True
 
     # make sure we are classifying if we are using adding classifier layers
     # to a resnet features model
@@ -453,6 +439,50 @@ def show_hparams(argv=None):
     args = parser.parse_args(argv)
     hparams = torch.load(args.checkpoint, map_location=torch.device('cpu'))['hyper_parameters']
     yaml.dump(hparams, sys.stdout)
+
+
+def get_model_info(argv=None):
+    """
+    Parse arguments for training executable
+    """
+    import json
+    from .loader import LazySeqDataset
+    from torchinfo import summary
+
+    argv = check_argv(argv)
+
+    epi = """
+    output can be used as a checkpoint
+    """
+    desc = "Run network training"
+    parser = argparse.ArgumentParser(description=desc, epilog=epi)
+    parser.add_argument('config', type=str, help='the config file for this training run')
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    args = parser.parse_args(argv)
+    process_config(args.config, args)
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+
+    model = process_model(args, taxa_table=dataset.difile.taxa_table)
+
+    total_bytes = 0
+    total_parameters = 0
+    it = model.modules()
+    next(it)
+    for mod in it:
+        for P in mod.parameters():
+            array = P.detach().numpy()
+            total_bytes += array.nbytes
+            total_parameters += array.size
+
+    print((total_bytes/1024**2), "Mb across", total_parameters, "parameters")
+
+    print(model.fc.out_features)
+
+    input_sample = torch.stack([dataset[i][1] for i in range(16)])
+    summary(model, [input_sample.shape], dtypes=[torch.long])
+
+
+    return args
 
 
 

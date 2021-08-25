@@ -45,6 +45,7 @@ command_dict = {
     'agg-chunks': Command('nn.summarize.aggregate_chunks', 'aggregate sequence chunks to get NN outputs for individual sequences'),
     'agg-seqs': Command('nn.summarize.aggregate_seqs', 'aggregate sequence chunks to get NN outputs for individual sequences'),
     'tax-acc': Command('nn.summarize.taxonomic_accuracy', 'calculate classificaiton accuracy across all possible taxonomic levels'),
+    'model-info': Command('nn.train.get_model_info', 'Construct and print info about model'),
 }
 
 

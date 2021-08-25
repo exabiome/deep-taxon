@@ -306,6 +306,12 @@ class TaxaTable(DynamicTable, TorchableMixin):
             ret[out_mask] = in_id
         return ret
 
+    def get_num_classes(self, tax_lvl):
+        if tax_lvl == 'species':
+            return len(self)
+        else:
+            return len(self[tax_lvl].elements)
+
     def taxid_torch_conversion(self, num_classes, device=None):
         def func(x):
             ret = torch.zeros(num_classes, dtype=torch.long, device=device)

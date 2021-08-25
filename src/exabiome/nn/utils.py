@@ -61,13 +61,14 @@ def process_model(args, inference=False, taxa_table=None):
         inference (bool):       load data for inference
     """
 
+    if taxa_table is not None:
+        args.n_outputs = taxa_table.get_num_classes(args.tgt_tax_lvl)
+
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
     model_cls = models._models[args.model]
-    if inference:
-        model_cls.forward = auto_move_data(model_cls.forward)
 
-    if args.init is not None:
+    if getattr(args, 'init', None) is not None:
         try:
             model = model_cls.load_from_checkpoint(args.init)
             ckpt_hparams = model.hparams
