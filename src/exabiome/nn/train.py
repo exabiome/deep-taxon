@@ -442,9 +442,6 @@ def show_hparams(argv=None):
 
 
 def get_model_info(argv=None):
-    """
-    Parse arguments for training executable
-    """
     import json
     from .loader import LazySeqDataset
     from torchinfo import summary
@@ -482,7 +479,65 @@ def get_model_info(argv=None):
     summary(model, [input_sample.shape], dtypes=[torch.long])
 
 
-    return args
+def fix_model(argv=None):
+    import json
+    from .loader import LazySeqDataset
+    import torch.nn as nn
+
+    argv = check_argv(argv)
+
+    epi = """
+    DNA sequence encodings were done incorrectly before 08/25/2021. This command
+    will swap in a new embedding layer that can handle new/correct encodings
+    """
+    desc = "Fix embedding layer for model trained with bad encoding"
+    parser = argparse.ArgumentParser(description=desc, epilog=epi)
+    parser.add_argument('config', type=str, help='the config file for this training run')
+    parser.add_argument('init', type=str, help='the checkpoint file to fix')
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    args = parser.parse_args(argv)
+    process_config(args.config, args)
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+
+    model = process_model(args, taxa_table=dataset.difile.taxa_table)
+
+    ckpt = torch.load(args.init)
+
+    output = args.init[:-4]+"fixed.ckpt"
+
+    orig_chars = ('ACYWSKDVNTGRWSMHBN')
+
+    new_chars =  ('ACYWSKDVNTGRMHB')
+
+    orig_dict = {c:i for i, c in enumerate(orig_chars)}
+    new_dict = {c:i for i, c in enumerate(new_chars)}
+
+    swaps = np.array(list(zip(range(len(new_chars)), range(len(new_chars)))))
+
+    for i in range(len(new_chars)):
+        char = new_chars[i]
+        old_idx = orig_dict[char]
+        new_idx = new_dict[char]
+        swaps[new_idx][1] = old_idx
+
+    breakpoint()
+
+    emb = model.embedding
+    new_emb = nn.Embedding(len(new_chars), emb.embedding_dim)
+
+    new_param = list(new_emb.parameters())[0]
+    old_param = list(emb.parameters())[0]
+
+    for i, j in swaps:
+        new_param[i] = old_param[j]
+
+    breakpoint()
+    model.embedding = new_emb
+
+    ckpt['state_dict'] = model.state_dict()
+
+    print(f'saving checkpoint to {output}')
+    torch.save(ckpt, output)
 
 
 

@@ -46,6 +46,7 @@ command_dict = {
     'agg-seqs': Command('nn.summarize.aggregate_seqs', 'aggregate sequence chunks to get NN outputs for individual sequences'),
     'tax-acc': Command('nn.summarize.taxonomic_accuracy', 'calculate classificaiton accuracy across all possible taxonomic levels'),
     'model-info': Command('nn.train.get_model_info', 'Construct and print info about model'),
+    'fix-model': Command('nn.train.fix_model', 'Fix model trained with old embedding'),
 }
 
 
