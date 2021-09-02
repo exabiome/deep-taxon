@@ -425,26 +425,30 @@ class DeepIndexFile(Container):
 
     def set_label_key(self, val):
         self.label_key = val
-        genome_labels = None
         if val in ('species', 'id'):         # if species is specified, just use the id column
             self.label_key = 'id'
             genome_labels = self.genome_table['rep_idx'].data[:]
             self.__n_outputs = len(self.taxa_table)
-
         elif val in self.taxonomic_levels:
             self.__get_kwargs['index'] = True
             self.__n_outputs = len(self.taxa_table[self.label_key].elements)
             genome_labels = self.genome_table['rep_idx'].data[:]
             genome_labels = self.taxa_table[val].data[:][genome_labels]
+        elif val == 'all':                   # use all taxonomic levels as labels
+            cols = list()
+            genome_labels = self.genome_table['rep_idx'].data[:]
+            for lvl in self.taxonomic_levels[:-1]:
+                cols.append(self.taxa_table[lvl].data[:][genome_labels])
+            cols.append(self.taxa_table['id'].data[:][genome_labels])
+            genome_labels = np.column_stack(cols)
         else:
             raise ValueError("Unrecognized label key: '%s'" % val)
-
         genome_idx = self.seq_table['genome'].data[:]
         self.labels = genome_labels[genome_idx]
 
     def get_label_classes(self, label_key=None):
         label_key = label_key or self.label_key
-        if label_key in ('species', 'id'):
+        if label_key in ('species', 'id', 'all'):
             return self.taxa_table['species'].data[:]
         else:
             return self.taxa_table[label_key].elements.data[:]
@@ -475,9 +479,13 @@ class DeepIndexFile(Container):
     def get(self, arg):
         idx = self.seq_table.id[arg]
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
-        label = self.seq_table['genome'].get(arg, index=True)    # index to genome table
-        label = self.genome_table['rep_idx'].get(label, index=True) # index to taxa table
-        label = self.taxa_table[self.label_key].get(label, **self.__get_kwargs)
+        label = self.labels[arg]
+
+        #old code I'm not sure if I should get rid of or not
+        #label = self.seq_table['genome'].get(arg, index=True)    # index to genome table
+        #label = self.genome_table['rep_idx'].get(label, index=True) # index to taxa table
+        #label = self.taxa_table[self.label_key].get(label, **self.__get_kwargs)
+
         length = self.seq_table['length'].get(arg)
         return {'id': idx, 'seq': seq, 'label': label, 'length': length}
 
@@ -587,7 +595,7 @@ def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     # the number of full chunks in each sequence to the number of incomplete chunks
     n_chunks = ((lengths // step) +
                 (lengths % step > 0))                  # the number of chunks each sequence will produce
-    labels = np.repeat(difile.labels, n_chunks)             # the labels for each chunks
+    labels = np.repeat(difile.labels, n_chunks, axis=0)             # the labels for each chunks
     seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
     chunk_start = list()
     for i in range(len(difile)):

@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
+from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler, Subset
 from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
@@ -33,8 +33,9 @@ def add_dataset_arguments(parser):
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
-    group.add_argument('-t', '--tgt_tax_lvl', choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
-                       help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species')
+    choices = list(DeepIndexFile.taxonomic_levels) + ['all']
+    group.add_argument('-t', '--tgt_tax_lvl', choices=choices, metavar='LEVEL', default='species',
+                       help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species, all')
 
     return None
 
@@ -53,8 +54,8 @@ def dataset_stats(argv=None):
 
 
     args = parser.parse_args(argv)
-    dataset, io = process_dataset(args)
-    difile = io.read()
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+    difile = dataset.difile
 
     n_taxa = len(difile.taxa_table)
     n_seqs = len(difile.seq_table)
@@ -426,7 +427,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
 
     return (tr_dl, va_dl, te_dl)
 
-def get_loader(dataset, distances=False, **kwargs):
+def get_loader(dataset, distances=False, graph=False, **kwargs):
     """
     Return a DataLoader that loads data from the given Dataset
 
@@ -434,12 +435,23 @@ def get_loader(dataset, distances=False, **kwargs):
         dataset (Dataset): the dataset to return a DataLoader for
         distances  (bool): whether or not to return distances for a batch
     """
-    collater = collate
+    # Find the LazySeqDataset so we can pull necessary information from it
+    orig_dataset = dataset
+    if isinstance(dataset, Subset):
+        dataset = dataset.dataset
+    elif not isinstance(dataset, LazySeqDataset):
+        msg = ("Unrecognized type for 'dataset'. "
+               "Expected torch.utils.data.Subset or exabione.nn.loader.LazySeqDataset. "
+               "Got %s" % type(dataset).__name__)
+        raise ValueError(msg)
+    collater = SeqCollater(dataset.padval)
     if distances:
         if dataset.difile.distances is None:
             raise ValueError('DeepIndexFile {dataset.difile} does not contain distances')
-        collater = DistanceCollater(dataset.difile.distances.data[:])
-    return DataLoader(dataset, collate_fn=collater, **kwargs)
+        collater = DistanceCollater(dataset.difile.distances.data[:], dataset.padval)
+    elif graph:
+        collater = GraphCollater(dataset.node_ids, dataset.padval)
+    return DataLoader(orig_dataset, collate_fn=collater, **kwargs)
 
 
 class DeepIndexDataModule(pl.LightningDataModule):
@@ -456,8 +468,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
         else:
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
-            if hparams.load:
-                self.dataset.load()
+            self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = False
             kwargs['shuffle'] = hparams.shuffle
             kwargs.update(hparams.loader_kwargs)
@@ -550,8 +561,9 @@ class LazySeqDataset(Dataset):
         Prep data for a graph learning problem
 
     tgt_tax_lvl: str, default='species'
-        the target taxonomic level for. This can be 'phylum', 'class', 'order', 'family', 'genus', or
-        'species'. For *manifold=True* or *graph=True*, this must be 'species'
+        the target taxonomic level for. This can be 'phylum', 'class', 'order', 'family', 'genus',
+        'species' or 'all. For *manifold=True* or *graph=True*, this must be 'species'. Setting to
+        'all' will return labels for each taxonomic level.
 
     ohe: bool, default=False
         One-hot encode sequences. By default, return indices
@@ -597,13 +609,12 @@ class LazySeqDataset(Dataset):
         self.revcomp = not hparams.fwd_only
 
 
-        self._label_key = hparams.tgt_tax_lvl if hparams.classify else 'id'
         self._label_dtype = torch.int64
 
         # open to get dataset length
         self.open()
         self.__len = len(self.difile)
-        self.sample_labels = self.difile.labels # taxa_table[hparams.tgt_tax_lvl].data
+        self.sample_labels = self.difile.labels
         self.taxa_labels, self.taxa_counts = np.unique(self.sample_labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
 
@@ -625,10 +636,6 @@ class LazySeqDataset(Dataset):
                 warnings.warn("Could not find null value for DNA sequences. Looking for 'N'. Padding with %s" % self.vocab[0])
                 self.padval = 0
         self.vocab_len = len(self.vocab)
-
-        #############################
-        # self._label_key - the column from the TaxaTable
-        #############################
 
         self.manifold = False
         self.graph = False
@@ -686,14 +693,14 @@ class LazySeqDataset(Dataset):
             self.orig_difile = self.io.read()
         self.difile = self.orig_difile
 
+        self.load(sequence=self.load_data)
+
         self.difile.set_label_key(self.hparams.tgt_tax_lvl)
 
         if self.window is not None:
             self.set_chunks(self.window, self.step)
         if self.revcomp:
             self.set_revcomp()
-        if self.load_data:
-            self.load()
 
     def worker_init(self, worker_id):
         self.open()
@@ -730,26 +737,30 @@ class LazySeqDataset(Dataset):
             for tfm in transforms:
                 data.transform(tfm)
 
-    def load(self, device=None):
-        def _load(data):
-            return data[:]
+    def load(self, sequence=False, device=None):
+        _load = lambda x: x[:]
+        self.orig_difile.seq_table['id'].transform(_load)
+        self.orig_difile.seq_table['length'].transform(_load)
+        self.orig_difile.seq_table['sequence'].transform(_load)
 
-        tfm = self._to_torch(device)
-        def to_sint(data):
-            return data[:].astype(np.int16)
-        self._check_load(self.orig_difile.seq_table['sequence'].target, [to_sint, tfm])
-        self._check_load(self.orig_difile.taxa_table[self._label_key], tfm)
-        self._check_load(self.orig_difile.distances, tfm)
+        #old code I'm keeping around just in case
+        #tfm = self._to_torch(device)
 
-        for col in self.orig_difile.seq_table.children:
-            if col.name == 'sequence':
-                continue
-            col.transform(_load)
+        #def to_sint(data):
+        #    return data[:].astype(np.int16)
+        #self._check_load(self.orig_difile.seq_table['sequence'].target, [to_sint, tfm])
+        ##self._check_load(self.orig_difile.taxa_table[self._label_key], tfm)
+        #self._check_load(self.orig_difile.distances, tfm)
 
-        for col in self.orig_difile.taxa_table.children:
-            if col.name == self._label_key:
-                continue
-            col.transform(_load)
+        #for col in self.orig_difile.seq_table.children:
+        #    if col.name == 'sequence':
+        #        continue
+        #    col.transform(_load)
+
+        #for col in self.orig_difile.taxa_table.children:
+        #    if col.name == self._label_key:
+        #        continue
+        #    col.transform(_load)
 
     def __getitem__(self, i):
         # get sequence
