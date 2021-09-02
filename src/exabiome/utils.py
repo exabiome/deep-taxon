@@ -1,10 +1,28 @@
 from datetime import datetime
 import argparse
+from contextlib import contextmanager
 import glob
 import os
 import sys
 import logging
 import warnings
+
+
+@contextmanager
+def ccm(cond, cm):
+    """
+    A conditional context manager. This is useful for
+    writing collective IO code that can run in serial
+
+    e.g.
+        with ccm(COMM.Get_size() > 1, dset.collective):
+            ...
+    """
+    if cond:
+        with cm:
+            yield
+    else:
+        yield
 
 
 def check_argv(argv=None):

@@ -2,6 +2,7 @@ import argparse
 import sys
 import glob
 import os.path
+import os
 import matplotlib.pyplot as plt
 import h5py
 import seaborn as sns
@@ -11,6 +12,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, precision_recall_curve
 import scipy.stats as stats
+
+from ..utils import parse_logger, ccm
 
 
 def get_color_markers(n):
@@ -321,7 +324,7 @@ def classification_aggregate(path, verbose=False):
 def classifier_summarize(argv=None):
     '''Summarize training/inference results'''
     import pickle
-    from ..utils import parse_logger
+
     parser = argparse.ArgumentParser()
     parser.add_argument('input', type=str,
                         help='the HDF5 file with network outputs or a directory containing a single outputs file')
@@ -643,26 +646,46 @@ def plot_loss(argv=None):
 
 
 def aggregate_chunks(argv=None):
-    from mpi4py import MPI
     import torch
     import torch.nn.functional as F
+    from contextlib import contextmanager
 
     from exabiome.utils import parse_logger
 
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=str, help="the inference file with individual sample (i.e. chunks) outputs")
     parser.add_argument("output", type=str, help="the file to save aggregated outputs to")
+    parser.add_argument('-F', '--features', action='store_true', help='outputs are features i.e. do not softmax and compute predictions', default=False)
     parser.add_argument('--fwd_only', action='store_true', help='only forward strand was used', default=False)
 
     args = parser.parse_args(argv)
 
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
+    args.prob = not args.features
 
     logger = parse_logger('')
 
-    f = h5py.File(sys.argv[1], 'r', driver='mpio', comm=comm)
+    rank = 0
+    size = 1
+    f_kwargs = dict()
+    if 'OMPI_COMM_WORLD_RANK' in os.environ:
+        # load this after so we can get usage
+        # statement without having to loading MPI
+        from mpi4py import MPI
+
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+        if size > 1:
+            f_kwargs['driver'] = 'mpio'
+            f_kwargs['comm'] = comm
+    else:
+        logger.info('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
+
+
+    if rank == 0:
+        logger.info(f'{args}')
+
+    f = h5py.File(args.input, 'r', **f_kwargs)
 
     logger.info(f'rank {rank} - loading network outputs')
     chunk_seq_ids = f['seq_ids'][:]
@@ -673,24 +696,29 @@ def aggregate_chunks(argv=None):
     uniq_seqs = np.unique(chunk_seq_ids)
     total_seqs = len(uniq_seqs)
 
-    seq_idx = split(len(uniq_seqs), size, rank)
-    q, r = divmod(total_seqs, size)
-    if rank < r:
-        q += 1
-        b = rank * q
-        seq_idx = np.arange(b, b + q)
-    else:
-        offset = (q + 1) * r
-        b = (rank - r) * q + offset
-        seq_idx = np.arange(b, b + q)
+    if size > 1:
+        q, r = divmod(total_seqs, size)
+        if rank < r:
+            q += 1
+            b = rank * q
+            seq_idx = np.arange(b, b + q)
+        else:
+            offset = (q + 1) * r
+            b = (rank - r) * q + offset
+            seq_idx = np.arange(b, b + q)
 
-    N = len(seq_idx)
+        N = len(seq_idx)
+    else:
+        seq_idx = np.s_[:]
+        N = total_seqs
 
     if args.prob:
+        logger.info('data are probabilities. computing and saving predictions')
         seq_preds = np.zeros(N, dtype=int)
     seq_labels = np.zeros(N, dtype=int)
     seq_lens = np.zeros(N, dtype=int)
     seq_outputs = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
+    seq_outputs_var = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
 
     uniq_seqs = uniq_seqs[seq_idx]
 
@@ -701,54 +729,68 @@ def aggregate_chunks(argv=None):
         mask = chunk_seq_ids == seq
         idx = np.where(mask)[0]
 
-        prob = F.softmax(torch.tensor(chunk_outputs[idx], device=gpu), dim=1).mean(dim=0)
+        tmp_outputs = torch.tensor(chunk_outputs[idx], device=gpu)
         if args.prob:
-            seq_preds[i] = prob.argmax().cpu()
-        seq_outputs[i] = prob.cpu()
+            tmp_outputs = F.softmax(tmp_outputs, dim=1)
+            seq_outputs_var[i] = tmp_outputs.var(dim=0, unbiased=False).cpu()
+            seq_outputs[i] = tmp_outputs.mean(dim=0).cpu()
+            seq_preds[i] = seq_outputs[i].argmax()
+        else:
+            seq_outputs_var[i] = tmp_outputs.var(dim=0, unbiased=False).cpu()
+            seq_outputs[i] = tmp_outputs.mean(dim=0).cpu()
         seq_labels[i] = chunk_labels[mask][0]
         seq_lens[i] = chunk_lens[mask].sum()
+
+        # delete this for good measure so we don't leave data on the GPU
+        del tmp_outputs
 
     if args.fwd_only:
         seq_lens = seq_lens // 2
 
-    comm.Barrier()
+    if size > 1:
+        comm.Barrier()
 
     f.close()
 
-    out = h5py.File(sys.argv[2], 'w', driver='mpio', comm=comm)
+    logger.info(f'saving results to {args.output}')
+    out = h5py.File(args.output, 'w', **f_kwargs)
 
     N = total_seqs
-    seq_outputs_dset = out.create_dataset('outputs', shape=(N, outputs.shape[1]), dtype=float)
+    seq_outputs_dset = out.create_dataset('outputs', shape=(N, seq_outputs.shape[1]), dtype=float)
+    seq_outputs_var_dset = out.create_dataset('outputs_var', shape=(N, seq_outputs_var.shape[1]), dtype=float)
     if args.prob:
-        seq_preds_dset = out.create_dataset('preds', shape=(N,), dtype=float)
+        seq_preds_dset = out.create_dataset('preds', shape=(N,), dtype=int)
     seq_labels_dset = out.create_dataset('labels', shape=(N,), dtype=int)
     seq_lens_dset = out.create_dataset('lengths', shape=(N,), dtype=int)
     seq_ids_dset = out.create_dataset('seq_ids', shape=(N,), dtype=int)
 
-
     logger.info(f'rank {rank} - writing outputs')
-    with seq_outputs_dset.collective:
+    with ccm(size > 1, seq_outputs_dset.collective):
         seq_outputs_dset[seq_idx] = seq_outputs
 
+    logger.info(f'rank {rank} - writing outputs variance')
+    with ccm(size > 1, seq_outputs_var_dset.collective):
+        seq_outputs_var_dset[seq_idx] = seq_outputs_var
+
     logger.info(f'rank {rank} - writing labels')
-    with seq_labels_dset.collective:
+    with ccm(size > 1, seq_labels_dset.collective):
         seq_labels_dset[seq_idx] = seq_labels
 
     if args.prob:
         logger.info(f'rank {rank} - writing predictions')
-        with seq_preds.collective:
+        with ccm(size > 1, seq_preds_dset.collective):
             seq_preds_dset[seq_idx] = seq_preds
 
     logger.info(f'rank {rank} - writing sequence lengths')
-    with seq_lens_dset.collective:
+    with ccm(size > 1, seq_lens_dset.collective):
         seq_lens_dset[seq_idx] = seq_lens
 
     logger.info(f'rank {rank} - writing sequence ids')
-    with seq_ids_dset.collective:
+    with ccm(size > 1, seq_ids_dset.collective):
         seq_ids_dset[seq_idx] = uniq_seqs
 
-
-    comm.Barrier()
+    if size > 1:
+        comm.Barrier()
 
     logger.info(f'rank {rank} - done')
     out.close()
@@ -803,18 +845,25 @@ def taxonomic_accuracy(argv=None):
         col.transform(lambda x: x[:])
 
     level = None
+    classes = None
     if args.level is None:
         for lvl in levels[:-1]:
             n_classes_lvl = difile.taxa_table[lvl].elements.data.shape[0]
+            print(lvl, n_classes, n_classes_lvl)
             if n_classes == n_classes_lvl:
+                classes = difile.taxa_table[lvl].elements.data
                 level = lvl
         if level is None:
-            print("Cannot determine which level to use. Please specify with --level option", file=sys.stderr)
-            exit(1)
+            n_classes_lvl = difile.taxa_table['species'].data.shape[0]
+            if n_classes == n_classes_lvl:
+                level = 'species'
+                classes = difile.taxa_table['species'].data[:]
+            else:
+                print("Cannot determine which level to use. Please specify with --level option", file=sys.stderr)
+                exit(1)
     else:
         level = args.level
 
-    classes = difile.taxa_table[level].elements.data
     to_drop = ['taxon_id']
     for lvl in levels[::-1]:
         if lvl == level:
@@ -823,6 +872,9 @@ def taxonomic_accuracy(argv=None):
 
     # orient table to index it by the taxonomic level and remove columns we cannot get predictions for
     taxdf = difile.taxa_table.to_dataframe()
+
+    n_orig_classes = {col: np.unique(taxdf[col]).shape[0] for col in taxdf}
+
     taxdf = taxdf.drop(to_drop, axis=1).\
                   set_index(level).\
                   groupby(level).\
@@ -840,20 +892,21 @@ def taxonomic_accuracy(argv=None):
     enc_df = pd.DataFrame(data=new_dat, index=taxdf.index)
 
     # a helper function to transform results into a DataFrame
-    def get_results(true, pred, lens):
+    def get_results(true, pred, lens, n_classes):
         mask = true == pred
-        return {'seq-level': mask.mean(), 'base-level': lens[mask].sum()/lens.sum()}
+        n_classes = "%s / %s" % ((np.unique(true).shape[0]), n_classes)
+        return {'seq-level': "%0.1f" % (100*mask.mean()), 'base-level': "%0.1f" % (100*lens[mask].sum()/lens.sum()), 'n_classes': n_classes}
 
     results = dict()
     for colname in enc_df.columns:
         logger.info(f'computing results for {colname}')
         col = enc_df[colname].values
-        results[colname] = get_results(col[seq_labels], col[seq_preds], seq_lens)
+        results[colname] = get_results(col[seq_labels], col[seq_preds], seq_lens, n_orig_classes[colname])
 
     logger.info(f'computing results for {level}')
-    results[level] = get_results(seq_labels, seq_preds, seq_lens)
+    results[level] = get_results(seq_labels, seq_preds, seq_lens, n_orig_classes[level])
 
-    results['n'] = {'seq-level': len(seq_lens), 'base-level': seq_lens.sum()}
+    results['n'] = {'seq-level': len(seq_lens), 'base-level': seq_lens.sum(), 'n_classes': '-1'}
 
     results = pd.DataFrame(data=results)
     results.to_csv(args.output, sep=',')
@@ -874,7 +927,7 @@ def aggregate_seqs(argv=None):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("summary", type=str, help='the summarized sequence NN outputs')
-    parser.add_argument("output", type=str, help="the path to save resutls to")
+    parser.add_argument("output", type=str, help="the path to save results to")
 
     args = parser.parse_args(argv)
 

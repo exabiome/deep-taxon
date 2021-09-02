@@ -1,7 +1,7 @@
 import sys
 import numpy as np
 import os
-from ..utils import check_argv, parse_logger
+from ..utils import check_argv, parse_logger, ccm
 from .utils import process_gpus, process_model, process_output
 from .train import process_config
 from .loader import LazySeqDataset, get_loader, DeepIndexDataModule
@@ -223,16 +223,13 @@ def run_inference(argv=None):
     """
 
     args = parse_args(argv=argv)
-
-
-
     RANK = 0
     SIZE = 1
-    COMM=None
+    COMM = None
     f_kwargs = dict()
     if 'OMPI_COMM_WORLD_RANK' in os.environ:
         # load this after so we can get usage
-        # statement without having to loading MPI
+        # statement without having to load MPI
         from mpi4py import MPI
 
         COMM = MPI.COMM_WORLD
@@ -249,101 +246,53 @@ def run_inference(argv=None):
     model, dataset, args, addl_targs = process_args(args, size=SIZE, rank=RANK)
 
     if args.in_memory:
+        if SIZE > 1:
+            print("Cannot do in-memory inference with MPI", file=sys.stderr)
+            exit(1)
         args.logger.info(f'running in-memory inference')
         in_memory_inference(model, dataset, args, addl_targs)
     else:
         if SIZE > 1:
             args.logger.info(f'running parallel chunked inference')
-            parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK)
         else:
             args.logger.info(f'running serial chunked inference')
-            chunked_inference(model, dataset, args, addl_targs)
+        parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK, f_kwargs)
 
 
-def chunked_inference(model, dataset, args, addl_targs):
+def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, rank, fkwargs):
     n_samples = len(dataset)
-    f = h5py.File(args.output, 'a')
-    f.require_dataset('label_names', data=dataset.label_names, shape=dataset.label_names.shape, dtype=h5py.special_dtype(vlen=str))
-
+    f = h5py.File(args.output, 'w', **fkwargs)
     outputs = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
-
     labels = f.require_dataset('labels', shape=(n_samples,), dtype=int)
-
     orig_lens = f.require_dataset('orig_lens', shape=(n_samples,), dtype=int)
-
-    seq_ids = f.require_dataset('seq_ids', shape=(n_samples,), dtype=int)
-
-    # make temporary datasets and do all I/O at the end
-    masks = dict()
-
-    model.to(args.device)
-    #model.cuda()
-    #model = nn.DataParallel(model, device_ids=[0, 1, 2, 3])
-
-    for loader_key, loader in args.loaders.items():
-        args.logger.info(f'computing outputs for {loader_key}')
-        mask = f.require_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
-        for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=100):
-            order = np.argsort(idx)
-            idx = idx[order]
-            outputs[idx] = _outputs[order]
-            labels[idx] = _labels[order]
-            orig_lens[idx] = _orig_lens[order]
-            seq_ids[idx] = _seq_ids[order]
-            mask[idx] = True
-        masks[loader_key] = mask
-
-    f.close()
-    args.logger.info(f'closing {args.output}')
-
-def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, rank):
-    n_samples = len(dataset)
-    f = h5py.File(args.output, 'w', driver='mpio', comm=comm)
-
-    # lbl_names = f.require_dataset('label_names', shape=dataset.label_names.shape, dtype=h5py.special_dtype(vlen=str))
-    # if rank == 0:
-    #     lbl_names[:] = data=dataset.label_names
-
-    outputs = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
-
-    labels = f.require_dataset('labels', shape=(n_samples,), dtype=int)
-
-    orig_lens = f.require_dataset('orig_lens', shape=(n_samples,), dtype=int)
-
     seq_ids = f.require_dataset('seq_ids', shape=(n_samples,), dtype=int)
 
     model.to(args.device)
 
-    comm.Barrier()
+    if size > 1: comm.Barrier()
 
     for loader_key, loader in args.loaders.items():
-        if rank == 0:
-            args.logger.info(f'computing outputs for {loader_key}')
+        if rank == 0: args.logger.info(f'computing outputs for {loader_key}')
         mask = f.require_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
         for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=rank==0):
             order = np.argsort(idx)
             idx = idx[order]
-            #args.logger.info(f'rank {rank} - {idx}')
-            #args.logger.info(f'rank {rank} - writing outputs')
-            with outputs.collective:
+            with ccm(size > 1, outputs.collective):
                 outputs[idx] = _outputs[order]
-            #args.logger.info(f'rank {rank} - writing labels')
-            with labels.collective:
+            with ccm(size > 1, labels.collective):
                 labels[idx] = _labels[order]
-            #args.logger.info(f'rank {rank} - writing lens')
-            with orig_lens.collective:
+            with ccm(size > 1, orig_lens.collective):
                 orig_lens[idx] = _orig_lens[order]
-            #args.logger.info(f'rank {rank} - writing seq_ids')
-            with seq_ids.collective:
+            with ccm(size > 1, seq_ids.collective):
                 seq_ids[idx] = _seq_ids[order]
-            #args.logger.info(f'rank {rank} - writing mask')
-            with mask.collective:
+            with ccm(size > 1, mask.collective):
                 mask[idx] = True
 
-    comm.Barrier()
+    if size > 1: comm.Barrier()
 
     f.close()
-    args.logger.info(f'closing {args.output}')
+    if rank == 0: args.logger.info(f'closing {args.output}')
+
 
 def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
     """
