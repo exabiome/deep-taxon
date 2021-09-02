@@ -8,7 +8,7 @@ https://github.com/pytorch/vision/blob/7c077f6a986f05383bcb86b535aedb5a63dd5c4b/
 import torch
 import torch.nn as nn
 
-from . import model, AbstractLit
+from . import model, AbstractLit, HierarchicalClassifier
 
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
@@ -160,7 +160,11 @@ class ResNet(AbstractLit):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
+
+        if hparams.tgt_tax_lvl == 'all':
+            self.fc = HierarchicalClassifier(512 * block.expansion, hparams.n_taxa_all)
+        else:
+            self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -306,6 +310,16 @@ class ResNet50(ResNet):
         super().__init__(hparams)
 
 
+@model('resnet74')
+class ResNet74(ResNet):
+
+    def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
+        hparams.block = Bottleneck
+        hparams.layers = [3, 4, 14, 3]
+        super().__init__(hparams)
+
+
 @model('resnet101')
 class ResNet101(ResNet):
 
@@ -322,7 +336,7 @@ class ResNet152(ResNet):
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
-        hparams.layers = [3, 4, 36, 3]
+        hparams.layers = [3, 8, 36, 3]
         super().__init__(hparams)
 
 
@@ -370,3 +384,60 @@ class Wide_ResNet101_2(ResNet):
         hparams.layers = [3, 4, 23, 3]
         hparams.width_per_group = 128
         super().__init__(hparams)
+
+
+class ResNetFeatures(nn.Module):
+    """
+    A class for using only the convolutional layers of a ResNet.
+    This model should not be trained. See resnet_feat.py for
+    trainable ResNet feature models.
+    """
+
+    _layers = ('embedding',
+               'conv1',
+                'bn1',
+                'relu',
+                'maxpool',
+                'layer1',
+                'layer2',
+                'layer3',
+                'layer4',
+                'avgpool')
+
+    def __init__(self, resnet):
+        super().__init__()
+        self.hparams = resnet.hparams
+        for layer in self._layers:
+            setattr(self, layer, getattr(resnet, layer))
+
+    def forward(self, x):
+        x = self.embedding(x)
+        x = x.permute(0, 2, 1)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+
+        return x
+
+
+class ResNetClassifier(nn.Module):
+    """
+    A class for using only the fully-connected classifier layer of a ResNet.
+    """
+
+    def __init__(self, resnet):
+        super().__init__()
+        self.fc = resnet.fc
+
+    def forward(self, x):
+        x = self.fc(x)
+        return x

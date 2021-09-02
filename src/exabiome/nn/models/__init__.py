@@ -1,4 +1,5 @@
 from .lit import AbstractLit
+from .hclf import HierarchicalClassifier, HierarchicalLoss
 
 _models = dict()
 

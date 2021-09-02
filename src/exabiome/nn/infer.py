@@ -1,7 +1,7 @@
 import sys
 import numpy as np
 import os
-from ..utils import check_argv, parse_logger
+from ..utils import check_argv, parse_logger, ccm
 from .utils import process_gpus, process_model, process_output
 from .train import process_config
 from .loader import LazySeqDataset, get_loader, DeepIndexDataModule
@@ -15,9 +15,9 @@ import h5py
 import argparse
 import torch
 from torch.utils.data import Subset
+from torch.cuda.amp import autocast
 import torch.nn as nn
 import logging
-
 
 def parse_args(*addl_args, argv=None):
     """
@@ -34,6 +34,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('input', type=str, help='the input file to run inference on')
     parser.add_argument('checkpoint', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
+    parser.add_argument('-f', '--features', action='store_true', help='drop classifier from ResNet model before inference', default=False)
     parser.add_argument('-E', '--experiment', type=str, default='default',
                         help='the experiment name to get the checkpoint from')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
@@ -53,6 +54,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-N', '--nonrep', action='append_const', const='nonrep', dest='loaders', help='the dataset is nonrepresentative species')
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
+    parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk')
     parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=0)
     env_grp = parser.add_argument_group("Resource Manager").add_mutually_exclusive_group()
     env_grp.add_argument("--lsf", default=False, action='store_true', help='running in an LSF environment')
@@ -67,18 +69,27 @@ def parse_args(*addl_args, argv=None):
 
     args = parser.parse_args(argv)
 
+    args.init = args.checkpoint
+
     return args
 
 
-def process_args(argv=None):
+def split(dset_len, size, rank):
+    q, r = divmod(dset_len, size)
+    if rank < r:
+        q += 1
+        b = rank*q
+        return np.arange(b, b+q)
+    else:
+        offset = (q+1)*r
+        b = (rank - r)*q + offset
+        return np.arange(b, b+q)
+
+
+def process_args(args, size=1, rank=0, comm=None):
     """
     Process arguments for running inference
     """
-    if not isinstance(argv, argparse.Namespace):
-        args = parse_args(argv=argv)
-    else:
-        args = argv
-
     conf_args = process_config(args.config)
     for k, v in vars(conf_args).items():
         if not hasattr(args, k):
@@ -102,10 +113,11 @@ def process_args(argv=None):
     targs['gpus'] = process_gpus(args.gpus)
     if targs['gpus'] != 1:
         targs['distributed_backend'] = 'ddp'
-        if args.slurm:
-            targs['environment'] = SLURMEnvironment()
-        elif args.lsf:
-            targs['environment'] = LSFEnvironment()
+
+    if args.slurm:
+        targs['environment'] = SLURMEnvironment()
+    elif args.lsf:
+        targs['environment'] = LSFEnvironment()
 
     if args.debug:
         targs['fast_dev_run'] = True
@@ -145,14 +157,31 @@ def process_args(argv=None):
     args.n_outputs = model.hparams.n_outputs
     args.save_seq_ids = model.hparams.window is not None
 
+    # remove ResNet features
+    if args.features:
+        if 'ResNet' not in model.__class__.__name__:
+            raise ValueError("Cannot use -f without ResNet model - got %s" % model.__class__.__name__)
+        from .models.resnet import ResNetFeatures
+        args.n_outputs = model.fc.in_features
+        model = ResNetFeatures(model)
+
     if args.loaders is None or len(args.loaders) == 0:
         args.loaders = ['train', 'validate', 'test']
 
     if 'nonrep' in args.loaders:
-        dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+        if size > 1:
+            dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm)
+        else:
+            dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
         tmp_dset = dataset
         if args.start > 0:
-            tmp_dset = Subset(dataset, np.arange(args.start, len(dataset)))
+            tmp_dset = Subset(tmp_dset, np.arange(args.start, len(dataset)))
+
+        if size > 1:
+            subset = split(len(tmp_dset), size, rank)
+            tmp_dset = Subset(tmp_dset, subset)
+            args.logger.info(f'rank {rank} - processing {len(subset)} samples subset')
+
         ldr = get_loader(tmp_dset, batch_size=args.batch_size, distances=False)
         args.loaders = {'input': ldr}
         args.difile = dataset.difile
@@ -174,7 +203,13 @@ def process_args(argv=None):
 
     ret = [model, dataset, args, targs]
 
-    args.device = torch.device('cuda:0')
+    if size > 1:
+        if 'environment' not in targs:
+            print(f'rank {rank} - Please specify --lsf or --slurm if running distributed', file=sys.stderr)
+            sys.exit(1)
+        args.device = torch.device('cuda:%d' % targs['environment'].local_rank())
+    else:
+        args.device = torch.device('cuda:0')
 
     return tuple(ret)
 
@@ -186,54 +221,80 @@ def run_inference(argv=None):
         argv: a command-line string or argparse.Namespace object to use for running inference
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
-    model, dataset, args, addl_targs = process_args(argv=argv)
+
+    args = parse_args(argv=argv)
+    RANK = 0
+    SIZE = 1
+    COMM = None
+    f_kwargs = dict()
+    if 'OMPI_COMM_WORLD_RANK' in os.environ:
+        # load this after so we can get usage
+        # statement without having to load MPI
+        from mpi4py import MPI
+
+        COMM = MPI.COMM_WORLD
+        RANK = COMM.Get_rank()
+        SIZE = COMM.Get_size()
+        if SIZE > 1:
+            f_kwargs['driver'] = 'mpio'
+            f_kwargs['comm'] = COMM
+    else:
+        args.logger.info('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
+
+
+
+    model, dataset, args, addl_targs = process_args(args, size=SIZE, rank=RANK)
 
     if args.in_memory:
+        if SIZE > 1:
+            print("Cannot do in-memory inference with MPI", file=sys.stderr)
+            exit(1)
         args.logger.info(f'running in-memory inference')
         in_memory_inference(model, dataset, args, addl_targs)
     else:
-        args.logger.info(f'running chunked inference')
-        chunked_inference(model, dataset, args, addl_targs)
+        if SIZE > 1:
+            args.logger.info(f'running parallel chunked inference')
+        else:
+            args.logger.info(f'running serial chunked inference')
+        parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK, f_kwargs)
 
 
-def chunked_inference(model, dataset, args, addl_targs):
+def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, rank, fkwargs):
     n_samples = len(dataset)
-    f = h5py.File(args.output, 'a')
-    f.require_dataset('label_names', data=dataset.label_names, shape=dataset.label_names.shape, dtype=h5py.special_dtype(vlen=str))
-
+    f = h5py.File(args.output, 'w', **fkwargs)
     outputs = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
-
     labels = f.require_dataset('labels', shape=(n_samples,), dtype=int)
-
     orig_lens = f.require_dataset('orig_lens', shape=(n_samples,), dtype=int)
-
     seq_ids = f.require_dataset('seq_ids', shape=(n_samples,), dtype=int)
 
-    # make temporary datasets and do all I/O at the end
-    masks = dict()
-
     model.to(args.device)
-    #model.cuda()
-    #model = nn.DataParallel(model, device_ids=[0, 1, 2, 3])
+
+    if size > 1: comm.Barrier()
 
     for loader_key, loader in args.loaders.items():
-        args.logger.info(f'computing outputs for {loader_key}')
+        if rank == 0: args.logger.info(f'computing outputs for {loader_key}')
         mask = f.require_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
-        for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=100):
+        for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=rank==0):
             order = np.argsort(idx)
             idx = idx[order]
-            outputs[idx] = _outputs[order]
-            labels[idx] = _labels[order]
-            orig_lens[idx] = _orig_lens[order]
-            seq_ids[idx] = _seq_ids[order]
-            mask[idx] = True
-        masks[loader_key] = mask
+            with ccm(size > 1, outputs.collective):
+                outputs[idx] = _outputs[order]
+            with ccm(size > 1, labels.collective):
+                labels[idx] = _labels[order]
+            with ccm(size > 1, orig_lens.collective):
+                orig_lens[idx] = _orig_lens[order]
+            with ccm(size > 1, seq_ids.collective):
+                seq_ids[idx] = _seq_ids[order]
+            with ccm(size > 1, mask.collective):
+                mask[idx] = True
+
+    if size > 1: comm.Barrier()
 
     f.close()
-    args.logger.info(f'closing {args.output}')
+    if rank == 0: args.logger.info(f'closing {args.output}')
 
 
-def get_outputs(model, loader, device, debug=False, chunks=None):
+def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
     """
     Get model outputs for all samples in the given loader
 
@@ -260,11 +321,15 @@ def get_outputs(model, loader, device, debug=False, chunks=None):
     max_batches = 100 if debug else sys.maxsize
     from tqdm import tqdm
     file = sys.stdout
-    it = tqdm(loader, file=sys.stdout)
+    it = loader
+    if prog_bar:
+        it = tqdm(it, file=sys.stdout)
     with torch.no_grad():
         for idx, (i, X, y, olen, seq_i) in enumerate(it):
             X = X.to(device)
-            outputs.append(model(X).to('cpu').detach())
+            with autocast():
+                out = model(X).to('cpu').detach()
+            outputs.append(out)
             indices.append(i.to('cpu').detach())
             labels.append(y.to('cpu').detach())
             orig_lens.append(olen.to('cpu').detach())

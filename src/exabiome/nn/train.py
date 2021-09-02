@@ -18,7 +18,7 @@ import logging
 
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
@@ -41,7 +41,7 @@ def get_conf_args():
         'downsample': dict(type=float, default=None, help='amount to downsample dataset to'),
         'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns, or ens'),
         'ens_beta': dict(help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9),
-        'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify', default=32),
+        'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify', default=None),
         'accumulate': dict(help='accumulate_grad_batches argument to pl.Trainer', default=1),
         'dropout_rate': dict(help='the dropout rate to use', default=0.5),
         'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
@@ -72,12 +72,26 @@ def print_config_templ(argv=None):
 
 
 def process_config(conf_path, args=None):
+    """
+    Process arguments that are defined in the config file
+    """
     with open(conf_path, 'r') as f:
         config = yaml.safe_load(f)
     args = args or argparse.Namespace()
     for k, v in get_conf_args().items():
         conf_val = config.pop(k, v.get('default', None))
         setattr(args, k, conf_val)
+
+    # set number if input channels
+    input_nc = 18
+    if args.protein:
+        input_nc = 26
+    args.input_nc = input_nc
+
+    # classify by default
+    if args.manifold == args.classify == False:
+        args.classify = True
+
     return args
 
 
@@ -104,8 +118,11 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-F', '--features_checkpoint', type=str, help='a checkpoint file for previously trained features', default=None)
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     parser.add_argument('--early_stop', action='store_true', default=False, help='stop early if validation loss does not improve')
+    parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
-    parser.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-i', '--init', type=str, help='a checkpoint to initalize a model from', default=None)
+    grp.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
@@ -137,25 +154,6 @@ def parse_args(*addl_args, argv=None):
 
     return args
 
-def which(program):
-    """
-    Use to check for resource managers
-    """
-    def is_exe(fpath):
-        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
-
-    fpath, fname = os.path.split(program)
-    if fpath:
-        if is_exe(program):
-            return program
-    else:
-        for path in os.environ["PATH"].split(os.pathsep):
-            exe_file = os.path.join(path, program)
-            if is_exe(exe_file):
-                return exe_file
-
-    return None
-
 def process_args(args=None, return_io=False):
     """
     Process arguments for running training
@@ -163,16 +161,7 @@ def process_args(args=None, return_io=False):
     if not isinstance(args, argparse.Namespace):
         args = parse_args(args)
 
-    input_nc = 18
-    if args.protein:
-        input_nc = 26
-    args.input_nc = input_nc
-
     args.loader_kwargs = dict()
-
-    # classify by default
-    if args.manifold == args.classify == False:
-        args.classify = True
 
     # make sure we are classifying if we are using adding classifier layers
     # to a resnet features model
@@ -213,27 +202,7 @@ def process_args(args=None, return_io=False):
 
     targs['gpus'] = process_gpus(args.gpus)
 
-    #if args.horovod:
-    #    targs['accelerator'] = 'horovod'
-    #    if args.gpus:
-    #        targs['gpus'] = 1
-    #else:
-    #    targs['num_nodes'] = args.num_nodes
-    #    targs['accelerator'] = 'ddp'
-    #    if targs['gpus'] != 1 or targs['num_nodes'] > 1:
-    #        # env = None
-    #        # if args.lsf:
-    #        #     env = cenv.LSFEnvironment()
-    #        # elif args.slurm:
-    #        #     env = cenv.SLURMEnvironment()
-    #        # else:
-    #        #     print("If running multi-node or multi-gpu, you must specify resource manager, i.e. --lsf or --slurm",
-    #        #           file=sys.stderr)
-    #        #     sys.exit(1)
-    #        # targs.setdefault('plugins', list()).append(env)
-    #        pass
     del args.gpus
-
 
     env = None
     if args.lsf:
@@ -283,12 +252,12 @@ def process_args(args=None, return_io=False):
         targs['precision'] = 16
     del args.fp16
 
+    if args.checkpoint is not None:
+        targs['resume_from_checkpoint'] = args.checkpoint
+
     ret = [model, args, targs]
     if return_io:
         ret.append(io)
-
-    if args.checkpoint:
-        args.experiment += '_restart'
 
     ret.append(data_mod)
 
@@ -332,11 +301,18 @@ def run_lightning(argv=None):
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
 
-    if args.checkpoint is not None:
+    if args.init is not None:
+        checkpoint = args.init
+        link_dest = 'init.ckpt'
+    elif args.checkpoint is not None:
+        checkpoint = args.checkpoint
+        link_dest = 'resumed_from.ckpt'
+
+    if checkpoint is not None:
         if RANK == 0:
             print0(f'symlinking to {args.checkpoint} from {outdir}')
-            dest = output('start.ckpt')
-            src = os.path.relpath(args.checkpoint, start=outdir)
+            dest = output(link_dest)
+            src = os.path.relpath(checkpoint, start=outdir)
             if os.path.exists(dest):
                 existing_src = os.readlink(dest)
                 if existing_src != src:
@@ -355,6 +331,9 @@ def run_lightning(argv=None):
     if args.early_stop:
         callbacks.append(EarlyStopping(monitor=AbstractLit.val_loss, min_delta=0.00, patience=3, verbose=False, mode='min'))
 
+    if args.swa:
+        callbacks.append(StochasticWeightAveraging(swa_epoch_start=5, annealing_epochs=5))
+
     targs = dict(
         checkpoint_callback=True,
         callbacks=callbacks,
@@ -367,6 +346,8 @@ def run_lightning(argv=None):
         targs['log_every_n_steps'] = 1
 
     print0('Trainer args:', targs, file=sys.stderr)
+    print0('Model:\n', model, file=sys.stderr)
+
     trainer = Trainer(**targs)
 
     if args.debug:
@@ -458,6 +439,103 @@ def show_hparams(argv=None):
     args = parser.parse_args(argv)
     hparams = torch.load(args.checkpoint, map_location=torch.device('cpu'))['hyper_parameters']
     yaml.dump(hparams, sys.stdout)
+
+
+def get_model_info(argv=None):
+    import json
+    from .loader import LazySeqDataset
+    from torchinfo import summary
+
+    argv = check_argv(argv)
+
+    epi = """
+    output can be used as a checkpoint
+    """
+    desc = "Run network training"
+    parser = argparse.ArgumentParser(description=desc, epilog=epi)
+    parser.add_argument('config', type=str, help='the config file for this training run')
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    args = parser.parse_args(argv)
+    process_config(args.config, args)
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+
+    model = process_model(args, taxa_table=dataset.difile.taxa_table)
+
+    total_bytes = 0
+    total_parameters = 0
+    it = model.modules()
+    next(it)
+    for mod in it:
+        for P in mod.parameters():
+            array = P.detach().numpy()
+            total_bytes += array.nbytes
+            total_parameters += array.size
+
+    print((total_bytes/1024**2), "Mb across", total_parameters, "parameters")
+
+    print(model.fc.out_features)
+
+    input_sample = torch.stack([dataset[i][1] for i in range(16)])
+    summary(model, [input_sample.shape], dtypes=[torch.long])
+
+
+def fix_model(argv=None):
+    import json
+    from .loader import LazySeqDataset
+    import torch.nn as nn
+
+    argv = check_argv(argv)
+
+    epi = """
+    DNA sequence encodings were done incorrectly before 08/25/2021. This command
+    will swap in a new embedding layer that can handle new/correct encodings
+    """
+    desc = "Fix embedding layer for model trained with bad encoding"
+    parser = argparse.ArgumentParser(description=desc, epilog=epi)
+    parser.add_argument('config', type=str, help='the config file for this training run')
+    parser.add_argument('init', type=str, help='the checkpoint file to fix')
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    args = parser.parse_args(argv)
+    process_config(args.config, args)
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+
+    model = process_model(args, taxa_table=dataset.difile.taxa_table)
+
+    ckpt = torch.load(args.init)
+
+    output = args.init[:-4]+"fixed.ckpt"
+
+    orig_chars = ('ACYWSKDVNTGRWSMHBN')
+
+    new_chars =  ('ACYWSKDVNTGRMHB')
+
+    orig_dict = {c:i for i, c in enumerate(orig_chars)}
+    new_dict = {c:i for i, c in enumerate(new_chars)}
+
+    swaps = np.array(list(zip(range(len(new_chars)), range(len(new_chars)))))
+
+    for i in range(len(new_chars)):
+        char = new_chars[i]
+        old_idx = orig_dict[char]
+        new_idx = new_dict[char]
+        swaps[new_idx][1] = old_idx
+
+    emb = model.embedding
+    new_emb = nn.Embedding(len(new_chars), emb.embedding_dim)
+
+    new_param = list(new_emb.parameters())[0]
+    old_param = list(emb.parameters())[0]
+
+    for i, j in swaps:
+        new_param[i] = old_param[j]
+
+    breakpoint()
+    model.embedding = new_emb
+
+    ckpt['state_dict'] = model.state_dict()
+
+    print(f'saving checkpoint to {output}')
+    torch.save(ckpt, output)
 
 
 

@@ -1,7 +1,8 @@
-import sys
-import os
 import argparse
+from datetime import datetime
+import os
 import shutil
+import sys
 import ruamel.yaml as yaml
 
 from .summit import LSFJob
@@ -78,11 +79,13 @@ def run_train(argv=None):
     parser.add_argument('-D', '--dataset',      help="the dataset name", default='default')
     parser.add_argument('-e', '--epochs',       help="the number of epochs to run for", default=10)
     parser.add_argument('-c', '--checkpoint',   help="a checkpoint file to restart from", default=None)
+    parser.add_argument('-i', '--init',         help="a checkpoint file to initialize models from", default=None)
     parser.add_argument('-F', '--features',     help="a checkpoint file for features", default=None)
     parser.add_argument('-E', '--experiment',   help="the experiment name to use", default=None)
     parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
     parser.add_argument('--sanity',             help="run a small number of batches", action='store_true', default=False)
     parser.add_argument('--early_stop',         help="use PL early stopping", action='store_true', default=False)
+    parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
@@ -154,6 +157,9 @@ def run_train(argv=None):
     if args.early_stop:
         options += f' --early_stop'
 
+    if args.swa:
+        options += f' --swa'
+
     if args.profile:
         options += f' --profile'
 
@@ -190,6 +196,10 @@ def run_train(argv=None):
     if args.checkpoint:
         job.set_env_var('CKPT', args.checkpoint)
         options += f' -c $CKPT'
+
+    elif args.init:
+        job.set_env_var('CKPT', args.init)
+        options += f' -i $CKPT'
 
     if args.features:
         job.set_env_var('FEATS_CKPT', args.features)
@@ -284,6 +294,7 @@ def run_train(argv=None):
                     if args.message is None:
                         args.message = input("please provide a message about this run:\n")
                     print(f'- {args.message}', file=logout)
+                    print(f'  - date:          %s' % datetime.now().strftime("%c"), file=logout)
                     print(f'  - job directory: {jobdir}', file=logout)
                     print(f'  - log file:      {logpath}', file=logout)
                     print(f'  - config file:   {jobdir}.yml', file=logout)
