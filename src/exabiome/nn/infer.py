@@ -69,7 +69,7 @@ def parse_args(*addl_args, argv=None):
 
     args = parser.parse_args(argv)
 
-    args.init == args.checkpoint
+    args.init = args.checkpoint
 
     return args
 
@@ -224,11 +224,27 @@ def run_inference(argv=None):
 
     args = parse_args(argv=argv)
 
-    from mpi4py import MPI
 
-    COMM = MPI.COMM_WORLD
-    RANK = COMM.Get_rank()
-    SIZE = COMM.Get_size()
+
+    RANK = 0
+    SIZE = 1
+    COMM=None
+    f_kwargs = dict()
+    if 'OMPI_COMM_WORLD_RANK' in os.environ:
+        # load this after so we can get usage
+        # statement without having to loading MPI
+        from mpi4py import MPI
+
+        COMM = MPI.COMM_WORLD
+        RANK = COMM.Get_rank()
+        SIZE = COMM.Get_size()
+        if SIZE > 1:
+            f_kwargs['driver'] = 'mpio'
+            f_kwargs['comm'] = COMM
+    else:
+        args.logger.info('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
+
+
 
     model, dataset, args, addl_targs = process_args(args, size=SIZE, rank=RANK)
 
