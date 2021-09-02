@@ -30,7 +30,10 @@ class AbstractLit(LightningModule):
         if self.hparams.manifold:
             self._loss = DistMSELoss()
         elif self.hparams.classify:
-            self._loss = nn.CrossEntropyLoss()
+            if self.hparams.tgt_tax_lvl == 'all':
+                self._loss = HierarchicalLoss(hparams.n_taxa_all)
+            else:
+                self._loss = nn.CrossEntropyLoss()
         else:
             self._loss =  nn.MSELoss()
         self.set_inference(False)

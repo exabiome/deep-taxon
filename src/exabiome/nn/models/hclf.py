@@ -3,31 +3,31 @@ import torch.nn as nn
 
 class HierarchicalClassifier(nn.Module):
 
-    def __init__(self, in_features, taxa_table):
+    def __init__(self, in_features, n_taxa_all):
         super().__init__()
 
         in_feats = in_features
-        out_feats = len(taxa_table.phylum_elements)
+        out_feats = n_taxa_all['phylum']
         self.phylum_fc = nn.Linear(in_feats, out_feats)
 
         in_feats = in_features + out_feats
-        out_feats = len(taxa_table.class_elements)
+        out_feats = n_taxa_all['class']
         self.class_fc = nn.Linear(in_feats, out_feats)
 
         in_feats = in_features + out_feats
-        out_feats = len(taxa_table.order_elements)
+        out_feats = n_taxa_all['order']
         self.order_fc = nn.Linear(in_feats, out_feats)
 
         in_feats = in_features + out_feats
-        out_feats = len(taxa_table.family_elements)
+        out_feats = n_taxa_all['family']
         self.family_fc = nn.Linear(in_feats, out_feats)
 
         in_feats = in_features + out_feats
-        out_feats = len(taxa_table.genus_elements)
+        out_feats = n_taxa_all['genus']
         self.genus_fc = nn.Linear(in_feats, out_feats)
 
         in_feats = in_features + out_feats
-        out_feats = len(taxa_table.species)
+        out_feats = n_taxa_all['species']
         self.species_fc = nn.Linear(in_feats, out_feats)
 
     def forward(self, x):
@@ -64,15 +64,15 @@ class HierarchicalClassifier(nn.Module):
 
 class HierarchicalLoss(nn.Module):
 
-    def __init__(self, taxa_table):
+    def __init__(self, n_taxa_all):
         super().__init__()
 
-        ar = [ len(taxa_table.phylum_elements),
-               len(taxa_table.class_elements),
-               len(taxa_table.order_elements),
-               len(taxa_table.family_elements),
-               len(taxa_table.genus_elements),
-               len(taxa_table.species) ]
+        ar = [ n_taxa_all['phylum'],
+               n_taxa_all['class'],
+               n_taxa_all['order'],
+               n_taxa_all['family'],
+               n_taxa_all['genus'],
+               n_taxa_all['species'] ]
         self.idx = torch.Tensor(ar).cumsum(0).int()
         self.loss = nn.CrossEntropyLoss()
 

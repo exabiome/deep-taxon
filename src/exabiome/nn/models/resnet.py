@@ -8,7 +8,7 @@ https://github.com/pytorch/vision/blob/7c077f6a986f05383bcb86b535aedb5a63dd5c4b/
 import torch
 import torch.nn as nn
 
-from . import model, AbstractLit
+from . import model, AbstractLit, HierarchicalClassifier
 
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
@@ -160,7 +160,11 @@ class ResNet(AbstractLit):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
+
+        if hparams.tgt_tax_lvl == 'all':
+            self.fc = HierarchicalClassifier(512 * block.expansion, hparams.n_taxa_all)
+        else:
+            self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -402,7 +406,7 @@ class ResNetFeatures(nn.Module):
 
     def __init__(self, resnet):
         super().__init__()
-
+        self.hparams = resnet.hparams
         for layer in self._layers:
             setattr(self, layer, getattr(resnet, layer))
 
