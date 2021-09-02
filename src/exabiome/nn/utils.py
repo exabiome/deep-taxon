@@ -88,13 +88,21 @@ def process_model(args, inference=False, taxa_table=None):
                 raise RuntimeError(f'Unable to load checkpoint. Make sure {args.init} is a checkpoint for {args.model}') from e
             else:
                 raise e
+    elif getattr(args, 'checkpoint', None) is not None:
+        model = model_cls.load_from_checkpoint(args.checkpoint)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
         _check_hparams(args)
-        #if taxa_table is not None:
-        #    args.labels = taxa_table['phylum'].elements.data[:]
+        if args.tgt_tax_lvl == 'all':
+            if taxa_table is not None:
+                raise ValueError("must pass taxa_table to process_model if using all taxonomic levels")
+            n_taxa_all = dict()
+            for key in ('phylum', 'class', 'order', 'family', 'genus'):
+                n_taxa_all[key] = len(taxa_table[key].elements)
+            n_taxa_all['species'] = len(taxa_table['species'])
+            args.n_taxa_all = n_taxa_all
         model = model_cls(args)
 
     return model
