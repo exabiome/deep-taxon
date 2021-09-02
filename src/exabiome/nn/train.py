@@ -520,8 +520,6 @@ def fix_model(argv=None):
         new_idx = new_dict[char]
         swaps[new_idx][1] = old_idx
 
-    breakpoint()
-
     emb = model.embedding
     new_emb = nn.Embedding(len(new_chars), emb.embedding_dim)
 
