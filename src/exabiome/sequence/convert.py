@@ -351,12 +351,12 @@ def _get_DNA_map():
     For this to work, bases need to be ordered as they are below
 
     '''
-    chars = ('ACYWSKDVN'
-             'TGRWSMHBN')
+    chars = ('ACYWSKDVNTGRMHB')
     basemap = np.zeros(128, dtype=np.uint8)
     for i, c in reversed(list(enumerate(chars))):  # reverse so we store the lowest for self-complementary codes
         basemap[ord(c)] = i
         basemap[ord(c.lower())] = i
+    basemap[ord('x')] = basemap[ord('X')] = basemap[ord('n')]
     return chars, basemap
 
 
