@@ -228,10 +228,6 @@ class AATable(SequenceTable):
 @register_class('TaxaTable', NS)
 class TaxaTable(DynamicTable, TorchableMixin):
 
-    __fields__ = (
-        {'name': 'realms', 'description': 'the values in htr that are viral realms'},
-        {'name': 'domains', 'description': 'the values in htr that are domains of cellular life'},
-
     __columns__ = (
         {'name': 'taxon_id', 'description': 'the taxon ID'},
         {'name': 'htr', 'description': 'the domain or realm (i.e. Highest Taxonomic Rank) for each taxon',
@@ -247,8 +243,6 @@ class TaxaTable(DynamicTable, TorchableMixin):
     )
 
     @docval(*get_docval(DynamicTable.__init__),
-            {'name': 'realms', 'type': ('array_data'), 'doc': 'the values in htr that are viral realms'},
-            {'name': 'domains', 'type': ('array_data'), 'doc': 'the values in htr that are domains of cellular life'},
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
             {'name': 'phylum', 'type': ('array_data', 'data', EnumData), 'doc': 'the phylum for each taxon', 'default': None},
             {'name': 'class', 'type': ('array_data', 'data', EnumData), 'doc': 'the class for each taxon', 'default': None},
@@ -259,7 +253,6 @@ class TaxaTable(DynamicTable, TorchableMixin):
             {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None},
             {'name': 'rep_taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID for the species representative', 'default': None})
     def __init__(self, **kwargs):
-        realms, domains = popargs('realms', 'domains', kwargs)
         taxon_id, embedding, rep_taxon_id = popargs('taxon_id', 'embedding', 'rep_taxon_id', kwargs)
         taxonomy_labels = ['htr', 'phylum', 'class', 'order', 'family', 'genus', 'species']
         taxonomy = popargs(*taxonomy_labels, kwargs)
@@ -285,8 +278,6 @@ class TaxaTable(DynamicTable, TorchableMixin):
                     columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
-        self.realms = realms
-        self.domains = domains
 
     def get_outputs_map(self, in_tax, out_tax):
         """
@@ -412,8 +403,8 @@ class DeepIndexFile(Container):
     @docval({'name': 'seq_table', 'type': (AATable, DNATable, SequenceTable), 'doc': 'the table storing DNA sequences'},
             {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
             {'name': 'genome_table', 'type': GenomeTable, 'doc': 'the table storing taxonomic information about species in this file'},
-            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'},
-            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree'},
+            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information', 'default': None},
+            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree', 'default': None},
             {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information', 'default': None})
     def __init__(self, **kwargs):
         seq_table, taxa_table, genome_table, distances, tree, tree_graph = popargs('seq_table', 'taxa_table', 'genome_table',
@@ -452,6 +443,23 @@ class DeepIndexFile(Container):
                 cols.append(self.taxa_table[lvl].data[:][genome_labels])
             cols.append(self.taxa_table['id'].data[:][genome_labels])
             genome_labels = np.column_stack(cols)
+        elif val == 'lifeform':
+            htr_elements = self.taxa_table['htr'].elements[:]
+            bacteria = -1
+            archaea = -1
+            viral = list()
+            for i, htr in enumerate(htr_elements):
+                if 'bacteria' == htr.lower():
+                    bacteria = i
+                elif 'archaea' == htr.lower():
+                    archaea = i
+                else:
+                    viral.append(i)
+            htr = tmp.taxa_table['htr'].data[:]
+            htr_labels = np.zeros(len(htr), dtype=int) # 0 is bacteria
+            htr_labels[htr == archaea] = 1
+            htr_labels[np.isin(htr, viral)] = 2
+            genome_labels = htr_labels[self.genome_table['rep_idx'].data[:]]
         else:
             raise ValueError("Unrecognized label key: '%s'" % val)
         genome_idx = self.seq_table['genome'].data[:]
