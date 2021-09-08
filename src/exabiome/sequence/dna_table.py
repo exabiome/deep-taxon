@@ -228,8 +228,14 @@ class AATable(SequenceTable):
 @register_class('TaxaTable', NS)
 class TaxaTable(DynamicTable, TorchableMixin):
 
+    __fields__ = (
+        {'name': 'realms', 'description': 'the values in htr that are viral realms'},
+        {'name': 'domains', 'description': 'the values in htr that are domains of cellular life'},
+
     __columns__ = (
         {'name': 'taxon_id', 'description': 'the taxon ID'},
+        {'name': 'htr', 'description': 'the domain or realm (i.e. Highest Taxonomic Rank) for each taxon',
+         'enum': True},
         {'name': 'phylum', 'description': 'the phylum for each taxon', 'enum': True},
         {'name': 'class', 'description': 'the class for each taxon', 'enum': True},
         {'name': 'order', 'description': 'the order for each taxon', 'enum': True},
@@ -241,18 +247,21 @@ class TaxaTable(DynamicTable, TorchableMixin):
     )
 
     @docval(*get_docval(DynamicTable.__init__),
+            {'name': 'realms', 'type': ('array_data'), 'doc': 'the values in htr that are viral realms'},
+            {'name': 'domains', 'type': ('array_data'), 'doc': 'the values in htr that are domains of cellular life'},
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
-            {'name': 'phylum', 'type': ('array_data', 'data', EnumData), 'doc': 'the phylum for each taxon'},
-            {'name': 'class', 'type': ('array_data', 'data', EnumData), 'doc': 'the class for each taxon'},
-            {'name': 'order', 'type': ('array_data', 'data', EnumData), 'doc': 'the order for each taxon'},
-            {'name': 'family', 'type': ('array_data', 'data', EnumData), 'doc': 'the family for each taxon'},
-            {'name': 'genus', 'type': ('array_data', 'data', EnumData), 'doc': 'the genus for each taxon'},
-            {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon'},
+            {'name': 'phylum', 'type': ('array_data', 'data', EnumData), 'doc': 'the phylum for each taxon', 'default': None},
+            {'name': 'class', 'type': ('array_data', 'data', EnumData), 'doc': 'the class for each taxon', 'default': None},
+            {'name': 'order', 'type': ('array_data', 'data', EnumData), 'doc': 'the order for each taxon', 'default': None},
+            {'name': 'family', 'type': ('array_data', 'data', EnumData), 'doc': 'the family for each taxon', 'default': None},
+            {'name': 'genus', 'type': ('array_data', 'data', EnumData), 'doc': 'the genus for each taxon', 'default': None},
+            {'name': 'species', 'type': ('array_data', 'data', VectorData), 'doc': 'the species for each taxon', 'default': None},
             {'name': 'embedding', 'type': ('array_data', 'data', VectorData), 'doc': 'the embedding for each taxon', 'default': None},
             {'name': 'rep_taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID for the species representative', 'default': None})
     def __init__(self, **kwargs):
+        realms, domains = popargs('realms', 'domains', kwargs)
         taxon_id, embedding, rep_taxon_id = popargs('taxon_id', 'embedding', 'rep_taxon_id', kwargs)
-        taxonomy_labels = ['phylum', 'class', 'order', 'family', 'genus', 'species']
+        taxonomy_labels = ['htr', 'phylum', 'class', 'order', 'family', 'genus', 'species']
         taxonomy = popargs(*taxonomy_labels, kwargs)
         self.__taxmap = {t: i for i, t in enumerate(taxonomy_labels)}
 
@@ -276,6 +285,8 @@ class TaxaTable(DynamicTable, TorchableMixin):
                     columns.append(VectorData(l, 'the %s for each taxon' % l, data=t))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
+        self.realms = realms
+        self.domains = domains
 
     def get_outputs_map(self, in_tax, out_tax):
         """

@@ -80,6 +80,25 @@ groups:
     doc: embedding of each taxa on n-dimensional space
     required: false
 
+  - name: realms
+    dtype: str
+    doc: The elements of htr_elements that are viral realms
+    required: false
+
+  - name: domains
+    dtype: str
+    doc: The elements of htr_elements that are domains of cellular life
+    required: false
+
+  - name: htr
+    data_type_inc: EnumData
+    doc: The highest taxonomic rank in the taxonomy
+    required: false
+  - name: htr_elements
+    data_type_inc: VectorData
+    doc: The available values for the highest taxonomic rank in the taxonomy
+    required: false
+
   - name: phylum
     data_type_inc: EnumData
     doc: The phylum in the taxonomy

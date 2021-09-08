@@ -9,6 +9,8 @@ import skbio.io
 import os
 from functools import partial
 
+from ..utils import parse_logger
+
 
 def add_branches(node, mat, names):
     name = node.name
@@ -116,6 +118,62 @@ def select_embeddings(ids_to_select, taxa_ids, embeddings):
     return embeddings[indices]
 
 
+def load_gtdb_taxonomy(metadata_path, accessions=None, nonrep=False, rep=True, all_nonrep=False, logger=None):
+    if logger is None:
+        logger = parse_logger('')
+
+    logger.info('Reading taxonomies from %s' % metadata_path)
+    taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    extra_cols = ['contig_count', 'checkm_completeness']
+    def func(row):
+        dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
+        dat['species'] = dat['species'] # .split(' ')[1]
+        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
+        dat['accession'] = row['accession'][3:]
+        for k in extra_cols:
+            dat[k] = row[k]
+        return pd.Series(data=dat)
+
+    taxdf = pd.read_csv(metadata_path, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative', 'contig_count', 'checkm_completeness']]\
+                        .apply(func, axis=1)
+    taxdf = taxdf.set_index('accession')
+    dflen = len(taxdf)
+    logger.info('Found %d total genomes' % dflen)
+    taxdf = taxdf[taxdf['gtdb_genome_representative'].str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+    taxdf = taxdf[taxdf.index.str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+    logger.info('Discarded %d non-NCBI genomes' % (dflen - len(taxdf)))
+    if accessions is not None:
+        logger.info('reading accessions %s' % accessions)
+        with open(accessions, 'r') as f:
+            accessions = [l[:-1] for l in f.readlines()]
+        dflen = len(taxdf)
+        taxdf = taxdf[taxdf.index.isin(accessions)]
+        logger.info('Discarded %d genomes not found in %s' % (dflen - len(taxdf), accessions))
+
+    rep_taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
+
+    dflen = len(taxdf)
+    if nonrep:
+        taxdf = taxdf[taxdf.index != taxdf['gtdb_genome_representative']]
+        logger.info('Discarded %d representative genomes' % (dflen - len(taxdf)))
+        dflen = len(taxdf)
+        if not all_nonrep:
+            groups = taxdf[['gtdb_genome_representative', 'contig_count']].groupby('gtdb_genome_representative')
+            min_ctgs = groups.idxmin()['contig_count']
+            max_ctgs = groups.idxmax()['contig_count']
+            accessions = np.unique(np.concatenate([min_ctgs, max_ctgs]))
+            taxdf = taxdf.filter(accessions, axis=0)
+            logger.info('Discarded %d extra non-representative genomes' % (dflen - len(taxdf)))
+    elif rep:
+        taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
+        logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
+
+    dflen = len(taxdf)
+    logger.info('%d remaining genomes' % dflen)
+
+    return taxdf, rep_taxdf
+
+
 def prepare_data(argv=None):
     '''Aggregate sequence data GTDB using a file-of-files'''
     import argparse
@@ -143,15 +201,16 @@ def prepare_data(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
-    parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('out', type=str, help='output HDF5')
     parser.add_argument('-A', '--accessions', type=str, default=None, help='file of the NCBI accessions of the genomes to convert')
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
     parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
-    parser.add_argument('-T', '--total_seq_len', type=int, default=None, help='the total sequence length')
+    parser.add_argument('-L', '--total_seq_len', type=int, default=None, help='the total sequence length')
     parser.add_argument('-N', '--n_seqs', type=int, default=None, help='the total number of sequences')
+    parser.add_argument('-T', '--tree', type=str, help='a tree file in Newick format', default=None)
+    parser.add_argument('-t', '--tmpdir', type=str, help='directory with NCBI sequence files', default=None)
     rep_grp = parser.add_mutually_exclusive_group()
     rep_grp.add_argument('-n', '--nonrep', action='store_true', default=False, help='keep non-representative genomes only. keep both by default')
     rep_grp.add_argument('-r', '--rep', action='store_true', default=False, help='keep representative genomes only. keep both by default')
@@ -184,66 +243,67 @@ def prepare_data(argv=None):
     if not any([args.protein, args.cds, args.genomic]):
         args.genomic = True
 
-    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format='%(asctime)s - %(message)s')
-    logger = logging.getLogger()
+    logger = parse_logger('')
 
     #############################
     # read and filter taxonomies
     #############################
-    logger.info('Reading taxonomies from %s' % args.metadata)
-    taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
-    extra_cols = ['contig_count', 'checkm_completeness']
-    def func(row):
-        dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
-        dat['species'] = dat['species'] # .split(' ')[1]
-        dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
-        dat['accession'] = row['accession'][3:]
-        for k in extra_cols:
-            dat[k] = row[k]
-        return pd.Series(data=dat)
+    taxdf, rep_taxdf = load_gtdb_taxonomy(args.metadata, accessions=args.accessions, nonrep=args.nonrep, rep=args.rep, all_nonrep=args.all, logger=logger)
 
-    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative', 'contig_count', 'checkm_completeness']]\
-                        .apply(func, axis=1)
-
-    taxdf = taxdf.set_index('accession')
-    dflen = len(taxdf)
-    logger.info('Found %d total genomes' % dflen)
-    taxdf = taxdf[taxdf['gtdb_genome_representative'].str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
-    taxdf = taxdf[taxdf.index.str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
-    logger.info('Discarded %d non-NCBI genomes' % (dflen - len(taxdf)))
-
-    if args.accessions is not None:
-        logger.info('reading accessions %s' % args.accessions)
-        with open(args.accessions, 'r') as f:
-            accessions = [l[:-1] for l in f.readlines()]
-        dflen = len(taxdf)
-        taxdf = taxdf[taxdf.index.isin(accessions)]
-        logger.info('Discarded %d genomes not found in %s' % (dflen - len(taxdf), args.accessions))
-
-    rep_taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
-
-    dflen = len(taxdf)
-    if args.nonrep:
-        taxdf = taxdf[taxdf.index != taxdf['gtdb_genome_representative']]
-        logger.info('Discarded %d representative genomes' % (dflen - len(taxdf)))
-        dflen = len(taxdf)
-        if not args.all:
-            groups = taxdf[['gtdb_genome_representative', 'contig_count']].groupby('gtdb_genome_representative')
-            min_ctgs = groups.idxmin()['contig_count']
-            max_ctgs = groups.idxmax()['contig_count']
-            accessions = np.unique(np.concatenate([min_ctgs, max_ctgs]))
-            taxdf = taxdf.filter(accessions, axis=0)
-            logger.info('Discarded %d extra non-representative genomes' % (dflen - len(taxdf)))
-    elif args.rep:
-        taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
-        logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
-
-    repdflen = len(rep_taxdf)
-    rep_taxdf = rep_taxdf.filter(np.unique(taxdf['gtdb_genome_representative']), axis=0)
-    logger.info('Discarded %d leftover representative genomes' % (repdflen - len(rep_taxdf)))
-
-    dflen = len(taxdf)
-    logger.info('%d remaining genomes' % dflen)
+#     logger.info('Reading taxonomies from %s' % args.metadata)
+#     taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+#     extra_cols = ['contig_count', 'checkm_completeness']
+#     def func(row):
+#         dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
+#         dat['species'] = dat['species'] # .split(' ')[1]
+#         dat['gtdb_genome_representative'] = row['gtdb_genome_representative'][3:]
+#         dat['accession'] = row['accession'][3:]
+#         for k in extra_cols:
+#             dat[k] = row[k]
+#         return pd.Series(data=dat)
+#
+#     taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative', 'contig_count', 'checkm_completeness']]\
+#                         .apply(func, axis=1)
+#
+#     taxdf = taxdf.set_index('accession')
+#     dflen = len(taxdf)
+#     logger.info('Found %d total genomes' % dflen)
+#     taxdf = taxdf[taxdf['gtdb_genome_representative'].str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+#     taxdf = taxdf[taxdf.index.str.contains('GC[A,F]_', regex=True)]   # get rid of genomes that are not at NCBI
+#     logger.info('Discarded %d non-NCBI genomes' % (dflen - len(taxdf)))
+#
+#     if args.accessions is not None:
+#         logger.info('reading accessions %s' % args.accessions)
+#         with open(args.accessions, 'r') as f:
+#             accessions = [l[:-1] for l in f.readlines()]
+#         dflen = len(taxdf)
+#         taxdf = taxdf[taxdf.index.isin(accessions)]
+#         logger.info('Discarded %d genomes not found in %s' % (dflen - len(taxdf), args.accessions))
+#
+#     rep_taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
+#
+#     dflen = len(taxdf)
+#     if args.nonrep:
+#         taxdf = taxdf[taxdf.index != taxdf['gtdb_genome_representative']]
+#         logger.info('Discarded %d representative genomes' % (dflen - len(taxdf)))
+#         dflen = len(taxdf)
+#         if not args.all:
+#             groups = taxdf[['gtdb_genome_representative', 'contig_count']].groupby('gtdb_genome_representative')
+#             min_ctgs = groups.idxmin()['contig_count']
+#             max_ctgs = groups.idxmax()['contig_count']
+#             accessions = np.unique(np.concatenate([min_ctgs, max_ctgs]))
+#             taxdf = taxdf.filter(accessions, axis=0)
+#             logger.info('Discarded %d extra non-representative genomes' % (dflen - len(taxdf)))
+#     elif args.rep:
+#         taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
+#         logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
+#
+#     # repdflen = len(rep_taxdf)
+#     # rep_taxdf = rep_taxdf.filter(np.unique(taxdf['gtdb_genome_representative']), axis=0)
+#     # logger.info('Discarded %d leftover representative genomes' % (repdflen - len(rep_taxdf)))
+#
+#     dflen = len(taxdf)
+#     logger.info('%d remaining genomes' % dflen)
 
     #############################
     # read and trim tree
@@ -414,7 +474,8 @@ def prepare_data(argv=None):
 
             logger.info(f'allocating uint8 array of length {total_seq_len} for sequences')
 
-            tmpdir = tempfile.mkdtemp()
+            tmpdir = tempfile.mkdtemp(dir=args.tmpdir)
+            tmp_h5_path = os.path.join(tmpdir, 'sequences.h5')
 
             tmp_h5_file = h5py.File(os.path.join(tmpdir, 'sequences.h5'), 'w')
             sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression='gzip')
