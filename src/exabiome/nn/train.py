@@ -82,12 +82,6 @@ def process_config(conf_path, args=None):
         conf_val = config.pop(k, v.get('default', None))
         setattr(args, k, conf_val)
 
-    # set number if input channels
-    input_nc = 18
-    if args.protein:
-        input_nc = 26
-    args.input_nc = input_nc
-
     # classify by default
     if args.manifold == args.classify == False:
         args.classify = True
@@ -175,6 +169,9 @@ def process_args(args=None, return_io=False):
     # if classification problem, use the number of taxa as the number of outputs
     if args.classify:
         args.n_outputs = len(data_mod.dataset.taxa_labels)
+
+    args.input_nc = len(data_mod.dataset.vocab)
+
     model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
     if args.weighted is not None:
