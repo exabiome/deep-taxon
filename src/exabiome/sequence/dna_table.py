@@ -244,6 +244,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
+            {'name': 'htr', 'type': ('array_data', 'data', EnumData), 'doc': 'the domain or realm (i.e. Higheset Taxonomic Rank) for each taxon', 'default': None},
             {'name': 'phylum', 'type': ('array_data', 'data', EnumData), 'doc': 'the phylum for each taxon', 'default': None},
             {'name': 'class', 'type': ('array_data', 'data', EnumData), 'doc': 'the class for each taxon', 'default': None},
             {'name': 'order', 'type': ('array_data', 'data', EnumData), 'doc': 'the order for each taxon', 'default': None},
