@@ -123,7 +123,7 @@ def load_gtdb_taxonomy(metadata_path, accessions=None, nonrep=False, rep=True, a
         logger = parse_logger('')
 
     logger.info('Reading taxonomies from %s' % metadata_path)
-    taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    taxlevels = ['htr', 'phylum', 'class', 'order', 'family', 'genus', 'species']
     extra_cols = ['contig_count', 'checkm_completeness']
     def func(row):
         dat = dict(zip(taxlevels, row['gtdb_taxonomy'].split(';')))
