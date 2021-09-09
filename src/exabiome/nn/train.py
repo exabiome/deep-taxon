@@ -298,6 +298,7 @@ def run_lightning(argv=None):
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
 
+    checkpoint = None
     if args.init is not None:
         checkpoint = args.init
         link_dest = 'init.ckpt'
