@@ -50,6 +50,8 @@ def get_conf_args():
         'batch_size': dict(help='batch size', default=64),
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
+        'tnf': dict(help='input transform data to tetranucleotide frequency', default=False),
+        'layers': dict(help='layers for an MLP model', default=None),
         'window': dict(type=int, help='the window size to use to chunk sequences', default=None),
         'step': dict(type=int, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)', default=None),
         'fwd_only': dict(action='store_true', help='use forward strand of sequences only', default=False),
@@ -170,7 +172,7 @@ def process_args(args=None, return_io=False):
     if args.classify:
         args.n_outputs = len(data_mod.dataset.taxa_labels)
 
-    args.input_nc = len(data_mod.dataset.vocab)
+    args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
     model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
@@ -185,7 +187,8 @@ def process_args(args=None, return_io=False):
             raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
         model.set_class_weights(weights)
 
-    data_mod.dataset.close()
+    if args.num_workers > 0:
+        data_mod.dataset.close()
 
     targs = dict(
         max_epochs=args.epochs,
@@ -230,9 +233,13 @@ def process_args(args=None, return_io=False):
             torch.cuda.set_device(env.local_rank())
             print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
     else:
+        if env is None:
+            ttp = SingleDevicePlugin(torch.device('cpu'))
+        else:
+            ttp = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
         targs['accelerator'] = CPUAccelerator(
             precision_plugin = PrecisionPlugin(),
-            training_type_plugin = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
+            training_type_plugin = ttp
         )
 
     if args.sanity:
@@ -287,7 +294,13 @@ def run_lightning(argv=None):
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
-    RANK = addl_targs['accelerator'].training_type_plugin.cluster_environment.global_rank()
+    if 'OMPI_COMM_WORLD_RANK' in os.environ:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        RANK = comm.Get_rank()
+    else:
+        RANK = 0
+        print('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
 
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
@@ -342,6 +355,7 @@ def run_lightning(argv=None):
 
     if args.debug:
         targs['log_every_n_steps'] = 1
+        targs['fast_dev_run'] = 10
 
     print0('Trainer args:', targs, file=sys.stderr)
     print0('Model:\n', model, file=sys.stderr)

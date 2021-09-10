@@ -327,7 +327,7 @@ class TnfCollater:
         canon_tnf[:, :len(self.canonical)] = tnf[:, self.canonical] + tnf[:, self.noncanonical]
         canon_tnf[:, len(self.canonical):] = tnf[:, self.palindromes]
 
-        X_ret = torch.tensor(canon_tnf)
+        X_ret = canon_tnf
         y_ret = torch.stack(y_ret)
         size_ret = torch.tensor(size_ret)
         idx_ret = torch.tensor(idx_ret)

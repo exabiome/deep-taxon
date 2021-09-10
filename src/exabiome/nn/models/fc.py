@@ -25,8 +25,8 @@ class MLP(AbstractLit):
     '''
 
     def __init__(self, hparams):
-        super(MLP, self).__init__()
-        outputs = list(hparams.outputs)
+        super(MLP, self).__init__(hparams)
+        outputs = list(hparams.layers)
 
         in_features = hparams.input_nc        # for TNF, this should be 136
         layers = list()
