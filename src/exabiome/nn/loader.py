@@ -215,6 +215,96 @@ class DistanceCollater:
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
+class TnfCollater:
+    def __init__(self, vocab):
+        self.bases = 4**np.arange(4)
+        rcmap = np.array([3, 2, 1, 0])
+        canonical = list()
+        noncanonical = list()
+        palindromes = list()
+        seen = set()
+        for i in range(256):
+            if i in seen:
+                continue
+            ar = np.zeros(4, dtype=int)
+            ar[3], r = divmod(i, 64)
+            ar[2], r = divmod(r, 16)
+            ar[1], ar[0] = divmod(r, 4)
+            rc = rcmap[ar[::-1]]
+            rc_i = rc.dot(self.bases)
+            if i < rc_i:
+                canonical.append(i)
+                noncanonical.append(rc_i)
+            elif rc_i < i:
+                canonical.append(rc_i)
+                noncanonical.append(i)
+            else:
+                palindromes.append(i)
+            seen.add(i)
+            seen.add(rc_i)
+        self.canonical = np.array(canonical)
+        self.noncanonical = np.array(noncanonical)
+        self.palindromes = np.array(palindromes)
+
+        # calculate a map to convert DNA characters into 0-4 encoding
+        self.cmap = np.zeros(128, dtype=int) - 1
+        for i, c in enumerate(vocab):
+            if c == b'A':
+                self.cmap[i] = 0            # A
+            elif c == b'T':
+                self.cmap[i] = 3            # T
+            elif c == b'C':
+                self.cmap[i] = 1            # C
+            else c == b'G':
+                self.cmap[i] = 2            # G
+
+
+    def __call__(self, samples):
+        l_idx = -1
+        if isinstance(samples, tuple):
+            samples = [samples]
+
+        X_ret = list()
+        y_ret = list()
+        idx_ret = list()
+        size_ret = list()
+        seq_id_ret = list()
+        for i, X, y, seq_id in samples:
+            X_ret.append(X)
+            y_ret.append(y)
+            size_ret.append(X.shape[l_idx])
+            idx_ret.append(i)
+            seq_id_ret.append(seq_id)
+
+        # calculate tetranucleotide frequency
+        chunks = np.array(X_ret)
+
+        ## 1. hash 4-mers
+        __seq = self.cmap[chunks]
+        i4mers = np.stack([__seq[:, 0:-3], __seq[:, 1:-2], __seq[:, 2:-1], __seq[:, 3:]], axis=2)
+        mask = np.all(i4mers < 0, axis=2)
+        hashed_4mers = i4mers.dot(self.bases)
+        hashed_4mers[mask] = 257    # use 257 to mark any 4-mers that had ambiguous nucleotides
+
+        ## 2. count hashed 4-mers i.e. count integers from between 0-257 inclusive
+        tnf = np.zeros((32, 257), dtype=float)
+        for i in range(tnf.shape[0]):
+            tnf[i] = np.bincount(hashed_4mers[i], minlength=257)/i4mers.shape[1]
+
+        ## 3. merge canonical 4-mers
+        canon_tnf = np.zeros((32, 136))
+        canon_tnf[:, :len(self.canonical)] = tnf[:, self.canonical] + tnf[:, self.noncanonical]
+        canon_tnf[:, len(self.canonical):] = tnf[:, self.palindromes]
+
+        X_ret = torch.tensor(canon_tnf)
+        y_ret = torch.stack(y_ret)
+        size_ret = torch.tensor(size_ret)
+        idx_ret = torch.tensor(idx_ret)
+        seq_id_ret = torch.tensor(seq_id_ret)
+
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+
+
 class SeqDataset(Dataset):
     """
     A torch Dataset to handle reading samples read from a DeepIndex file
