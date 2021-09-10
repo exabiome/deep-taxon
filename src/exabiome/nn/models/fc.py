@@ -5,24 +5,39 @@ import torch.nn.functional as F
 
 from . import model, AbstractLit
 
-@model('fc')
-class FC(AbstractLit):
+
+def fc_layer(in_features, out_features, dropout=0.5, relu=True, batch_norm=True):
+    layers = [
+        nn.Dropout(p=dropout),
+        nn.Linear(in_features, out_features),
+    ]
+    if batch_norm:
+        layers.append(nn.BatchNorm1d(out_features))
+    if relu:
+        layers.append(nn.ReLU(inplace=True))
+    return nn.Sequential(*layers)
+
+
+@model('mlp')
+class MLP(AbstractLit):
     '''
-    A 1D CNN with 5 convolutional layers, followed by 3 fully-connected layers
-
-    Args:
-        input_nc (int):  the input number of channels
+    A multi-layer perceptron for classifying species using tetranucleotide frequency
     '''
 
-    def __init__(self, input_nc):
-        super(FC, self).__init__()
-        self.layers = nn.Sequential(
-            nn.Linear(input_nc, input_nc),
-            nn.Linear(input_nc, 2),
-        )
+    def __init__(self, hparams):
+        super(MLP, self).__init__()
+        outputs = list(hparams.outputs)
 
-    def forward(self, x, **kwargs):
-        x = torch.flatten(x, 1)
+        in_features = hparams.input_nc        # for TNF, this should be 136
+        layers = list()
+        for out_features in outputs:
+            layers.append(fc_layer(in_features, out_features))
+            in_features = out_features
+        layers.append(fc_layer(in_features, hparams.n_outputs, relu=False, batch_norm=False))
+
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, x):
         x = self.layers(x)
         return x
 
