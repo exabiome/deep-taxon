@@ -248,15 +248,22 @@ class TnfCollater:
 
         # calculate a map to convert DNA characters into 0-4 encoding
         self.cmap = np.zeros(128, dtype=int) - 1
+        count = 0
         for i, c in enumerate(vocab):
             if c == b'A':
                 self.cmap[i] = 0            # A
+                count += 1
             elif c == b'T':
                 self.cmap[i] = 3            # T
+                count += 1
             elif c == b'C':
                 self.cmap[i] = 1            # C
-            else c == b'G':
+                count += 1
+            elif c == b'G':
                 self.cmap[i] = 2            # G
+                count += 1
+            if count == 4:
+                break
 
 
     def __call__(self, samples):
