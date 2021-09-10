@@ -423,6 +423,7 @@ class ResNetFeatures(nn.Module):
                 'layer2',
                 'layer3',
                 'layer4',
+                'bottleneck',
                 'avgpool')
 
     def __init__(self, resnet):
@@ -443,6 +444,8 @@ class ResNetFeatures(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+
+        x = self.bottleneck(x)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
