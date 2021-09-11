@@ -194,6 +194,12 @@ def run_train(argv=None):
         exp += f'_{conf["lr_scheduler"]}'
 
     if args.checkpoint:
+        if not os.path.exists(args.checkpoint):
+            # assume we are supposed ot wait for the job to finish
+            # to get the checkpoint from
+            jobdir = os.path.dirname(args.checkpoint)
+            job_dep = jobdir[jobdir.rfind('.')+1:]
+            job.add_addl_jobflag(job.wait_flag, job_dep)
         job.set_env_var('CKPT', args.checkpoint)
         options += f' -c $CKPT'
 
@@ -281,6 +287,7 @@ def run_train(argv=None):
                 print("unable to submit job")
             else:
                 jobdir = f'{expdir}/train.{job_id}'
+                print(f'running job out of {jobdir}')
                 cfg_path = f'{jobdir}.yml'
                 print(f'writing config file to {cfg_path}')
                 with open(cfg_path, 'w') as f:
