@@ -55,6 +55,7 @@ def get_conf_args():
         'fwd_only': dict(action='store_true', help='use forward strand of sequences only', default=False),
         'classify': dict(action='store_true', help='run a classification problem', default=False),
         'manifold': dict(action='store_true', help='run a manifold learning problem', default=False),
+        'bottleneck': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=True),
         'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
                            help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species'),
     }
@@ -81,12 +82,6 @@ def process_config(conf_path, args=None):
     for k, v in get_conf_args().items():
         conf_val = config.pop(k, v.get('default', None))
         setattr(args, k, conf_val)
-
-    # set number if input channels
-    input_nc = 18
-    if args.protein:
-        input_nc = 26
-    args.input_nc = input_nc
 
     # classify by default
     if args.manifold == args.classify == False:
@@ -175,6 +170,9 @@ def process_args(args=None, return_io=False):
     # if classification problem, use the number of taxa as the number of outputs
     if args.classify:
         args.n_outputs = len(data_mod.dataset.taxa_labels)
+
+    args.input_nc = len(data_mod.dataset.vocab)
+
     model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
     if args.weighted is not None:
@@ -301,6 +299,7 @@ def run_lightning(argv=None):
     with open(output('args.pkl'), 'wb') as f:
         pickle.dump(args, f)
 
+    checkpoint = None
     if args.init is not None:
         checkpoint = args.init
         link_dest = 'init.ckpt'
