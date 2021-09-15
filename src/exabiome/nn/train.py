@@ -541,7 +541,6 @@ def fix_model(argv=None):
     for i, j in swaps:
         new_param[i] = old_param[j]
 
-    breakpoint()
     model.embedding = new_emb
 
     ckpt['state_dict'] = model.state_dict()
