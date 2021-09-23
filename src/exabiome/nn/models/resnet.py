@@ -183,7 +183,14 @@ class ResNet(AbstractLit):
         if hparams.tgt_tax_lvl == 'all':
             self.fc = HierarchicalClassifier(n_output_channels, hparams.n_taxa_all)
         else:
-            self.fc = nn.Linear(n_output_channels, hparams.n_outputs)
+            #self.fc = nn.Linear(n_output_channels, hparams.n_outputs)
+            self.fc = nn.Sequential(
+                nn.Linear(n_output_channels, 512),
+                nn.ReLU(inplace=True),
+                nn.Linear(512, 512),
+                nn.ReLU(inplace=True),
+                nn.Linear(512, hparams.n_outputs),
+            )
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -233,13 +240,19 @@ class ResNet(AbstractLit):
         """
         outputs_map = torch.as_tensor(outputs_map)
         self.hparams.n_outputs = len(outputs_map)
-        new_fc = nn.Linear(self.fc.in_features, self.hparams.n_outputs)
+        final_fc = self.fc
+        if isinstance(self.fc, nn.Sequential):
+            final_fc = self.fc[-1]
+        new_fc = nn.Linear(final_fc.in_features, self.hparams.n_outputs)
         with torch.no_grad():
-            for i in range(self.fc.out_features):
+            for i in range(final_fc.out_features):
                 mask = outputs_map == i
-                new_fc.weight[mask, :] = self.fc.weight[i, :]
-                new_fc.bias[mask] = self.fc.bias[i] - torch.log(mask.sum().float())
-        self.fc = new_fc
+                new_fc.weight[mask, :] = final_fc.weight[i, :]
+                new_fc.bias[mask] = final_fc.bias[i] - torch.log(mask.sum().float())
+        if isinstance(self.fc, nn.Sequential):
+            self.fc[-1] = new_fc
+        else:
+            self.fc = new_fc
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self.hparams.norm_layer
