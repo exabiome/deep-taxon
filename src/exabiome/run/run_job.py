@@ -243,7 +243,7 @@ def run_train(argv=None):
             job.set_env_var('BB_INPUT', '/mnt/bb/$USER/`basename $INPUT`')
             input_var = 'BB_INPUT'
 
-            job.add_command('echo "$INPUT to $BB_INPUT"')
+            job.add_command('echo "$INPUT to $BB_INPUT" >> $LOG')
             job.add_command('cp $INPUT $BB_INPUT', run=f'jsrun -n {args.nodes} -r 1 -a 1')
             job.add_command('ls /mnt/bb/$USER', run='jsrun -n 1')
             job.add_command('ls $BB_INPUT', run='jsrun -n 1')
@@ -253,7 +253,7 @@ def run_train(argv=None):
             job.set_env_var('BB_INPUT', '/tmp/`basename $INPUT`')
             input_var = 'BB_INPUT'
 
-            job.add_command('echo "$INPUT to $BB_INPUT"')
+            job.add_command('echo "$INPUT to $BB_INPUT" >> $LOG')
             job.add_command('cp $INPUT $BB_INPUT') #, run=f'srun -n {args.nodes} -r 1 -a 1')
             job.add_command('ls /tmp') #, run='jsrun -n 1')
             job.add_command('ls $BB_INPUT') #, run='jsrun -n 1')
@@ -274,9 +274,9 @@ def run_train(argv=None):
         n_cores = 42
         cores_per_task = n_cores//args.gpus
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
-        job.add_command('$CMD > $LOG 2>&1', run=jsrun)
+        job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
-        job.add_command('$CMD > $LOG 2>&1', run='srun')
+        job.add_command('$CMD >> $LOG 2>&1', run='srun')
 
     if args.sh is not None:
         with open(args.sh, 'w') as out:
