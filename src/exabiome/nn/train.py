@@ -555,6 +555,48 @@ def fix_model(argv=None):
     torch.save(ckpt, output)
 
 
+def filter_metrics(argv=None):
+    import argparse
+    import sys
+    import pandas as pd
+    import numpy as np
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("metrics", type=str, help='metrics.csv from Pytorch Lightning')
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-v', '--validation', action='store_true', default=False, help='filter validation')
+    grp.add_argument('-t', '--train', action='store_true', default=False, help='filter train')
+    parser.add_argument('-c', '--csv', action='store_true', default=False,
+                        help='write to CSV. default is to print a Pandas DataFrame')
+    parser.add_argument('-o', '--output', type=str, default=None,
+                        help='file to save output to. default is to print to stdout')
+
+    args = parser.parse_args(argv)
+
+    if not (args.validation or args.train):
+        args.validation = True
+
+    if args.validation:
+        columns = ['epoch', 'step', 'validation_acc', 'validation_loss']
+        mask_col = 'validation_acc'
+    else:
+        columns = ['epoch', 'step', 'training_acc', 'training_loss']
+        mask_col = 'training_acc'
+
+    df = pd.read_csv(args.metrics)
+    df['epoch'] = df['epoch'].values.astype(int)
+    mask = np.logical_not(np.isnan(df[mask_col].values))
+    df = df.filter(columns, axis=1)[mask]
+
+    out = sys.stdout
+    if args.output is not None:
+        out = open(args.output, 'w')
+
+    if args.csv:
+        df.to_csv(out)
+    else:
+        print(df, file=out)
+
 
 from . import models
 from .models.lit import AbstractLit

@@ -47,6 +47,7 @@ command_dict = {
     'tax-acc': Command('nn.summarize.taxonomic_accuracy', 'calculate classificaiton accuracy across all possible taxonomic levels'),
     'model-info': Command('nn.train.get_model_info', 'Construct and print info about model'),
     'fix-model': Command('nn.train.fix_model', 'Fix model trained with old embedding'),
+    'filter-metrics': Command('nn.train.filter_metrics', 'Filter metrics by validation or training'),
 }
 
 
