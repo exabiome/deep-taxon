@@ -833,7 +833,6 @@ class LazySeqDataset(Dataset):
         # of multiprocessing/popen_spawn_posix.py. I still do not know the real cause of the problem
         # but it it appears that writing to standard error after starting a multiprocessing.Process
         # keeps thing moving along.
-        print("LazySeqDataset -- STARTING A WORKER", file=sys.stderr)
         self.open()
 
     def set_chunks(self, window, step=None):
