@@ -18,7 +18,7 @@ import logging
 
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
@@ -134,7 +134,7 @@ def parse_args(*addl_args, argv=None):
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
 
     dl_grp = parser.add_argument_group('Data loading')
-    dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
+    dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
     dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
 
@@ -207,9 +207,12 @@ def process_args(args=None, return_io=False):
     env = None
     if args.lsf:
         ##########################################################################################
-        # Currently coding against pytorch-lightning 1.3.1.
+        # Currently coding against pytorch-lightning 1.4.3
         ##########################################################################################
-        args.loader_kwargs['num_workers'] = 1
+        if args.num_workers > 4:
+            print0("num_workers (-k) > 4 can lead to hanging on Summit -- setting to 4", file=sys.stderr)
+            args.num_workers = 4
+        args.loader_kwargs['num_workers'] = 1           # Set as a default. This will get overridden elsewhere
         args.loader_kwargs['multiprocessing_context'] = 'spawn'
         env = LSFEnvironment()
     elif args.slurm:
@@ -337,10 +340,13 @@ def run_lightning(argv=None):
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
-    callbacks = [ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, monitor=AbstractLit.val_loss)]
+    callbacks = [
+        ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode='max', monitor=AbstractLit.val_acc),
+        LearningRateMonitor(logging_interval='epoch')
+    ]
 
     if args.early_stop:
-        callbacks.append(EarlyStopping(monitor=AbstractLit.val_loss, min_delta=0.00, patience=3, verbose=False, mode='min'))
+        callbacks.append(EarlyStopping(monitor=AbstractLit.val_acc, min_delta=0.00, patience=20, verbose=False, mode='max'))
 
     if args.swa:
         callbacks.append(StochasticWeightAveraging(swa_epoch_start=5, annealing_epochs=5))
