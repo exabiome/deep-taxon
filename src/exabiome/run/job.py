@@ -17,6 +17,11 @@ class AbstractJob(metaclass=ABCMeta):
 
     @property
     @abstractmethod
+    def wait_flag(self):
+        pass
+
+    @property
+    @abstractmethod
     def project_flag(self):
         pass
 
@@ -77,6 +82,7 @@ class AbstractJob(metaclass=ABCMeta):
         self.gpus = kwargs.get('gpus')
         self.jobname = kwargs.get('jobname')
         self.nodes = kwargs.get('nodes')
+        self.wait = kwargs.get('wait')
         self.conda_env = None
         self.modules = list()
         self.debug = False
@@ -150,6 +156,8 @@ class AbstractJob(metaclass=ABCMeta):
         self.write_line(f, self.output_flag, self.output)
         self.write_line(f, self.error_flag, self.error)
         self.write_line(f, self.jobname_flag, self.jobname)
+        if self.wait is not None:
+            self.write_line(f, self.wait_flag, self.wait)
         for k, v in self.addl_job_flags.items():
             self.write_line(f, k, v)
 

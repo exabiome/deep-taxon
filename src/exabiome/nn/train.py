@@ -18,7 +18,7 @@ import logging
 
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
@@ -50,6 +50,8 @@ def get_conf_args():
         'batch_size': dict(help='batch size', default=64),
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
+        'tnf': dict(help='input transform data to tetranucleotide frequency', default=False),
+        'layers': dict(help='layers for an MLP model', default=None),
         'window': dict(type=int, help='the window size to use to chunk sequences', default=None),
         'step': dict(type=int, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)', default=None),
         'fwd_only': dict(action='store_true', help='use forward strand of sequences only', default=False),
@@ -133,7 +135,7 @@ def parse_args(*addl_args, argv=None):
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
 
     dl_grp = parser.add_argument_group('Data loading')
-    dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
+    dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
     dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
 
@@ -171,7 +173,7 @@ def process_args(args=None, return_io=False):
     if args.classify:
         args.n_outputs = len(data_mod.dataset.taxa_labels)
 
-    args.input_nc = len(data_mod.dataset.vocab)
+    args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
     model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
@@ -186,7 +188,8 @@ def process_args(args=None, return_io=False):
             raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
         model.set_class_weights(weights)
 
-    data_mod.dataset.close()
+    if args.num_workers > 0:
+        data_mod.dataset.close()
 
     targs = dict(
         max_epochs=args.epochs,
@@ -205,9 +208,12 @@ def process_args(args=None, return_io=False):
     env = None
     if args.lsf:
         ##########################################################################################
-        # Currently coding against pytorch-lightning 1.3.1.
+        # Currently coding against pytorch-lightning 1.4.3
         ##########################################################################################
-        args.loader_kwargs['num_workers'] = 1
+        if args.num_workers > 4:
+            print0("num_workers (-k) > 4 can lead to hanging on Summit -- setting to 4", file=sys.stderr)
+            args.num_workers = 4
+        args.loader_kwargs['num_workers'] = 1           # Set as a default. This will get overridden elsewhere
         args.loader_kwargs['multiprocessing_context'] = 'spawn'
         env = LSFEnvironment()
     elif args.slurm:
@@ -231,9 +237,13 @@ def process_args(args=None, return_io=False):
             torch.cuda.set_device(env.local_rank())
             print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
     else:
+        if env is None:
+            ttp = SingleDevicePlugin(torch.device('cpu'))
+        else:
+            ttp = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
         targs['accelerator'] = CPUAccelerator(
             precision_plugin = PrecisionPlugin(),
-            training_type_plugin = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
+            training_type_plugin = ttp
         )
 
     if args.sanity:
@@ -288,7 +298,13 @@ def run_lightning(argv=None):
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
-    RANK = addl_targs['accelerator'].training_type_plugin.cluster_environment.global_rank()
+    if 'OMPI_COMM_WORLD_RANK' in os.environ:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        RANK = comm.Get_rank()
+    else:
+        RANK = 0
+        print('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
 
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
@@ -325,10 +341,13 @@ def run_lightning(argv=None):
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
-    callbacks = [ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, monitor=AbstractLit.val_loss)]
+    callbacks = [
+        ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode='max', monitor=AbstractLit.val_acc),
+        LearningRateMonitor(logging_interval='epoch')
+    ]
 
     if args.early_stop:
-        callbacks.append(EarlyStopping(monitor=AbstractLit.val_loss, min_delta=0.00, patience=3, verbose=False, mode='min'))
+        callbacks.append(EarlyStopping(monitor=AbstractLit.val_acc, min_delta=0.00, patience=20, verbose=False, mode='max'))
 
     if args.swa:
         callbacks.append(StochasticWeightAveraging(swa_epoch_start=5, annealing_epochs=5))
@@ -343,6 +362,7 @@ def run_lightning(argv=None):
 
     if args.debug:
         targs['log_every_n_steps'] = 1
+        targs['fast_dev_run'] = 10
 
     print0('Trainer args:', targs, file=sys.stderr)
     print0('Model:\n', model, file=sys.stderr)
@@ -528,7 +548,6 @@ def fix_model(argv=None):
     for i, j in swaps:
         new_param[i] = old_param[j]
 
-    breakpoint()
     model.embedding = new_emb
 
     ckpt['state_dict'] = model.state_dict()
@@ -536,6 +555,63 @@ def fix_model(argv=None):
     print(f'saving checkpoint to {output}')
     torch.save(ckpt, output)
 
+
+def filter_metrics(argv=None):
+    import argparse
+    import sys
+    import pandas as pd
+    import numpy as np
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("metrics", type=str, help='metrics.csv from Pytorch Lightning')
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-v', '--validation', action='store_true', default=False, help='filter validation')
+    grp.add_argument('-t', '--train', action='store_true', default=False, help='filter train')
+    parser.add_argument('-c', '--csv', action='store_true', default=False,
+                        help='write to CSV. default is to print a Pandas DataFrame')
+    parser.add_argument('-o', '--output', type=str, default=None,
+                        help='file to save output to. default is to print to stdout')
+
+    args = parser.parse_args(argv)
+
+    if not (args.validation or args.train):
+        args.validation = True
+
+    if args.validation:
+        columns = ['epoch', 'step', 'validation_acc', 'validation_loss']
+        mask_col = 'validation_acc'
+    else:
+        columns = ['epoch', 'step', 'training_acc', 'training_loss']
+        mask_col = 'training_acc'
+
+    df = pd.read_csv(args.metrics)
+
+    lrdf = None
+    if 'lr-AdamW' in df:
+        lrdf = df.filter(['lr-AdamW'], axis=1)
+        lrdf = lrdf[np.logical_not(np.isnan(lrdf['lr-AdamW']))]
+
+        epdf = df.filter(['epoch'], axis=1)
+        epdf = epdf[np.logical_not(np.isnan(epdf['epoch']))].astype(int)
+        lrdf['epoch'] = np.unique(epdf['epoch'])
+
+    df['epoch'] = df['epoch'].values.astype(int)
+    mask = np.logical_not(np.isnan(df[mask_col].values))
+    df = df.filter(columns, axis=1)[mask]
+
+    df = df.drop('step', axis=1)
+    if lrdf is not None:
+        df = df.set_index('epoch').merge(lrdf.set_index('epoch'), left_index=True, right_index=True)
+
+    out = sys.stdout
+    if args.output is not None:
+        out = open(args.output, 'w')
+
+    if args.csv:
+        df.to_csv(out)
+    else:
+        pd.set_option('display.max_rows', None)
+        print(df, file=out)
 
 
 from . import models
