@@ -584,9 +584,23 @@ def filter_metrics(argv=None):
         mask_col = 'training_acc'
 
     df = pd.read_csv(args.metrics)
+
+    lrdf = None
+    if 'lr-AdamW' in df:
+        lrdf = df.filter(['lr-AdamW'], axis=1)
+        lrdf = lrdf[np.logical_not(np.isnan(lrdf['lr-AdamW']))]
+
+        epdf = df.filter(['epoch'], axis=1)
+        epdf = epdf[np.logical_not(np.isnan(epdf['epoch']))].astype(int)
+        lrdf['epoch'] = np.unique(epdf['epoch'])
+
     df['epoch'] = df['epoch'].values.astype(int)
     mask = np.logical_not(np.isnan(df[mask_col].values))
     df = df.filter(columns, axis=1)[mask]
+
+    df = df.drop('step', axis=1)
+    if lrdf is not None:
+        df = df.set_index('epoch').merge(lrdf.set_index('epoch'), left_index=True, right_index=True)
 
     out = sys.stdout
     if args.output is not None:
@@ -595,6 +609,7 @@ def filter_metrics(argv=None):
     if args.csv:
         df.to_csv(out)
     else:
+        pd.set_option('display.max_rows', None)
         print(df, file=out)
 
 
