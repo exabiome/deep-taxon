@@ -57,6 +57,7 @@ def get_conf_args():
         'fwd_only': dict(action='store_true', help='use forward strand of sequences only', default=False),
         'classify': dict(action='store_true', help='run a classification problem', default=False),
         'manifold': dict(action='store_true', help='run a manifold learning problem', default=False),
+        'bottleneck': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=True),
         'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
                            help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species'),
     }

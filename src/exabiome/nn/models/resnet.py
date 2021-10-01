@@ -175,15 +175,19 @@ class ResNet(AbstractLit):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
 
-        n_output_channels = 64 * block.expansion
-        self.bottleneck = FeatureReduction(512 * block.expansion, n_output_channels)
+        n_output_channels = 512 * block.expansion
+        if hparams.bottleneck:
+            self.bottleneck = FeatureReduction(n_output_channels, 64 * block.expansion)
+            n_output_channels = 64 * block.expansion
+        else:
+            self.bottleneck = None
 
         self.avgpool = nn.AdaptiveAvgPool1d(1)
 
         if hparams.tgt_tax_lvl == 'all':
             self.fc = HierarchicalClassifier(n_output_channels, hparams.n_taxa_all)
         else:
-            #self.fc = nn.Linear(n_output_channels, hparams.n_outputs)
+
             self.fc = nn.Sequential(
                 nn.Linear(n_output_channels, 512),
                 nn.ReLU(inplace=True),
@@ -191,6 +195,7 @@ class ResNet(AbstractLit):
                 nn.ReLU(inplace=True),
                 nn.Linear(512, hparams.n_outputs),
             )
+
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -292,7 +297,9 @@ class ResNet(AbstractLit):
         x = self.layer3(x)
         x = self.layer4(x)
 
-        x = self.bottleneck(x)
+
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
@@ -458,7 +465,9 @@ class ResNetFeatures(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
 
-        x = self.bottleneck(x)
+
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
