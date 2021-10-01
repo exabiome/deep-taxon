@@ -302,6 +302,7 @@ def run_train(argv=None):
                         args.message = input("please provide a message about this run:\n")
                     print(f'- {args.message}', file=logout)
                     print(f'  - date:          %s' % datetime.now().strftime("%c"), file=logout)
+                    print(f'  - cmd:           {" ".join(argv)}', file=logout)
                     print(f'  - job directory: {jobdir}', file=logout)
                     print(f'  - log file:      {logpath}', file=logout)
                     print(f'  - config file:   {jobdir}.yml', file=logout)
