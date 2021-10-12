@@ -151,6 +151,7 @@ def prepare_data(argv=None):
     parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
     parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
     parser.add_argument('-T', '--total_seq_len', type=int, default=None, help='the total sequence length')
+    parser.add_argument('-t', '--tmpdir', type=str, default=None, help='a temporary directory to store sequences')
     parser.add_argument('-N', '--n_seqs', type=int, default=None, help='the total number of sequences')
     rep_grp = parser.add_mutually_exclusive_group()
     rep_grp.add_argument('-n', '--nonrep', action='store_true', default=False, help='keep non-representative genomes only. keep both by default')
@@ -401,8 +402,7 @@ def prepare_data(argv=None):
 
             vocab = np.array(list(vocab_it.characters()))
             if not args.protein:
-                np.testing.assert_array_equal(vocab, list('ACYWSKDVNTGRWSMHBN'))
-
+                np.testing.assert_array_equal(vocab, list('ACYWSKDVNTGRMHB'))
 
             if args.total_seq_len is None:
                 logger.info('counting total number of sqeuences')
@@ -414,7 +414,12 @@ def prepare_data(argv=None):
 
             logger.info(f'allocating uint8 array of length {total_seq_len} for sequences')
 
-            tmpdir = tempfile.mkdtemp()
+            if args.tmpdir is not None:
+                if not os.path.exists(args.tmpdir):
+                    os.mkdir(args.tmpdir)
+                tmpdir = tempfile.mkdtemp(dir=args.tmpdir)
+            else:
+                tmpdir = tempfile.mkdtemp()
 
             tmp_h5_file = h5py.File(os.path.join(tmpdir, 'sequences.h5'), 'w')
             sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression='gzip')
