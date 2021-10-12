@@ -177,10 +177,18 @@ class SeqCollater:
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
+def _check_collater(padval, seq_collater):
+    if seq_collater is not None:
+        return seq_collater
+    elif padval is not None:
+        return SeqCollater(padval)
+    else:
+        raise ValueError("must specify padval or seq_collater")
+
 class GraphCollater:
 
-    def __init__(self, node_ids, padval):
-        self.collater = SeqCollater(padval)
+    def __init__(self, node_ids, padval=None, seq_collater=None):
+        self.collater = _check_collater(padval, seq_collater)
         self.node_ids = torch.as_tensor(node_ids, dtype=torch.long)
 
     def __call__(self, samples):
@@ -196,8 +204,8 @@ class GraphCollater:
 
 class DistanceCollater:
 
-    def __init__(self, dmat, padval):
-        self.collater = SeqCollater(padval)
+    def __init__(self, dmat, padval=None, seq_collater=None):
+        self.collater = _check_collater(padval, seq_collater)
         if len(dmat.shape) == 1:
             from scipy.spatial.distance import squareform
             dmat = squareform(dmat)
@@ -212,6 +220,119 @@ class DistanceCollater:
 
         # Get distances
         y_ret = self.dmat[y_idx][:, y_idx]
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+
+
+class TnfCollater:
+    def __init__(self, vocab):
+        self.bases = 4**torch.arange(4)
+        rcmap = torch.tensor([3, 2, 1, 0])
+        canonical = list()
+        noncanonical = list()
+        palindromes = list()
+        seen = torch.zeros(256, dtype=bool)
+        for i in range(256):
+            if seen[i]:
+                continue
+            ar = torch.zeros(4, dtype=int)
+            ar[3], r = divmod(i, 64)
+            ar[2], r = divmod(r, 16)
+            ar[1], ar[0] = divmod(r, 4)
+            rc = rcmap[ar.flip(0)]
+            rc_i = rc.matmul(self.bases)
+            if i < rc_i:
+                canonical.append(i)
+                noncanonical.append(rc_i)
+            elif rc_i < i:
+                canonical.append(rc_i)
+                noncanonical.append(i)
+            else:
+                palindromes.append(i)
+            seen[i] = True
+            seen[rc_i] = True
+        self.canonical = torch.tensor(canonical)
+        self.noncanonical = torch.tensor(noncanonical)
+        self.palindromes = torch.tensor(palindromes)
+
+        # calculate a map to convert DNA characters into 0-4 encoding
+        self.cmap = torch.zeros(128, dtype=int) - 1
+        count = 0
+        self.padval = None
+        for i, c in enumerate(vocab):
+            if c == 'A':
+                self.cmap[i] = 0            # A
+                count += 1
+            elif c == 'T':
+                self.cmap[i] = 3            # T
+                count += 1
+            elif c == 'C':
+                self.cmap[i] = 1            # C
+                count += 1
+            elif c == 'G':
+                self.cmap[i] = 2            # G
+                count += 1
+            elif c == 'N':
+                self.padval = i
+                count += 1
+            if count == 5:
+                break
+        if self.padval is None:
+            raise ValueError("Could not find 'N' character in vocab -- this is needed to pad sequences")
+
+
+    def __call__(self, samples):
+        l_idx = -1
+        if isinstance(samples, tuple):
+            samples = [samples]
+
+        maxlen = 0
+        for i, X, y, seq_id in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+
+        X_ret = list()
+        y_ret = list()
+        idx_ret = list()
+        size_ret = list()
+        seq_id_ret = list()
+        for i, X, y, seq_id in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif), value=self.padval)
+            X_ret.append(X_)
+            y_ret.append(y)
+            size_ret.append(X.shape[l_idx])
+            idx_ret.append(i)
+            seq_id_ret.append(seq_id)
+
+        # calculate tetranucleotide frequency
+        chunks = torch.stack(X_ret)
+
+        ## 1. hash 4-mers
+        __seq = self.cmap[chunks]
+        i4mers = torch.stack([__seq[:, 0:-3], __seq[:, 1:-2], __seq[:, 2:-1], __seq[:, 3:]], axis=2)
+        mask = torch.any(i4mers < 0, axis=2)
+        h4mers = i4mers.matmul(self.bases)       # hashed 4-mers
+        h4mers[mask] = 256    # use 257 to mark any 4-mers that had ambiguous nucleotides
+
+        ## 2. count hashed 4-mers i.e. count integers from between 0-257 inclusive
+        tnf = torch.zeros((32, 257), dtype=float)
+        for i in range(tnf.shape[0]):
+            counts = torch.bincount(h4mers[i], minlength=257)
+            tnf[i] = counts/i4mers.shape[1]
+
+        ## 3. merge canonical 4-mers
+        canon_tnf = torch.zeros((32, 136))
+        canon_tnf[:, :len(self.canonical)] = tnf[:, self.canonical] + tnf[:, self.noncanonical]
+        canon_tnf[:, len(self.canonical):] = tnf[:, self.palindromes]
+
+        X_ret = canon_tnf
+        y_ret = torch.stack(y_ret)
+        size_ret = torch.tensor(size_ret)
+        idx_ret = torch.tensor(idx_ret)
+        seq_id_ret = torch.tensor(seq_id_ret)
+
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
@@ -399,13 +520,15 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
-
-    if dataset.manifold:
-        collater = DistanceCollater(dataset.distances, dataset.padval)
-    elif dataset.graph:
-        collater = GraphCollater(dataset.node_ids, dataset.padval)
+    if dataset.tnf:
+        collater = TnfCollater(dataset.vocab)
     else:
         collater = SeqCollater(dataset.padval)
+
+    if dataset.manifold:
+        collater = DistanceCollater(dataset.distances, seq_collater=collater)
+    elif dataset.graph:
+        collater = GraphCollater(dataset.node_ids, seq_collater=collater)
 
     if kwargs.get('num_workers', None) not in (None, 0):
         if dataset.difile is not None:
@@ -639,6 +762,7 @@ class LazySeqDataset(Dataset):
 
         self.manifold = False
         self.graph = False
+        self.tnf = hparams.tnf
         self.distances = None
         self.node_ids = None
 
@@ -703,6 +827,12 @@ class LazySeqDataset(Dataset):
             self.set_revcomp()
 
     def worker_init(self, worker_id):
+        # September 15, 2021, ajtritt
+        # This print statement is necessary to avoid processings from hanging when they are started
+        # after a Summit maintenance, processes would hang. I was able to track it down to line 62
+        # of multiprocessing/popen_spawn_posix.py. I still do not know the real cause of the problem
+        # but it it appears that writing to standard error after starting a multiprocessing.Process
+        # keeps thing moving along.
         self.open()
 
     def set_chunks(self, window, step=None):

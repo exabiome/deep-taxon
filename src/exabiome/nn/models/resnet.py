@@ -111,6 +111,21 @@ class Bottleneck(nn.Module):
         return out
 
 
+class FeatureReduction(nn.Module):
+
+    def __init__(self, inplanes, planes):
+        super(FeatureReduction, self).__init__()
+        self.conv1 = conv1x1(inplanes, planes)
+        self.bn1 = nn.BatchNorm1d(planes)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        return out
+
+
 class ResNet(AbstractLit):
 
     def __init__(self, hparams):
@@ -159,12 +174,28 @@ class ResNet(AbstractLit):
                                        dilate=replace_stride_with_dilation[1])
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
+
+        n_output_channels = 512 * block.expansion
+        if hparams.bottleneck:
+            self.bottleneck = FeatureReduction(n_output_channels, 64 * block.expansion)
+            n_output_channels = 64 * block.expansion
+        else:
+            self.bottleneck = None
+
         self.avgpool = nn.AdaptiveAvgPool1d(1)
 
         if hparams.tgt_tax_lvl == 'all':
-            self.fc = HierarchicalClassifier(512 * block.expansion, hparams.n_taxa_all)
+            self.fc = HierarchicalClassifier(n_output_channels, hparams.n_taxa_all)
         else:
-            self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
+
+            self.fc = nn.Sequential(
+                nn.Linear(n_output_channels, 512),
+                nn.ReLU(inplace=True),
+                nn.Linear(512, 512),
+                nn.ReLU(inplace=True),
+                nn.Linear(512, hparams.n_outputs),
+            )
+
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -214,13 +245,19 @@ class ResNet(AbstractLit):
         """
         outputs_map = torch.as_tensor(outputs_map)
         self.hparams.n_outputs = len(outputs_map)
-        new_fc = nn.Linear(self.fc.in_features, self.hparams.n_outputs)
+        final_fc = self.fc
+        if isinstance(self.fc, nn.Sequential):
+            final_fc = self.fc[-1]
+        new_fc = nn.Linear(final_fc.in_features, self.hparams.n_outputs)
         with torch.no_grad():
-            for i in range(self.fc.out_features):
+            for i in range(final_fc.out_features):
                 mask = outputs_map == i
-                new_fc.weight[mask, :] = self.fc.weight[i, :]
-                new_fc.bias[mask] = self.fc.bias[i] - torch.log(mask.sum().float())
-        self.fc = new_fc
+                new_fc.weight[mask, :] = final_fc.weight[i, :]
+                new_fc.bias[mask] = final_fc.bias[i] - torch.log(mask.sum().float())
+        if isinstance(self.fc, nn.Sequential):
+            self.fc[-1] = new_fc
+        else:
+            self.fc = new_fc
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self.hparams.norm_layer
@@ -259,6 +296,10 @@ class ResNet(AbstractLit):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+
+
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
@@ -402,6 +443,7 @@ class ResNetFeatures(nn.Module):
                 'layer2',
                 'layer3',
                 'layer4',
+                'bottleneck',
                 'avgpool')
 
     def __init__(self, resnet):
@@ -422,6 +464,10 @@ class ResNetFeatures(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+
+
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)

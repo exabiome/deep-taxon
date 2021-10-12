@@ -4,6 +4,7 @@ class LSFJob(AbstractJob):
 
     directive = 'BSUB'
     queue_flag = 'q'
+    wait_flag = 'w'
     project_flag = 'P'
     time_flag = 'W'
     output_flag = 'o'
