@@ -39,7 +39,7 @@ def chunks_apply(dfs, func, *args, **kwargs):
 
 
 def get_logger():
-    logger = logging.getLogger('stdout')
+    logger = logging.getLogger('stderr')
     hdlr = logging.StreamHandler(sys.stdout)
     logger.setLevel(logging.INFO)
     logger.addHandler(hdlr)
@@ -51,7 +51,7 @@ def agg_orfs(argv):
     '''Aggregate ORF LCAs to get a taxonomic assignment for individual sequences'''
     parser = argparse.ArgumentParser()
     parser.add_argument('orf_lca', type=str, help='LCA ORFs files', nargs='+')
-    parser.add_argument('output', type=str, help='the file to save LCA ORFs output to')
+    parser.add_argument('-o', '--output', type=str, help='the file to save LCA ORFs output to')
     parser.add_argument('-m', '--bsmax_cutoff', type=float, help='fraction of Bmax cutoff for assigning taxa', default=0.5)
 
     args = parser.parse_args(argv)
@@ -92,8 +92,11 @@ def agg_orfs(argv):
     agg_df = chunks_apply((read(path) for path in args.orf_lca),
                           agg_orfs, bsmax_cutoff=args.bsmax_cutoff)
     agg_df = agg_df[['accession', 'seq_name'] + taxlevels]
-    logger.info(f'saving sequence LCA to {args.output}')
-    agg_df.to_csv(args.output, index=False)
+    if args.output is not None:
+        logger.info(f'saving sequence LCA to {args.output}')
+        agg_df.to_csv(args.output, index=False)
+    else:
+        agg_df.to_csv(sys.stdout, index=False)
 
 def read_metadata(path):
     extra_cols = ['contig_count', 'checkm_completeness']
