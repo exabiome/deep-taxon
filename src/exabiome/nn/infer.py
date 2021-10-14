@@ -358,7 +358,7 @@ def cat(indices, outputs, labels, orig_lens, seq_ids):
 def in_memory_inference(model, dataset, args, addl_targs):
 
     from pkg_resources import resource_filename
-    from hdmf.common import load_namespaces, get_class, VectorData, EnumData
+    from hdmf.common import load_namespaces, get_class, VectorData, EnumData, get_manager
     from hdmf.backends.hdf5 import HDF5IO
 
     load_namespaces(os.path.join(resource_filename(__name__, '../hdmf-ml'), 'schema', 'ml', 'namespace.yaml'))
@@ -371,16 +371,16 @@ def in_memory_inference(model, dataset, args, addl_targs):
     n_samples = len(dataset)
     # make temporary datasets and do all I/O at the end
     output_data = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
-    predicted_class_data = np.zeros(shape=(n_samples,), dtype=int)
-    true_label_data = np.zeros(shape=(n_samples,), dtype=int)
+    predicted_class_data = np.zeros(shape=(n_samples,), dtype=np.uint)
+    true_label_data = np.zeros(shape=(n_samples,), dtype=np.uint)
     orig_lens_data = np.zeros(shape=(n_samples,), dtype=int)
-    tvt_split_data = np.zeros(shape=(n_samples,), dtype=int)
+    tvt_split_data = np.zeros(shape=(n_samples,), dtype=np.uint)
     tvt_split_elements_data = ['train', 'validate', 'test']  # TODO these will eventually be set in the TVT data_type
     true_label_elements_data = dataset.label_names  # TODO inspect this
 
-    tmp_seq_id = None
+    seq_id_data = None
     if args.save_seq_ids:
-        tmp_seq_id = np.zeros(shape=(n_samples,), dtype=int)
+        seq_id_data = np.zeros(shape=(n_samples,), dtype=int)
     indices = list()
 
     model.to(args.device)
@@ -392,7 +392,7 @@ def in_memory_inference(model, dataset, args, addl_targs):
         idx = idx[order]
         args.logger.info('stashing outputs, shape ' + str(outputs[order].shape))
         output_data[idx] = outputs[order]
-        if args.classify:
+        if args.classify:   # TODO <-- is this used anymore? it was removed from the main branch
             pred_class = np.amax(outputs[order], axis=1)
             args.logger.info('stashing predicted class, shape ' + str(pred_class.shape))
             predicted_class_data[idx] = pred_class
@@ -405,7 +405,7 @@ def in_memory_inference(model, dataset, args, addl_targs):
         tvt_split_data[idx] = tvt_split_elements_data.index(loader_key)
         if args.save_seq_ids:
             args.logger.info('stashing seq_ids')
-            tmp_seq_id[idx] = seq_ids[order]
+            seq_id_data[idx] = seq_ids[order]
         indices.append(idx)
 
     args.logger.info("writing data")
@@ -500,11 +500,11 @@ def in_memory_inference(model, dataset, args, addl_targs):
         columns.append(embedding_col)
 
     if args.save_seq_ids:
-        args.logger.info("writing seq_ids, shape " + str(tmp_seq_id.shape))
+        args.logger.info("writing seq_ids, shape " + str(seq_id_data.shape))
         embedding_col = VectorData(
             name='seq_id',
             description='Sequential IDs',
-            data=tmp_seq_id
+            data=seq_id_data,
         )
         columns.append(embedding_col)
 
@@ -520,7 +520,7 @@ def in_memory_inference(model, dataset, args, addl_targs):
     table = ResultsTable(name='results', description='ML results', columns=columns)
 
     args.logger.info(f'saving outputs to {args.output}')
-    with HDF5IO(args.output, 'w') as io:
+    with HDF5IO(args.output, 'w', manager=get_manager()) as io:
         io.write(table)
 
 
