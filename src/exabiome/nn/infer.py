@@ -221,6 +221,7 @@ def run_inference(argv=None):
         argv: a command-line string or argparse.Namespace object to use for running inference
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
+
     args = parse_args(argv=argv)
     RANK = 0
     SIZE = 1
@@ -369,11 +370,14 @@ def in_memory_inference(model, dataset, args, addl_targs):
 
     n_samples = len(dataset)
     # make temporary datasets and do all I/O at the end
-    tmp_output = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
-    tmp_pred_class = np.zeros(shape=(n_samples,), dtype=int)
-    tmp_true_label = np.zeros(shape=(n_samples,), dtype=int)
-    tmp_orig_length = np.zeros(shape=(n_samples,), dtype=int)
-    tmp_tvt_split = np.zeros(shape=(n_samples,), dtype=str)
+    output_data = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
+    predicted_class_data = np.zeros(shape=(n_samples,), dtype=int)
+    true_label_data = np.zeros(shape=(n_samples,), dtype=int)
+    orig_lens_data = np.zeros(shape=(n_samples,), dtype=int)
+    tvt_split_data = np.zeros(shape=(n_samples,), dtype=int)
+    tvt_split_elements_data = ['train', 'validate', 'test']  # TODO these will eventually be set in the TVT data_type
+    true_label_elements_data = dataset.label_names  # TODO inspect this
+
     tmp_seq_id = None
     if args.save_seq_ids:
         tmp_seq_id = np.zeros(shape=(n_samples,), dtype=int)
@@ -387,24 +391,24 @@ def in_memory_inference(model, dataset, args, addl_targs):
         order = np.argsort(idx)
         idx = idx[order]
         args.logger.info('stashing outputs, shape ' + str(outputs[order].shape))
-        tmp_output[idx] = outputs[order]
+        output_data[idx] = outputs[order]
         if args.classify:
             pred_class = np.amax(outputs[order], axis=1)
             args.logger.info('stashing predicted class, shape ' + str(pred_class.shape))
-            tmp_pred_class[idx] = pred_class
+            predicted_class_data[idx] = pred_class
         args.logger.info('stashing labels')
-        tmp_true_label[idx] = labels[order]
+        true_label_data[idx] = labels[order]
         args.logger.info('stashing orig_lens')
-        tmp_orig_length[idx] = orig_lens
+        orig_lens_data[idx] = orig_lens
         args.logger.info('stashing mask')
-        tmp_tvt_split[idx] = loader_key
+        assert loader_key in tvt_split_elements_data
+        tvt_split_data[idx] = tvt_split_elements_data.index(loader_key)
         if args.save_seq_ids:
             args.logger.info('stashing seq_ids')
             tmp_seq_id[idx] = seq_ids[order]
         indices.append(idx)
 
     args.logger.info("writing data")
-    # f.create_dataset('label_names', data=data_mod.dataset.label_names, dtype=h5py.special_dtype(vlen=str))
 
     # if args.umap:
     #     order = np.s_[:]
@@ -425,63 +429,73 @@ def in_memory_inference(model, dataset, args, addl_targs):
     # create and set up results table
     columns = list()
 
-    args.logger.info("writing tvt_split, shape " + str(tmp_tvt_split.shape))
+    args.logger.info("writing tvt_split, shape " + str(tvt_split_data.shape))
+    tvt_split_elements_col = VectorData(
+        name='tvt_split_elements',
+        description=('Fixed set of elements referenced by tvt_split EnumData column. Usually has values '
+                     '"train", "validate", "test"'),
+        data=tvt_split_elements_data,
+    )
+    columns.append(tvt_split_elements_col)
+
     tvt_split_col = TrainValidationTestSplit(
         name='tvt_split',
         description='A column to indicate if a sample was used for training, testing or validation',
-        data=tmp_tvt_split
+        data=tvt_split_data,
+        elements=tvt_split_elements_col,
     )
     columns.append(tvt_split_col)
 
-    args.logger.info("writing orig_length, shape " + str(tmp_orig_length.shape))
+    args.logger.info("writing orig_length, shape " + str(orig_lens_data.shape))
     orig_lens_col = VectorData(
         name='orig_length',
         description='Original lengths',
-        data=tmp_orig_length
+        data=orig_lens_data,
     )
     columns.append(orig_lens_col)
 
-    args.logger.info("writing true_label, shape " + str(tmp_true_label.shape))
-    true_label_elements_col = EnumData(
+    args.logger.info("writing true_label, shape " + str(true_label_data.shape))
+    true_label_elements_col = VectorData(
         name='true_label_elements',
-        description='Fixed set of true label strings referenced by true_label EnumData column',
-        data=[]  # TODO
+        description='Fixed set of elements referenced by true_label EnumData column',
+        data=true_label_elements_data,
     )
     columns.append(true_label_elements_col)
 
-    args.logger.info("writing true_label, shape " + str(tmp_true_label.shape))
     true_label_col = EnumData(
         name='true_label',
         description='A column to store the true label for each sample',
-        data=tmp_true_label,
-        elements=true_label_elements_col  # TODO
+        data=true_label_data,
+        elements=true_label_elements_col,
+        # TODO link to true label elements of original taxa table??
+        # elements=dataset.difile.taxa_table[dataset.difile.label_key].elements
     )
     columns.append(true_label_col)
 
     if args.classify:
-        args.logger.info("writing predicted_proba, shape " + str(tmp_output.shape))
+        args.logger.info("writing predicted_proba, shape " + str(output_data.shape))
         predicted_proba_col = ClassProbability(
             name='predicted_proba',
             description='A column to store the class probability for each class across the samples',
-            data=tmp_output,
-            training_labels=true_label_col
+            data=output_data,
+            training_labels=true_label_col,
         )
         columns.append(predicted_proba_col)
 
-        args.logger.info("writing predicted_class, shape " + str(tmp_pred_class.shape))
+        args.logger.info("writing predicted_class, shape " + str(predicted_class_data.shape))
         predicted_class_col = ClassLabel(
             name='predicted_class',
             description='A column to store which class a sample was classified as',
-            data=tmp_pred_class,
-            training_labels=true_label_col
+            data=predicted_class_data,
+            training_labels=true_label_col,
         )
         columns.append(predicted_class_col)
     else:
-        args.logger.info("writing embedding, shape " + str(tmp_output.shape))
+        args.logger.info("writing embedding, shape " + str(output_data.shape))
         embedding_col = EmbeddedValues(
             name='embedding',
             description='A column to store embeddings for each sample',
-            data=tmp_output
+            data=output_data,
         )
         columns.append(embedding_col)
 
