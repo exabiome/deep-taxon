@@ -41,6 +41,13 @@ command_dict = {
     'extract-profile': Command('nn.summarize.get_profile_data', 'Extract profile data from log files'),
     'plot-loss': Command('nn.summarize.plot_loss', 'Plot loss curves from metrics file'),
     'show-hparams': Command('nn.train.show_hparams', 'Print hparams from a checkpoint file'),
+    'to-onnx': Command('nn.deploy.to_onnx', 'convert checkpoint to ONNX format'),
+    'agg-chunks': Command('nn.summarize.aggregate_chunks', 'aggregate sequence chunks to get NN outputs for individual sequences'),
+    'agg-seqs': Command('nn.summarize.aggregate_seqs', 'aggregate sequence chunks to get NN outputs for individual taxons (i.e. labels)'),
+    'tax-acc': Command('nn.summarize.taxonomic_accuracy', 'calculate classificaiton accuracy across all possible taxonomic levels'),
+    'model-info': Command('nn.train.get_model_info', 'Construct and print info about model'),
+    'fix-model': Command('nn.train.fix_model', 'Fix model trained with old embedding'),
+    'filter-metrics': Command('nn.train.filter_metrics', 'Filter metrics by validation or training'),
 }
 
 

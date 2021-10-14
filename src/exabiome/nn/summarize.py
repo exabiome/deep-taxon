@@ -1,6 +1,8 @@
+import argparse
 import sys
 import glob
 import os.path
+import os
 import matplotlib.pyplot as plt
 import h5py
 import seaborn as sns
@@ -10,6 +12,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, precision_recall_curve
 import scipy.stats as stats
+
+from ..utils import parse_logger, ccm
 
 
 def get_color_markers(n):
@@ -319,9 +323,8 @@ def classification_aggregate(path, verbose=False):
 
 def classifier_summarize(argv=None):
     '''Summarize training/inference results'''
-    import argparse
     import pickle
-    from ..utils import parse_logger
+
     parser = argparse.ArgumentParser()
     parser.add_argument('input', type=str,
                         help='the HDF5 file with network outputs or a directory containing a single outputs file')
@@ -510,9 +513,19 @@ def plot_loss(argv=None):
     import pandas as pd
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('csv', type=str, help='the metrics.csv file')
+    parser.add_argument('csv', type=str, nargs='+', help='the metrics.csv file')
+    parser.add_argument('-o', '--outdir', type=str, help='the output directory', default=None)
+    parser.add_argument('-f', '--force', action='store_true', help='overwrite existing plots if they exist', default=False)
+    parser.add_argument('-L', '--labels', type=str, help='a comma-separated string with labels for each CSV', default=None)
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument('-V', '--validation', action='store_true', default=False, help='only plot validation')
+    grp.add_argument('-R', '--training', action='store_true', default=False, help='only plot training')
     #parser.add_argument('cols', nargs='*', type=str, help='the metrics.csv file')
     args = parser.parse_args(argv)
+
+    if not (args.validation or args.training):
+        args.validation = True
+        args.training = True
 
     def plot(ax, x, y, **kwargs):
         mask = np.logical_not(np.logical_or(np.isnan(x), np.isnan(y)))
@@ -520,40 +533,432 @@ def plot_loss(argv=None):
         y = y[mask]
         ax.plot(x, y, **kwargs)
 
-    df = pd.read_csv(args.csv, header=0)
+    outdir = args.outdir
 
-    outdir = os.path.dirname(args.csv)
+    if outdir is None:
+        if len(args.csv) == 1:
+            outdir = os.path.dirname(args.csv[0])
+        else:
+            outdir = '.'
+    loss_path = os.path.join(outdir, 'loss.png')
+    acc_path = os.path.join(outdir, 'accuracy.png')
+    if (os.path.exists(loss_path) or os.path.exists(acc_path)) and not args.force:
+        badpath = loss_path
+        if os.path.exists(acc_path):
+            badpath = acc_path
+        print(f'Output file {badpath} exists - exiting. Use -f or remove file and rerun', file=sys.stderr)
+        sys.exit(1)
 
-    x = df.step.values
-    tr_loss = df.training_loss.values
-    va_loss = df.validation_loss.values
-    epoch = df.epoch.values
-    epoch = epoch / epoch.max()
 
-    fig, ax = plt.subplots(1)
-    plot(ax, x, tr_loss, color='k', label='training')
-    plot(ax, x, va_loss, color='r', label='validation')
-    ep = epoch*max(np.nanmax(tr_loss), np.nanmax(va_loss))
-    plot(ax, x, ep, color='gray', ls='--', alpha=0.5)
-    ax.set_title('Loss')
-    path = os.path.join(outdir, 'loss.png')
-    print(f'saving loss figure to {path}')
-    fig.savefig(path, dpi=100)
+    if args.labels is not None:
+        labels = args.labels.split(',')
+        if len(labels) != len(args.csv):
+            print(f'found {len(labels)} labels, but found {len(args.csv)} CSV files', file=sys.stderr)
+            sys.exit(1)
+    else:
+        labels = [f'csv-{d}' for d in range(len(args.csv))]
 
-    columns = df.columns
-    if 'validation_acc' in df.columns or 'training_acc' in df.columns:
-        tr_acc = df.training_acc.values
-        va_acc = df.validation_acc.values
-        fig, ax = plt.subplots(1)
-        plot(ax, x, tr_acc, color='k', label='training')
-        plot(ax, x, va_acc, color='r', label='validation')
-        ep = epoch*max(np.nanmax(tr_acc), np.nanmax(va_acc))
-        plot(ax, x, ep, color='gray', ls='--', alpha=0.5)
-        ax.set_title('Accuracy')
-        path = os.path.join(outdir, 'accuracy.png')
-        print(f'saving accuracy figure to {path}')
-        fig.savefig(path, dpi=100)
 
+    loss_fig, loss_ax = plt.subplots(1, figsize=(7, 5))
+    epoch_max = 0
+    loss_max = 0
+    epoch_ratio = None
+    epoch_x = None
+
+
+    acc_fig, acc_ax = None, None
+    acc_max = 0
+
+    colors = np.array(sns.color_palette('tab20', len(args.csv) * 2).as_hex()).reshape((len(args.csv),2)).tolist()
+    for col, csv, label in zip(colors, args.csv, labels):
+        df = pd.read_csv(csv, header=0)
+
+        x = df.step.values
+        tr_loss = df.training_loss.values
+        epoch = df.epoch.values
+        if epoch_ratio is None or epoch.max() > epoch_max:
+            epoch_max = epoch.max()
+            epoch_ratio = epoch
+            epoch_x = x
+
+        if args.training:
+            plot(loss_ax, x, tr_loss, color=col[1], label=f'{label} (tr)')
+        if 'validation_loss' in df and args.validation:
+            va_loss = df.validation_loss.values
+            plot(loss_ax, x, va_loss, color=col[0], ls='--', label=f'{label} (val)')
+            loss_max = max(loss_max, np.nanmax(tr_loss))
+
+        columns = df.columns
+        if 'training_acc' in df.columns and args.training:
+            if acc_fig is None:
+                acc_fig, acc_ax = plt.subplots(1, figsize=(7, 5))
+
+            tr_acc = df.training_acc.values
+            plot(acc_ax, x, tr_acc, color=col[1], label=f'{label} (tr)')
+        if 'validation_acc' in df.columns and args.validation:
+            if acc_fig is None:
+                acc_fig, acc_ax = plt.subplots(1, figsize=(7, 5))
+            va_acc = df.validation_acc.values
+            plot(acc_ax, x, va_acc, color=col[0], ls='--', label=f'{label} (val)')
+
+    def add_epoch(ax, maxval):
+        # calculate epoch values to fit on Axes
+        epoch_ax = ax.twinx()
+        ep = epoch_ratio
+        plot(epoch_ax, epoch_x, ep, color='gray', ls=':', alpha=0.5, label='epoch')
+
+        # set the limits
+        ymin, ymax = epoch_ax.get_ylim()
+        if ymin < 0:
+            ymin = -0.05 * ep.max()
+        if ymax < 1:
+            ymax = 1.05 * ep.max()
+        epoch_ax.set_ylim(ymin, ymax)
+
+        # clean up the ticks
+        if ep.max() < 8:
+            ticks = np.arange(ep.max()).astype(int)
+        else:
+            ticks = np.arange(0, ep.max(), ep.max()//8).astype(int)
+        epoch_ax.set_yticks(ticks)
+        epoch_ax.set_yticklabels([str(_) for _ in ticks])
+
+        # Add legend to epoch Axes so legend gets drawn over epoch line
+        handles, labels = ax.get_legend_handles_labels()
+        epoch_ax.legend(handles, labels, bbox_to_anchor=(1.1,1), loc="upper left")
+        epoch_ax.set_ylabel('Epoch')
+
+    loss_ax.set_ylabel('Loss')
+    add_epoch(loss_ax, loss_max)
+
+    loss_fig.tight_layout()
+    print(f'saving loss figure to {loss_path}')
+    loss_fig.savefig(loss_path, dpi=100)
+
+
+    if acc_ax is not None:
+        acc_ax.set_ylabel('Accuracy')
+        add_epoch(acc_ax, acc_max)
+
+        acc_fig.tight_layout()
+        print(f'saving accuracy figure to {acc_path}')
+        acc_fig.savefig(acc_path, dpi=100)
+
+
+def aggregate_chunks(argv=None):
+    import torch
+    import torch.nn.functional as F
+    from contextlib import contextmanager
+
+    from exabiome.utils import parse_logger
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input", type=str, help="the inference file with individual sample (i.e. chunks) outputs")
+    parser.add_argument("output", type=str, help="the file to save aggregated outputs to")
+    parser.add_argument('-F', '--features', action='store_true', help='outputs are features i.e. do not softmax and compute predictions', default=False)
+    parser.add_argument('--fwd_only', action='store_true', help='only forward strand was used', default=False)
+
+    args = parser.parse_args(argv)
+
+    args.prob = not args.features
+
+    logger = parse_logger('')
+
+    rank = 0
+    size = 1
+    f_kwargs = dict()
+    if 'OMPI_COMM_WORLD_RANK' in os.environ:
+        # load this after so we can get usage
+        # statement without having to loading MPI
+        from mpi4py import MPI
+
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+        if size > 1:
+            f_kwargs['driver'] = 'mpio'
+            f_kwargs['comm'] = comm
+    else:
+        logger.info('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
+
+
+    if rank == 0:
+        logger.info(f'{args}')
+
+    f = h5py.File(args.input, 'r', **f_kwargs)
+
+    logger.info(f'rank {rank} - loading network outputs')
+    chunk_seq_ids = f['seq_ids'][:]
+    chunk_outputs = f['outputs']
+    chunk_labels = f['labels'][:]
+    chunk_lens = f['orig_lens'][:]
+
+    uniq_seqs = np.unique(chunk_seq_ids)
+    total_seqs = len(uniq_seqs)
+
+    if size > 1:
+        q, r = divmod(total_seqs, size)
+        if rank < r:
+            q += 1
+            b = rank * q
+            seq_idx = np.arange(b, b + q)
+        else:
+            offset = (q + 1) * r
+            b = (rank - r) * q + offset
+            seq_idx = np.arange(b, b + q)
+
+        N = len(seq_idx)
+    else:
+        seq_idx = np.s_[:]
+        N = total_seqs
+
+    if args.prob:
+        logger.info('data are probabilities. computing and saving predictions')
+        seq_preds = np.zeros(N, dtype=int)
+    seq_labels = np.zeros(N, dtype=int)
+    seq_lens = np.zeros(N, dtype=int)
+    seq_outputs = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
+    seq_outputs_var = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
+
+    uniq_seqs = uniq_seqs[seq_idx]
+
+    gpu = torch.device('cuda:%d' % (rank % torch.cuda.device_count()))
+
+    logger.info(f'rank {rank} - aggregating chunk outputs by sequence')
+    for i, seq in enumerate(uniq_seqs):
+        mask = chunk_seq_ids == seq
+        idx = np.where(mask)[0]
+
+        tmp_outputs = torch.tensor(chunk_outputs[idx], device=gpu)
+        if args.prob:
+            tmp_outputs = F.softmax(tmp_outputs, dim=1)
+            seq_outputs_var[i] = tmp_outputs.var(dim=0, unbiased=False).cpu()
+            seq_outputs[i] = tmp_outputs.mean(dim=0).cpu()
+            seq_preds[i] = seq_outputs[i].argmax()
+        else:
+            seq_outputs_var[i] = tmp_outputs.var(dim=0, unbiased=False).cpu()
+            seq_outputs[i] = tmp_outputs.mean(dim=0).cpu()
+        seq_labels[i] = chunk_labels[mask][0]
+        seq_lens[i] = chunk_lens[mask].sum()
+
+        # delete this for good measure so we don't leave data on the GPU
+        del tmp_outputs
+
+    if args.fwd_only:
+        seq_lens = seq_lens // 2
+
+    if size > 1:
+        comm.Barrier()
+
+    f.close()
+
+    logger.info(f'saving results to {args.output}')
+    out = h5py.File(args.output, 'w', **f_kwargs)
+
+    N = total_seqs
+    seq_outputs_dset = out.create_dataset('outputs', shape=(N, seq_outputs.shape[1]), dtype=float)
+    seq_outputs_var_dset = out.create_dataset('outputs_var', shape=(N, seq_outputs_var.shape[1]), dtype=float)
+    if args.prob:
+        seq_preds_dset = out.create_dataset('preds', shape=(N,), dtype=int)
+    seq_labels_dset = out.create_dataset('labels', shape=(N,), dtype=int)
+    seq_lens_dset = out.create_dataset('lengths', shape=(N,), dtype=int)
+    seq_ids_dset = out.create_dataset('seq_ids', shape=(N,), dtype=int)
+
+    logger.info(f'rank {rank} - writing outputs')
+    with ccm(size > 1, seq_outputs_dset.collective):
+        seq_outputs_dset[seq_idx] = seq_outputs
+
+    logger.info(f'rank {rank} - writing outputs variance')
+    with ccm(size > 1, seq_outputs_var_dset.collective):
+        seq_outputs_var_dset[seq_idx] = seq_outputs_var
+
+    logger.info(f'rank {rank} - writing labels')
+    with ccm(size > 1, seq_labels_dset.collective):
+        seq_labels_dset[seq_idx] = seq_labels
+
+    if args.prob:
+        logger.info(f'rank {rank} - writing predictions')
+        with ccm(size > 1, seq_preds_dset.collective):
+            seq_preds_dset[seq_idx] = seq_preds
+
+    logger.info(f'rank {rank} - writing sequence lengths')
+    with ccm(size > 1, seq_lens_dset.collective):
+        seq_lens_dset[seq_idx] = seq_lens
+
+    logger.info(f'rank {rank} - writing sequence ids')
+    with ccm(size > 1, seq_ids_dset.collective):
+        seq_ids_dset[seq_idx] = uniq_seqs
+
+    if size > 1:
+        comm.Barrier()
+
+    logger.info(f'rank {rank} - done')
+    out.close()
+
+
+def taxonomic_accuracy(argv=None):
+    #import ..sequence as seq
+    from ..sequence import DeepIndexFile
+    from ..utils import get_logger
+    from hdmf.common import get_hdf5io
+    import h5py
+    import numpy as np
+    import pandas as pd
+    from sklearn.preprocessing import LabelEncoder
+
+
+    levels = DeepIndexFile.taxonomic_levels
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("summary", type=str, help='the summarized sequence NN outputs')
+    parser.add_argument("input", type=str, help='the training input data')
+    parser.add_argument("output", type=str, help="the path to save resutls to")
+    parser.add_argument("-l", "--level", type=str, choices=levels, help='the taxonomic level')
+
+    args = parser.parse_args(argv)
+
+    logger = get_logger()
+
+    logger.info(f'reading {args.input}')
+    io = get_hdf5io(args.input, 'r')
+    difile = io.read()
+
+    f = h5py.File(args.summary, 'r')
+
+    logger.info(f'loading summary results from {args.summary}')
+    seq_preds = f['preds'][:].astype(int)
+    seq_labels = f['labels'][:].astype(int)
+    seq_lens = f['lengths'][:].astype(int)
+
+    n_classes = f['outputs'].shape[1]
+    f.close()
+
+    ## I used this code to double check that genus elements were correct
+    # seq_ids = f['seq_ids'][:]
+    # genome_ids = difile.seq_table['genome'].data[:][seq_ids]
+    # taxon_ids = difile.genome_table['taxon_id'].data[:][genome_ids]
+    # classes = difile.taxa_table['genus'].elements.data[:]
+
+    logger.info('loading taxonomy table')
+    # do this because h5py.Datasets cannot point-index with non-unique indices
+    for col in difile.taxa_table.columns:
+        col.transform(lambda x: x[:])
+
+    level = None
+    classes = None
+    if args.level is None:
+        for lvl in levels[:-1]:
+            n_classes_lvl = difile.taxa_table[lvl].elements.data.shape[0]
+            print(lvl, n_classes, n_classes_lvl)
+            if n_classes == n_classes_lvl:
+                classes = difile.taxa_table[lvl].elements.data
+                level = lvl
+        if level is None:
+            n_classes_lvl = difile.taxa_table['species'].data.shape[0]
+            if n_classes == n_classes_lvl:
+                level = 'species'
+                classes = difile.taxa_table['species'].data[:]
+            else:
+                print("Cannot determine which level to use. Please specify with --level option", file=sys.stderr)
+                exit(1)
+    else:
+        level = args.level
+
+    to_drop = ['taxon_id']
+    for lvl in levels[::-1]:
+        if lvl == level:
+            break
+        to_drop.append(lvl)
+
+    # orient table to index it by the taxonomic level and remove columns we cannot get predictions for
+    taxdf = difile.taxa_table.to_dataframe()
+
+    n_orig_classes = {col: np.unique(taxdf[col]).shape[0] for col in taxdf}
+
+    taxdf = taxdf.drop(to_drop, axis=1).\
+                  set_index(level).\
+                  groupby(level).\
+                  nth(0).\
+                  filter(classes, axis=0)
+
+    logger.info('encoding taxonomy for quicker comparisons')
+    # encode into integers for faster comparisons
+    encoders = dict()
+    new_dat = dict()
+    for col in taxdf.columns:
+        enc = LabelEncoder().fit(taxdf[col])
+        encoders[col] = enc
+        new_dat[col] = enc.transform(taxdf[col])
+    enc_df = pd.DataFrame(data=new_dat, index=taxdf.index)
+
+    # a helper function to transform results into a DataFrame
+    def get_results(true, pred, lens, n_classes):
+        mask = true == pred
+        n_classes = "%s / %s" % ((np.unique(true).shape[0]), n_classes)
+        return {'seq-level': "%0.1f" % (100*mask.mean()), 'base-level': "%0.1f" % (100*lens[mask].sum()/lens.sum()), 'n_classes': n_classes}
+
+    results = dict()
+    for colname in enc_df.columns:
+        logger.info(f'computing results for {colname}')
+        col = enc_df[colname].values
+        results[colname] = get_results(col[seq_labels], col[seq_preds], seq_lens, n_orig_classes[colname])
+
+    logger.info(f'computing results for {level}')
+    results[level] = get_results(seq_labels, seq_preds, seq_lens, n_orig_classes[level])
+
+    results['n'] = {'seq-level': len(seq_lens), 'base-level': seq_lens.sum(), 'n_classes': '-1'}
+
+    results = pd.DataFrame(data=results)
+    results.to_csv(args.output, sep=',')
+    print(results)
+
+def aggregate_seqs(argv=None):
+    #import ..sequence as seq
+    from ..sequence import DeepIndexFile
+    from ..utils import get_logger
+    from hdmf.common import get_hdf5io
+    import h5py
+    import numpy as np
+    import pandas as pd
+    from sklearn.preprocessing import LabelEncoder
+    from tqdm import tqdm
+
+
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("summary", type=str, help='the summarized sequence NN outputs')
+    parser.add_argument("output", type=str, help="the path to save results to")
+
+    args = parser.parse_args(argv)
+
+    logger = get_logger()
+
+    f = h5py.File(args.summary, 'r')
+
+    logger.info(f'loading summary results from {args.summary}')
+    seq_outputs = f['outputs']
+    seq_labels = f['labels'][:].astype(int)
+    seq_lens = f['lengths'][:].astype(int)
+
+    uniq_labels = np.unique(seq_labels)
+    n_labels = len(uniq_labels)
+
+    outf = h5py.File(args.output, 'w')
+    agg_outputs = outf.create_dataset('outputs', shape=(n_labels, seq_outputs.shape[1]), dtype=float)
+    agg_lens = outf.create_dataset('lengths', shape=(n_labels,), dtype=int)
+    agg_labels = outf.create_dataset('labels', shape=(n_labels,), dtype=int)
+
+    for i, lbl in tqdm(enumerate(uniq_labels), total=n_labels):
+        mask = np.where(uniq_labels == lbl)[0]
+        lens = seq_lens[mask]
+        outputs = seq_outputs[mask]
+        wave = np.average(outputs, weights=lens, axis=0)
+        agg_outputs[i] = wave
+        agg_lens[i] = lens.sum()
+        agg_labels[i] = lbl
+
+    outf.close()
+    f.close()
 
 
 

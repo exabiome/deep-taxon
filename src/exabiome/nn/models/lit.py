@@ -30,7 +30,10 @@ class AbstractLit(LightningModule):
         if self.hparams.manifold:
             self._loss = DistMSELoss()
         elif self.hparams.classify:
-            self._loss = nn.CrossEntropyLoss()
+            if self.hparams.tgt_tax_lvl == 'all':
+                self._loss = HierarchicalLoss(hparams.n_taxa_all)
+            else:
+                self._loss = nn.CrossEntropyLoss()
         else:
             self._loss =  nn.MSELoss()
         self.set_inference(False)
@@ -75,7 +78,6 @@ class AbstractLit(LightningModule):
         if self.hparams.lr_scheduler == 'cyclic':
             scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
         elif self.hparams.lr_scheduler == 'plateau':
-            print ("USING SCHEDULER")
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             scheduler = {
                 'scheduler': scheduler,         # The LR scheduler instance (required)
@@ -96,6 +98,10 @@ class AbstractLit(LightningModule):
         pred = torch.argmax(output, dim=1)
         acc = (pred == target).float().sum()/len(target)
         return acc
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=None):
+        idx, seqs, target, olen, seq_id = batch
+        return self.forward(seqs)
 
     # TRAIN
     def training_step(self, batch, batch_idx):

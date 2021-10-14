@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
+from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler, Subset
 from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
@@ -33,8 +33,9 @@ def add_dataset_arguments(parser):
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
-    group.add_argument('-t', '--tgt_tax_lvl', choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
-                       help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species')
+    choices = list(DeepIndexFile.taxonomic_levels) + ['all']
+    group.add_argument('-t', '--tgt_tax_lvl', choices=choices, metavar='LEVEL', default='species',
+                       help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species, all')
 
     return None
 
@@ -53,8 +54,8 @@ def dataset_stats(argv=None):
 
 
     args = parser.parse_args(argv)
-    dataset, io = process_dataset(args)
-    difile = io.read()
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+    difile = dataset.difile
 
     n_taxa = len(difile.taxa_table)
     n_seqs = len(difile.seq_table)
@@ -140,22 +141,71 @@ def process_dataset(args, path=None):
     return dataset, io
 
 
+class SeqCollater:
+
+    def __init__(self, padval):
+        self.padval = padval
+
+    def __call__(self, samples):
+        maxlen = 0
+        l_idx = -1
+        if isinstance(samples, tuple):
+            samples = [samples]
+        for i, X, y, seq_id in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+        X_ret = list()
+        y_ret = list()
+        idx_ret = list()
+        size_ret = list()
+        seq_id_ret = list()
+        for i, X, y, seq_id in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif), value=self.padval)
+            X_ret.append(X_)
+            y_ret.append(y)
+            size_ret.append(X.shape[l_idx])
+            idx_ret.append(i)
+            seq_id_ret.append(seq_id)
+        X_ret = torch.stack(X_ret)
+        y_ret = torch.stack(y_ret)
+        size_ret = torch.tensor(size_ret)
+        idx_ret = torch.tensor(idx_ret)
+        seq_id_ret = torch.tensor(seq_id_ret)
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+
+
+def _check_collater(padval, seq_collater):
+    if seq_collater is not None:
+        return seq_collater
+    elif padval is not None:
+        return SeqCollater(padval)
+    else:
+        raise ValueError("must specify padval or seq_collater")
+
 class GraphCollater:
-    def __init__(self, node_ids):
+
+    def __init__(self, node_ids, padval=None, seq_collater=None):
+        self.collater = _check_collater(padval, seq_collater)
         self.node_ids = torch.as_tensor(node_ids, dtype=torch.long)
 
     def __call__(self, samples):
         """
         A function to collate samples and return a sub-distance matrix
         """
-        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = collate(samples)
+        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = self.collater(samples)
 
         # Get distances
         y_ret = self.node_ids[y_idx]
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
+
 class DistanceCollater:
-    def __init__(self, dmat):
+
+    def __init__(self, dmat, padval=None, seq_collater=None):
+        self.collater = _check_collater(padval, seq_collater)
         if len(dmat.shape) == 1:
             from scipy.spatial.distance import squareform
             dmat = squareform(dmat)
@@ -166,44 +216,124 @@ class DistanceCollater:
         """
         A function to collate samples and return a sub-distance matrix
         """
-        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = collate(samples)
+        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = self.collater(samples)
 
         # Get distances
         y_ret = self.dmat[y_idx][:, y_idx]
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
-def collate(samples):
-    """
-    A function to collate variable length sequence samples
-    """
-    maxlen = 0
-    l_idx = -1
-    if isinstance(samples, tuple):
-        samples = [samples]
-    for i, X, y, seq_id in samples:
-        if maxlen < X.shape[l_idx]:
-            maxlen = X.shape[l_idx]
-    X_ret = list()
-    y_ret = list()
-    idx_ret = list()
-    size_ret = list()
-    seq_id_ret = list()
-    for i, X, y, seq_id in samples:
-        dif = maxlen - X.shape[l_idx]
-        X_ = X
-        if dif > 0:
-            X_ = F.pad(X, (0, dif))
-        X_ret.append(X_)
-        y_ret.append(y)
-        size_ret.append(X.shape[l_idx])
-        idx_ret.append(i)
-        seq_id_ret.append(seq_id)
-    X_ret = torch.stack(X_ret)
-    y_ret = torch.stack(y_ret)
-    size_ret = torch.tensor(size_ret)
-    idx_ret = torch.tensor(idx_ret)
-    seq_id_ret = torch.tensor(seq_id_ret)
-    return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+
+class TnfCollater:
+    def __init__(self, vocab):
+        self.bases = 4**torch.arange(4)
+        rcmap = torch.tensor([3, 2, 1, 0])
+        canonical = list()
+        noncanonical = list()
+        palindromes = list()
+        seen = torch.zeros(256, dtype=bool)
+        for i in range(256):
+            if seen[i]:
+                continue
+            ar = torch.zeros(4, dtype=int)
+            ar[3], r = divmod(i, 64)
+            ar[2], r = divmod(r, 16)
+            ar[1], ar[0] = divmod(r, 4)
+            rc = rcmap[ar.flip(0)]
+            rc_i = rc.matmul(self.bases)
+            if i < rc_i:
+                canonical.append(i)
+                noncanonical.append(rc_i)
+            elif rc_i < i:
+                canonical.append(rc_i)
+                noncanonical.append(i)
+            else:
+                palindromes.append(i)
+            seen[i] = True
+            seen[rc_i] = True
+        self.canonical = torch.tensor(canonical)
+        self.noncanonical = torch.tensor(noncanonical)
+        self.palindromes = torch.tensor(palindromes)
+
+        # calculate a map to convert DNA characters into 0-4 encoding
+        self.cmap = torch.zeros(128, dtype=int) - 1
+        count = 0
+        self.padval = None
+        for i, c in enumerate(vocab):
+            if c == 'A':
+                self.cmap[i] = 0            # A
+                count += 1
+            elif c == 'T':
+                self.cmap[i] = 3            # T
+                count += 1
+            elif c == 'C':
+                self.cmap[i] = 1            # C
+                count += 1
+            elif c == 'G':
+                self.cmap[i] = 2            # G
+                count += 1
+            elif c == 'N':
+                self.padval = i
+                count += 1
+            if count == 5:
+                break
+        if self.padval is None:
+            raise ValueError("Could not find 'N' character in vocab -- this is needed to pad sequences")
+
+
+    def __call__(self, samples):
+        l_idx = -1
+        if isinstance(samples, tuple):
+            samples = [samples]
+
+        maxlen = 0
+        for i, X, y, seq_id in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+
+        X_ret = list()
+        y_ret = list()
+        idx_ret = list()
+        size_ret = list()
+        seq_id_ret = list()
+        for i, X, y, seq_id in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif), value=self.padval)
+            X_ret.append(X_)
+            y_ret.append(y)
+            size_ret.append(X.shape[l_idx])
+            idx_ret.append(i)
+            seq_id_ret.append(seq_id)
+
+        # calculate tetranucleotide frequency
+        chunks = torch.stack(X_ret)
+
+        ## 1. hash 4-mers
+        __seq = self.cmap[chunks]
+        i4mers = torch.stack([__seq[:, 0:-3], __seq[:, 1:-2], __seq[:, 2:-1], __seq[:, 3:]], axis=2)
+        mask = torch.any(i4mers < 0, axis=2)
+        h4mers = i4mers.matmul(self.bases)       # hashed 4-mers
+        h4mers[mask] = 256    # use 257 to mark any 4-mers that had ambiguous nucleotides
+
+        ## 2. count hashed 4-mers i.e. count integers from between 0-257 inclusive
+        tnf = torch.zeros((32, 257), dtype=float)
+        for i in range(tnf.shape[0]):
+            counts = torch.bincount(h4mers[i], minlength=257)
+            tnf[i] = counts/i4mers.shape[1]
+
+        ## 3. merge canonical 4-mers
+        canon_tnf = torch.zeros((32, 136))
+        canon_tnf[:, :len(self.canonical)] = tnf[:, self.canonical] + tnf[:, self.noncanonical]
+        canon_tnf[:, len(self.canonical):] = tnf[:, self.palindromes]
+
+        X_ret = canon_tnf
+        y_ret = torch.stack(y_ret)
+        size_ret = torch.tensor(size_ret)
+        idx_ret = torch.tensor(idx_ret)
+        seq_id_ret = torch.tensor(seq_id_ret)
+
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
 class SeqDataset(Dataset):
@@ -390,12 +520,15 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
+    if dataset.tnf:
+        collater = TnfCollater(dataset.vocab)
+    else:
+        collater = SeqCollater(dataset.padval)
 
-    collater = collate
     if dataset.manifold:
-        collater = DistanceCollater(dataset.distances)
+        collater = DistanceCollater(dataset.distances, seq_collater=collater)
     elif dataset.graph:
-        collater = GraphCollater(dataset.node_ids)
+        collater = GraphCollater(dataset.node_ids, seq_collater=collater)
 
     if kwargs.get('num_workers', None) not in (None, 0):
         if dataset.difile is not None:
@@ -417,7 +550,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
 
     return (tr_dl, va_dl, te_dl)
 
-def get_loader(dataset, distances=False, **kwargs):
+def get_loader(dataset, distances=False, graph=False, **kwargs):
     """
     Return a DataLoader that loads data from the given Dataset
 
@@ -425,55 +558,68 @@ def get_loader(dataset, distances=False, **kwargs):
         dataset (Dataset): the dataset to return a DataLoader for
         distances  (bool): whether or not to return distances for a batch
     """
-    collater = collate
+    # Find the LazySeqDataset so we can pull necessary information from it
+    orig_dataset = dataset
+    if isinstance(dataset, Subset):
+        dataset = dataset.dataset
+    elif not isinstance(dataset, LazySeqDataset):
+        msg = ("Unrecognized type for 'dataset'. "
+               "Expected torch.utils.data.Subset or exabione.nn.loader.LazySeqDataset. "
+               "Got %s" % type(dataset).__name__)
+        raise ValueError(msg)
+    collater = SeqCollater(dataset.padval)
     if distances:
         if dataset.difile.distances is None:
             raise ValueError('DeepIndexFile {dataset.difile} does not contain distances')
-        collater = DistanceCollater(dataset.difile.distances.data[:])
-    return DataLoader(dataset, collate_fn=collater, **kwargs)
+        collater = DistanceCollater(dataset.difile.distances.data[:], dataset.padval)
+    elif graph:
+        collater = GraphCollater(dataset.node_ids, dataset.padval)
+    return DataLoader(orig_dataset, collate_fn=collater, **kwargs)
 
 
 class DeepIndexDataModule(pl.LightningDataModule):
 
     def __init__(self, hparams, inference=False, keep_open=False):
         super().__init__()
-        self.hparams = hparams
 
-        kwargs = dict(random_state=self.hparams.seed,
-                      batch_size=self.hparams.batch_size,
-                      downsample=self.hparams.downsample)
+        kwargs = dict(random_state=hparams.seed,
+                      batch_size=hparams.batch_size,
+                      downsample=hparams.downsample)
         if inference:
-            self.hparams.manifold = False
-            self.hparams.graph = False
-            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open) #getattr(self.hparams, 'num_workers', 0)==0)
-            #kwargs.pop('num_workers', None)
-            #kwargs.pop('multiprocessing_context', None)
+            hparams.manifold = False
+            hparams.graph = False
+            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
         else:
-            self.dataset = LazySeqDataset(hparams=self.hparams, keep_open=keep_open) #getattr(self.hparams, 'num_workers', 0)==0)
-            if self.hparams.load:
-                self.dataset.load()
+            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
+            self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = False
-            kwargs['shuffle'] = self.hparams.shuffle
-            kwargs.update(self.hparams.loader_kwargs)
+            kwargs['shuffle'] = hparams.shuffle
+            kwargs.update(hparams.loader_kwargs)
 
-        kwargs['num_workers'] = self.hparams.num_workers
-        if self.hparams.num_workers > 0:
+        kwargs['num_workers'] = hparams.num_workers
+        if hparams.num_workers > 0:
             kwargs['multiprocessing_context'] = 'spawn'
             kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
+        self._loader_kwargs = kwargs
+        self.loaders = None
 
-        #print("------------- DataLoader kwargs:", str(kwargs), file=sys.stderr)
-        tr, te, va = train_test_loaders(self.dataset, **kwargs)
-        self.loaders = {'train': tr, 'test': te, 'validate': va}
+    def _check_loaders(self):
+        if self.loaders is None:
+            tr, te, va = train_test_loaders(self.dataset, **self._loader_kwargs)
+            self.loaders = {'train': tr, 'test': te, 'validate': va}
 
     def train_dataloader(self):
+        self._check_loaders()
         return self.loaders['train']
 
     def val_dataloader(self):
+        self._check_loaders()
         return self.loaders['validate']
 
     def test_dataloader(self):
+        self._check_loaders()
         return self.loaders['test']
 
 
@@ -538,8 +684,9 @@ class LazySeqDataset(Dataset):
         Prep data for a graph learning problem
 
     tgt_tax_lvl: str, default='species'
-        the target taxonomic level for. This can be 'phylum', 'class', 'order', 'family', 'genus', or
-        'species'. For *manifold=True* or *graph=True*, this must be 'species'
+        the target taxonomic level for. This can be 'phylum', 'class', 'order', 'family', 'genus',
+        'species' or 'all. For *manifold=True* or *graph=True*, this must be 'species'. Setting to
+        'all' will return labels for each taxonomic level.
 
     ohe: bool, default=False
         One-hot encode sequences. By default, return indices
@@ -565,6 +712,8 @@ class LazySeqDataset(Dataset):
         kwargs.setdefault('load', False)
         kwargs.setdefault('ohe', False)
 
+        self.comm = kwargs.pop('comm', None)
+
         if hparams is not None:
             if not isinstance(hparams, argparse.Namespace):
                 raise ValueError('hparams must be a Namespace object')
@@ -583,24 +732,37 @@ class LazySeqDataset(Dataset):
         self.revcomp = not hparams.fwd_only
 
 
-        self._label_key = hparams.tgt_tax_lvl if hparams.classify else 'id'
         self._label_dtype = torch.int64
 
         # open to get dataset length
         self.open()
         self.__len = len(self.difile)
-        self.sample_labels = self.difile.labels # taxa_table[hparams.tgt_tax_lvl].data
+        self.sample_labels = self.difile.labels
         self.taxa_labels, self.taxa_counts = np.unique(self.sample_labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
 
-        self.vocab_len = len(self.orig_difile.seq_table['sequence'].target.elements)
-
-        #############################
-        # self._label_key - the column from the TaxaTable
-        #############################
+        self.vocab = np.chararray.upper(self.orig_difile.seq_table['sequence'].target.elements[:].astype('U1'))
+        if len(self.vocab) > 18:
+            self.protein = True
+            idx = np.where(self.vocab == '-')[0]
+            if len(idx) > 0:
+                self.padval = idx[0]
+            else:
+                warnings.warn("Could not find null value for protein sequences. Looking for '-'. Padding with %s" % self.vocab[0])
+                self.padval = 0
+        else:
+            self.protein = False
+            idx = np.where(self.vocab == 'N')[0]
+            if len(idx) > 0:
+                self.padval = idx[0]
+            else:
+                warnings.warn("Could not find null value for DNA sequences. Looking for 'N'. Padding with %s" % self.vocab[0])
+                self.padval = 0
+        self.vocab_len = len(self.vocab)
 
         self.manifold = False
         self.graph = False
+        self.tnf = hparams.tnf
         self.distances = None
         self.node_ids = None
 
@@ -646,11 +808,16 @@ class LazySeqDataset(Dataset):
 
     def open(self):
         """Open the HDMF file and set up chunks and taxonomy label"""
-        self.io = get_hdf5io(self.path, 'r')
+        if self.comm is not None:
+            self.io = get_hdf5io(self.path, 'r', comm=self.comm, driver='mpio')
+        else:
+            self.io = get_hdf5io(self.path, 'r')
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.orig_difile = self.io.read()
         self.difile = self.orig_difile
+
+        self.load(sequence=self.load_data)
 
         self.difile.set_label_key(self.hparams.tgt_tax_lvl)
 
@@ -658,10 +825,14 @@ class LazySeqDataset(Dataset):
             self.set_chunks(self.window, self.step)
         if self.revcomp:
             self.set_revcomp()
-        if self.load_data:
-            self.load()
 
     def worker_init(self, worker_id):
+        # September 15, 2021, ajtritt
+        # This print statement is necessary to avoid processings from hanging when they are started
+        # after a Summit maintenance, processes would hang. I was able to track it down to line 62
+        # of multiprocessing/popen_spawn_posix.py. I still do not know the real cause of the problem
+        # but it it appears that writing to standard error after starting a multiprocessing.Process
+        # keeps thing moving along.
         self.open()
 
     def set_chunks(self, window, step=None):
@@ -696,26 +867,30 @@ class LazySeqDataset(Dataset):
             for tfm in transforms:
                 data.transform(tfm)
 
-    def load(self, device=None):
-        def _load(data):
-            return data[:]
+    def load(self, sequence=False, device=None):
+        _load = lambda x: x[:]
+        self.orig_difile.seq_table['id'].transform(_load)
+        self.orig_difile.seq_table['length'].transform(_load)
+        self.orig_difile.seq_table['sequence'].transform(_load)
 
-        tfm = self._to_torch(device)
-        def to_sint(data):
-            return data[:].astype(np.int16)
-        self._check_load(self.orig_difile.seq_table['sequence'].target, [to_sint, tfm])
-        self._check_load(self.orig_difile.taxa_table[self._label_key], tfm)
-        self._check_load(self.orig_difile.distances, tfm)
+        #old code I'm keeping around just in case
+        #tfm = self._to_torch(device)
 
-        for col in self.orig_difile.seq_table.children:
-            if col.name == 'sequence':
-                continue
-            col.transform(_load)
+        #def to_sint(data):
+        #    return data[:].astype(np.int16)
+        #self._check_load(self.orig_difile.seq_table['sequence'].target, [to_sint, tfm])
+        ##self._check_load(self.orig_difile.taxa_table[self._label_key], tfm)
+        #self._check_load(self.orig_difile.distances, tfm)
 
-        for col in self.orig_difile.taxa_table.children:
-            if col.name == self._label_key:
-                continue
-            col.transform(_load)
+        #for col in self.orig_difile.seq_table.children:
+        #    if col.name == 'sequence':
+        #        continue
+        #    col.transform(_load)
+
+        #for col in self.orig_difile.taxa_table.children:
+        #    if col.name == self._label_key:
+        #        continue
+        #    col.transform(_load)
 
     def __getitem__(self, i):
         # get sequence

@@ -8,7 +8,7 @@ https://github.com/pytorch/vision/blob/7c077f6a986f05383bcb86b535aedb5a63dd5c4b/
 import torch
 import torch.nn as nn
 
-from . import model, AbstractLit
+from . import model, AbstractLit, HierarchicalClassifier
 
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
@@ -111,6 +111,21 @@ class Bottleneck(nn.Module):
         return out
 
 
+class FeatureReduction(nn.Module):
+
+    def __init__(self, inplanes, planes):
+        super(FeatureReduction, self).__init__()
+        self.conv1 = conv1x1(inplanes, planes)
+        self.bn1 = nn.BatchNorm1d(planes)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        return out
+
+
 class ResNet(AbstractLit):
 
     def __init__(self, hparams):
@@ -159,8 +174,28 @@ class ResNet(AbstractLit):
                                        dilate=replace_stride_with_dilation[1])
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
+
+        n_output_channels = 512 * block.expansion
+        if hparams.bottleneck:
+            self.bottleneck = FeatureReduction(n_output_channels, 64 * block.expansion)
+            n_output_channels = 64 * block.expansion
+        else:
+            self.bottleneck = None
+
         self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Linear(512 * block.expansion, hparams.n_outputs)
+
+        if hparams.tgt_tax_lvl == 'all':
+            self.fc = HierarchicalClassifier(n_output_channels, hparams.n_taxa_all)
+        else:
+
+            self.fc = nn.Sequential(
+                nn.Linear(n_output_channels, 512),
+                nn.ReLU(inplace=True),
+                nn.Linear(512, 512),
+                nn.ReLU(inplace=True),
+                nn.Linear(512, hparams.n_outputs),
+            )
+
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -210,13 +245,19 @@ class ResNet(AbstractLit):
         """
         outputs_map = torch.as_tensor(outputs_map)
         self.hparams.n_outputs = len(outputs_map)
-        new_fc = nn.Linear(self.fc.in_features, self.hparams.n_outputs)
+        final_fc = self.fc
+        if isinstance(self.fc, nn.Sequential):
+            final_fc = self.fc[-1]
+        new_fc = nn.Linear(final_fc.in_features, self.hparams.n_outputs)
         with torch.no_grad():
-            for i in range(self.fc.out_features):
+            for i in range(final_fc.out_features):
                 mask = outputs_map == i
-                new_fc.weight[mask, :] = self.fc.weight[i, :]
-                new_fc.bias[mask] = self.fc.bias[i]
-        self.fc = new_fc
+                new_fc.weight[mask, :] = final_fc.weight[i, :]
+                new_fc.bias[mask] = final_fc.bias[i] - torch.log(mask.sum().float())
+        if isinstance(self.fc, nn.Sequential):
+            self.fc[-1] = new_fc
+        else:
+            self.fc = new_fc
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self.hparams.norm_layer
@@ -255,6 +296,10 @@ class ResNet(AbstractLit):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+
+
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
@@ -306,6 +351,16 @@ class ResNet50(ResNet):
         super().__init__(hparams)
 
 
+@model('resnet74')
+class ResNet74(ResNet):
+
+    def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
+        hparams.block = Bottleneck
+        hparams.layers = [3, 4, 14, 3]
+        super().__init__(hparams)
+
+
 @model('resnet101')
 class ResNet101(ResNet):
 
@@ -322,7 +377,7 @@ class ResNet152(ResNet):
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
-        hparams.layers = [3, 4, 36, 3]
+        hparams.layers = [3, 8, 36, 3]
         super().__init__(hparams)
 
 
@@ -370,3 +425,65 @@ class Wide_ResNet101_2(ResNet):
         hparams.layers = [3, 4, 23, 3]
         hparams.width_per_group = 128
         super().__init__(hparams)
+
+
+class ResNetFeatures(nn.Module):
+    """
+    A class for using only the convolutional layers of a ResNet.
+    This model should not be trained. See resnet_feat.py for
+    trainable ResNet feature models.
+    """
+
+    _layers = ('embedding',
+               'conv1',
+                'bn1',
+                'relu',
+                'maxpool',
+                'layer1',
+                'layer2',
+                'layer3',
+                'layer4',
+                'bottleneck',
+                'avgpool')
+
+    def __init__(self, resnet):
+        super().__init__()
+        self.hparams = resnet.hparams
+        for layer in self._layers:
+            setattr(self, layer, getattr(resnet, layer))
+
+    def forward(self, x):
+        x = self.embedding(x)
+        x = x.permute(0, 2, 1)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+
+        return x
+
+
+class ResNetClassifier(nn.Module):
+    """
+    A class for using only the fully-connected classifier layer of a ResNet.
+    """
+
+    def __init__(self, resnet):
+        super().__init__()
+        self.fc = resnet.fc
+
+    def forward(self, x):
+        x = self.fc(x)
+        return x

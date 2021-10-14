@@ -61,21 +61,22 @@ def process_model(args, inference=False, taxa_table=None):
         inference (bool):       load data for inference
     """
 
+    if taxa_table is not None:
+        args.n_outputs = taxa_table.get_num_classes(args.tgt_tax_lvl)
+
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
     model_cls = models._models[args.model]
-    if inference:
-        model_cls.forward = auto_move_data(model_cls.forward)
 
-    if args.checkpoint is not None:
+    if getattr(args, 'init', None) is not None:
         try:
-            model = model_cls.load_from_checkpoint(args.checkpoint)
+            model = model_cls.load_from_checkpoint(args.init)
             ckpt_hparams = model.hparams
             if not inference:
                 if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
                     if taxa_table is None:
                         msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
-                              "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.checkpoint}. You must provide the TaxaTable for "
+                              "in args, but found {ckpt_hparams.tgt_tax_lvl} in {args.init}. You must provide the TaxaTable for "
                               "computing the taxonomy mapping for reconfiguring the final output layer")
 
                         raise ValueError(msg)
@@ -84,16 +85,24 @@ def process_model(args, inference=False, taxa_table=None):
                     model.hparams.tgt_tax_lvl = args.tgt_tax_lvl
         except RuntimeError as e:
             if 'Missing key(s)' in e.args[0]:
-                raise RuntimeError(f'Unable to load checkpoint. Make sure {args.checkpoint} is a checkpoint for {args.model}') from e
+                raise RuntimeError(f'Unable to load checkpoint. Make sure {args.init} is a checkpoint for {args.model}') from e
             else:
                 raise e
+    elif getattr(args, 'checkpoint', None) is not None:
+        model = model_cls.load_from_checkpoint(args.checkpoint)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
                              'to determine the number of outputs')
         _check_hparams(args)
-        #if taxa_table is not None:
-        #    args.labels = taxa_table['phylum'].elements.data[:]
+        if args.tgt_tax_lvl == 'all':
+            if taxa_table is not None:
+                raise ValueError("must pass taxa_table to process_model if using all taxonomic levels")
+            n_taxa_all = dict()
+            for key in ('phylum', 'class', 'order', 'family', 'genus'):
+                n_taxa_all[key] = len(taxa_table[key].elements)
+            n_taxa_all['species'] = len(taxa_table['species'])
+            args.n_taxa_all = n_taxa_all
         model = model_cls(args)
 
     return model
