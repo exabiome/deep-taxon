@@ -221,20 +221,6 @@ def run_inference(argv=None):
         argv: a command-line string or argparse.Namespace object to use for running inference
               If none are given, read from command-line i.e. like running argparse.ArgumentParser.parse_args
     """
-    model, data_mod, args, addl_targs = process_args(argv=argv)
-
-    import h5py  # noqa: F401
-    from pkg_resources import resource_filename
-    from hdmf.common import load_namespaces, get_class, VectorData, EnumData
-    from hdmf.backends.hdf5 import HDF5IO
-
-    load_namespaces(os.path.join(resource_filename(__name__, '../hdmf-ml'), 'schema', 'ml', 'namespace.yaml'))
-    ResultsTable = get_class('ResultsTable', 'hdmf-ml')
-    ClassProbability = get_class('ClassProbability', 'hdmf-ml')
-    ClassLabel = get_class('ClassLabel', 'hdmf-ml')
-    TrainValidationTestSplit = get_class('TrainValidationTestSplit', 'hdmf-ml')
-    EmbeddedValues = get_class('EmbeddedValues', 'hdmf-ml')
-
     args = parse_args(argv=argv)
     RANK = 0
     SIZE = 1
@@ -370,6 +356,17 @@ def cat(indices, outputs, labels, orig_lens, seq_ids):
 
 def in_memory_inference(model, dataset, args, addl_targs):
 
+    from pkg_resources import resource_filename
+    from hdmf.common import load_namespaces, get_class, VectorData, EnumData
+    from hdmf.backends.hdf5 import HDF5IO
+
+    load_namespaces(os.path.join(resource_filename(__name__, '../hdmf-ml'), 'schema', 'ml', 'namespace.yaml'))
+    ResultsTable = get_class('ResultsTable', 'hdmf-ml')
+    ClassProbability = get_class('ClassProbability', 'hdmf-ml')
+    ClassLabel = get_class('ClassLabel', 'hdmf-ml')
+    TrainValidationTestSplit = get_class('TrainValidationTestSplit', 'hdmf-ml')
+    EmbeddedValues = get_class('EmbeddedValues', 'hdmf-ml')
+
     n_samples = len(dataset)
     # make temporary datasets and do all I/O at the end
     tmp_output = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
@@ -409,21 +406,21 @@ def in_memory_inference(model, dataset, args, addl_targs):
     args.logger.info("writing data")
     # f.create_dataset('label_names', data=data_mod.dataset.label_names, dtype=h5py.special_dtype(vlen=str))
 
-    if args.umap:
-        order = np.s_[:]
-        if args.debug:
-            indices = np.concatenate(indices)
-            order = np.argsort(indices)
-            indices = indices[order]
-        else:
-            indices = np.s_[:]
-        # compute UMAP arguments for convenience
-        args.logger.info('Running UMAP embedding')
-        from umap import UMAP
-        umap = UMAP(n_components=2)
-        tfm = umap.fit_transform(tmp_output[indices])
-        umap_dset = np.zeros(shape=(n_samples, 2), dtype=float)
-        umap_dset[indices] = tfm
+    # if args.umap:
+    #     order = np.s_[:]
+    #     if args.debug:
+    #         indices = np.concatenate(indices)
+    #         order = np.argsort(indices)
+    #         indices = indices[order]
+    #     else:
+    #         indices = np.s_[:]
+    #     # compute UMAP arguments for convenience
+    #     args.logger.info('Running UMAP embedding')
+    #     from umap import UMAP
+    #     umap = UMAP(n_components=2)
+    #     tfm = umap.fit_transform(tmp_output[indices])
+    #     umap_dset = np.zeros(shape=(n_samples, 2), dtype=float)
+    #     umap_dset[indices] = tfm
 
     # create and set up results table
     columns = list()
@@ -497,50 +494,20 @@ def in_memory_inference(model, dataset, args, addl_targs):
         )
         columns.append(embedding_col)
 
-    if args.umap:
-        args.logger.info("writing viz_emb, shape " + str(umap_dset.shape))
-        viz_emb_col = VectorData(
-            name='viz_emb',
-            description='UMAP visualization embedding',
-            data=umap_dset
-        )
-        columns.append(viz_emb_col)
+    # if args.umap:
+    #     args.logger.info("writing viz_emb, shape " + str(umap_dset.shape))
+    #     viz_emb_col = VectorData(
+    #         name='viz_emb',
+    #         description='UMAP visualization embedding',
+    #         data=umap_dset
+    #     )
+    #     columns.append(viz_emb_col)
 
     table = ResultsTable(name='results', description='ML results', columns=columns)
 
     args.logger.info(f'saving outputs to {args.output}')
     with HDF5IO(args.output, 'w') as io:
         io.write(table)
-
-
-def get_outputs(model, loader, device, debug=False):
-    """
-    Get model outputs for all samples in the given loader
-    """
-    ret = list()
-    indices = list()
-    labels = list()
-    orig_lens = list()
-    seq_ids = list()
-    max_batches = 100 if debug else sys.maxsize
-    from tqdm import tqdm
-    file = sys.stdout
-    it = tqdm(loader, file=sys.stdout)
-    with torch.no_grad():
-        for idx, (i, X, y, olen, seq_i) in enumerate(it):
-            ret.append(model(X.to(device)).to('cpu').detach())
-            indices.append(i.to('cpu').detach())
-            labels.append(y.to('cpu').detach())
-            orig_lens.append(olen.to('cpu').detach())
-            seq_ids.append(seq_i.to('cpu').detach())
-            if idx >= max_batches:
-                break
-    ret = (torch.cat(indices).numpy(),
-           torch.cat(ret).numpy(),
-           torch.cat(labels).numpy(),
-           torch.cat(orig_lens).numpy(),
-           torch.cat(seq_ids).numpy())
-    return ret
 
 
 from . import models  # noqa: E402
