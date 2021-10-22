@@ -73,6 +73,10 @@ def process_model(args, inference=False, taxa_table=None):
             model = model_cls.load_from_checkpoint(args.init)
             ckpt_hparams = model.hparams
             if not inference:
+                if model.hparams.manifold and args.classify:
+                    # assume we pretrained with manifold and now we want to do a classifier
+                    model.set_classify()
+
                 if ckpt_hparams.tgt_tax_lvl != args.tgt_tax_lvl:
                     if taxa_table is None:
                         msg = ("Model checkpoint has different taxonomic level than requested -- got {args.tgt_tax_lvl} "
