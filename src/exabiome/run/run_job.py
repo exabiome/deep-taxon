@@ -113,6 +113,11 @@ def run_train(argv=None):
     with open(args.config, 'r') as f:
         conf = yaml.safe_load(f)
 
+
+    if conf.get('optimizer', "").startswith('adam') and conf.get('lr_scheduler', '') == 'cyclic':
+        print("Cannot use cyclic LR scheduler with Adam/AdamW", file=sys.stderr)
+        exit(1)
+
     if conf.get('seed', None) is None:
         conf["seed"] = get_seed()
 
@@ -194,11 +199,19 @@ def run_train(argv=None):
         exp += f'_{conf["lr_scheduler"]}'
 
     if args.checkpoint:
-        if not os.path.exists(args.checkpoint):
+        if not args.checkpoint.endswith('.ckpt'):
+            args.checkpoint = os.path.join(args.checkpoint, 'last.ckpt')
+        if not os.path.exists(args.checkpoint) or os.path.isdir(args.checkpoint):
             # assume we are supposed ot wait for the job to finish
             # to get the checkpoint from
-            jobdir = os.path.dirname(args.checkpoint)
-            job_dep = jobdir[jobdir.rfind('.')+1:]
+            if os.path.isdir(args.checkpoint):
+                jobdir = args.checkpoint
+                args.checkpoint = os.path.join(args.checkpoint, 'last.ckpt')
+            else:
+                jobdir = os.path.dirname(args.checkpoint)
+            job_dep = jobdir[jobdir.rfind('.')+1:].strip("/")
+            if args.summit:
+                job_dep = f'ended({job_dep})'
             job.add_addl_jobflag(job.wait_flag, job_dep)
         job.set_env_var('CKPT', args.checkpoint)
         options += f' -c $CKPT'
