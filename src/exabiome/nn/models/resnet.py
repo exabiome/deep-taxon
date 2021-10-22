@@ -139,6 +139,13 @@ class ResNet(AbstractLit):
             hparams.replace_stride_with_dilation = None
         if not hasattr(hparams, 'norm_layer'):
             hparams.norm_layer = nn.BatchNorm1d
+        if not hasattr(hparams, 'bottleneck'):
+            hparams.bottleneck = True
+        if not hasattr(hparams, 'simple_clf'):
+            hparams.simple_clf = False
+        if not hasattr(hparams, 'dropout_clf'):
+            hparams.dropout_clf = False
+
         super(ResNet, self).__init__(hparams)
 
         replace_stride_with_dilation = hparams.replace_stride_with_dilation
@@ -186,8 +193,19 @@ class ResNet(AbstractLit):
 
         if hparams.tgt_tax_lvl == 'all':
             self.fc = HierarchicalClassifier(n_output_channels, hparams.n_taxa_all)
+        elif hparams.simple_clf:
+            self.fc = nn.Linear(n_output_channels, hparams.n_outputs)
+        elif hparams.dropout_clf:
+            self.fc = nn.Sequential(
+                nn.Dropout(),
+                nn.Linear(n_output_channels, 512),
+                nn.ReLU(inplace=True),
+                nn.Dropout(),
+                nn.Linear(512, 512),
+                nn.ReLU(inplace=True),
+                nn.Linear(512, hparams.n_outputs),
+            )
         else:
-
             self.fc = nn.Sequential(
                 nn.Linear(n_output_channels, 512),
                 nn.ReLU(inplace=True),
@@ -464,7 +482,6 @@ class ResNetFeatures(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-
 
         if self.bottleneck is not None:
             x = self.bottleneck(x)
