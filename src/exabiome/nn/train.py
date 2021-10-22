@@ -60,6 +60,8 @@ def get_conf_args():
         'bottleneck': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=True),
         'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
                            help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species'),
+        'simple_clf': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=False),
+        'dropout_clf': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=False),
     }
 
 
@@ -341,16 +343,17 @@ def run_lightning(argv=None):
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
+    monitor, mode = AbstractLit.val_loss, 'min' if args.manifold else AbstractLit.val_acc, 'max'
     callbacks = [
-        ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode='max', monitor=AbstractLit.val_acc),
+        ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode=mode, monitor=monitor),
         LearningRateMonitor(logging_interval='epoch')
     ]
 
     if args.early_stop:
-        callbacks.append(EarlyStopping(monitor=AbstractLit.val_acc, min_delta=0.00, patience=20, verbose=False, mode='max'))
+        callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
 
     if args.swa:
-        callbacks.append(StochasticWeightAveraging(swa_epoch_start=5, annealing_epochs=5))
+        callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
 
     targs = dict(
         checkpoint_callback=True,
@@ -492,7 +495,7 @@ def get_model_info(argv=None):
 
     print((total_bytes/1024**2), "Mb across", total_parameters, "parameters")
 
-    print(model.fc.out_features)
+    print(model.fc.out_features if isinstance(model.fc, nn.Linear) else model.fc[-1].out_features)
 
     input_sample = torch.stack([dataset[i][1] for i in range(16)])
     summary(model, [input_sample.shape], dtypes=[torch.long])
@@ -577,14 +580,14 @@ def filter_metrics(argv=None):
     if not (args.validation or args.train):
         args.validation = True
 
+    df = pd.read_csv(args.metrics)
+
     if args.validation:
         columns = ['epoch', 'step', 'validation_acc', 'validation_loss']
-        mask_col = 'validation_acc'
+        mask_col = 'validation_acc' if 'validation_acc' in df else 'validation_loss'
     else:
         columns = ['epoch', 'step', 'training_acc', 'training_loss']
-        mask_col = 'training_acc'
-
-    df = pd.read_csv(args.metrics)
+        mask_col = 'training_acc' if 'training_acc' in df else 'training_loss'
 
     lrdf = None
     if 'lr-AdamW' in df:
