@@ -85,6 +85,8 @@ class AbstractLit(LightningModule):
                                                     base_lr=self.hparams.lr/100.0,
                                                     max_lr=self.hparams.lr,
                                                     mode='triangular2' )
+        elif self.hparams.lr_scheduler == 'cosine':
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, self.hparams.epochs*10)
         elif self.hparams.lr_scheduler == 'plateau':
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             scheduler = {

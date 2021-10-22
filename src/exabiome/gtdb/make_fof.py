@@ -11,6 +11,7 @@ def make_fof(argv=None):
     import logging
     import sys
     import glob
+    import h5py
 
     from skbio import TreeNode
 
@@ -22,6 +23,7 @@ def make_fof(argv=None):
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     parser.add_argument('accessions', type=str, help='A file containing accessions')
     parser.add_argument('-t', '--tree', action='store_true', default=False, help='accessions are from a tree in Newick format')
+    parser.add_argument('-f', '--hdmf_file', action='store_true', default=False, help='get accessions from a DeepIndex HDMF file')
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
@@ -72,14 +74,21 @@ def make_fof(argv=None):
             print(tid, file=sys.stderr)
 
     else:
+        accessions = None
+        if args.hdmf_file:
+            with h5py.File(args.accessions, 'r') as f:
+                accessions = f['genome_table']['taxon_id'][:]
+        else:
+            with open(args.accessions, 'r') as f:
+                accessions = f.readlines()
+
         func = get_genomic_path
         if args.cds:
             func = get_fna_path
         elif args.protein:
             func = get_faa_path
-        with open(args.accessions, 'r') as f:
-            for line in f.readlines():
-                print(func(line.strip(), args.fadir), file=sys.stdout)
+        for line in accessions:
+            print(func(line.strip(), args.fadir), file=sys.stdout)
 
 
 if __name__ == '__main__':
