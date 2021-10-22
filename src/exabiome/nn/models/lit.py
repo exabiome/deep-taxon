@@ -77,6 +77,8 @@ class AbstractLit(LightningModule):
         scheduler = None
         if self.hparams.lr_scheduler == 'cyclic':
             scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
+        if self.hparams.lr_scheduler == 'cosine':
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, self.hparams.epochs*10)
         elif self.hparams.lr_scheduler == 'plateau':
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             scheduler = {
