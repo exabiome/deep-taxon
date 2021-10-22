@@ -657,6 +657,7 @@ def aggregate_chunks(argv=None):
     parser.add_argument("output", type=str, help="the file to save aggregated outputs to")
     parser.add_argument('-F', '--features', action='store_true', help='outputs are features i.e. do not softmax and compute predictions', default=False)
     parser.add_argument('--fwd_only', action='store_true', help='only forward strand was used', default=False)
+    parser.add_argument('-w', '--weighted', action='store_true', help='weight chunks by original length', default=False)
 
     args = parser.parse_args(argv)
 
@@ -715,6 +716,7 @@ def aggregate_chunks(argv=None):
     if args.prob:
         logger.info('data are probabilities. computing and saving predictions')
         seq_preds = np.zeros(N, dtype=int)
+        seq_votes = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
     seq_labels = np.zeros(N, dtype=int)
     seq_lens = np.zeros(N, dtype=int)
     seq_outputs = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
@@ -724,6 +726,10 @@ def aggregate_chunks(argv=None):
 
     gpu = torch.device('cuda:%d' % (rank % torch.cuda.device_count()))
 
+    weights = None
+    if args.weighted:
+        weights = torch.tensor(chunk_lens, device=gpu)
+
     logger.info(f'rank {rank} - aggregating chunk outputs by sequence')
     for i, seq in enumerate(uniq_seqs):
         mask = chunk_seq_ids == seq
@@ -732,8 +738,14 @@ def aggregate_chunks(argv=None):
         tmp_outputs = torch.tensor(chunk_outputs[idx], device=gpu)
         if args.prob:
             tmp_outputs = F.softmax(tmp_outputs, dim=1)
+            shape = tmp_outputs.shape
+            seq_votes[i] = (tmp_outputs.argmax(dim=1).bincount(minlength=shape[1])/shape[0]).cpu()
             seq_outputs_var[i] = tmp_outputs.var(dim=0, unbiased=False).cpu()
-            seq_outputs[i] = tmp_outputs.mean(dim=0).cpu()
+            if args.weighted:
+                w = weights[mask]
+                seq_outputs[i] = ((tmp_outputs.T*w).T.sum(dim=0) / (w.sum())).cpu()
+            else:
+                seq_outputs[i] = tmp_outputs.mean(dim=0).cpu()
             seq_preds[i] = seq_outputs[i].argmax()
         else:
             seq_outputs_var[i] = tmp_outputs.var(dim=0, unbiased=False).cpu()
@@ -760,6 +772,7 @@ def aggregate_chunks(argv=None):
     seq_outputs_var_dset = out.create_dataset('outputs_var', shape=(N, seq_outputs_var.shape[1]), dtype=float)
     if args.prob:
         seq_preds_dset = out.create_dataset('preds', shape=(N,), dtype=int)
+        seq_votes_dset = out.create_dataset('votes', shape=(N, seq_outputs.shape[1]), dtype=float)
     seq_labels_dset = out.create_dataset('labels', shape=(N,), dtype=int)
     seq_lens_dset = out.create_dataset('lengths', shape=(N,), dtype=int)
     seq_ids_dset = out.create_dataset('seq_ids', shape=(N,), dtype=int)
@@ -780,6 +793,7 @@ def aggregate_chunks(argv=None):
         logger.info(f'rank {rank} - writing predictions')
         with ccm(size > 1, seq_preds_dset.collective):
             seq_preds_dset[seq_idx] = seq_preds
+            seq_votes_dset[seq_idx] = seq_votes
 
     logger.info(f'rank {rank} - writing sequence lengths')
     with ccm(size > 1, seq_lens_dset.collective):
