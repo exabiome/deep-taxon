@@ -343,7 +343,7 @@ def run_lightning(argv=None):
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
-    monitor, mode = AbstractLit.val_loss, 'min' if args.manifold else AbstractLit.val_acc, 'max'
+    monitor, mode = (AbstractLit.val_loss, 'min') if args.manifold else (AbstractLit.val_acc, 'max')
     callbacks = [
         ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode=mode, monitor=monitor),
         LearningRateMonitor(logging_interval='epoch')
