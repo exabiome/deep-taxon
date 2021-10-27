@@ -162,7 +162,7 @@ def process_args(args, size=1, rank=0, comm=None):
         if 'ResNet' not in model.__class__.__name__:
             raise ValueError("Cannot use -f without ResNet model - got %s" % model.__class__.__name__)
         from .models.resnet import ResNetFeatures
-        args.n_outputs = model.fc.in_features
+        args.n_outputs = model.fc.in_features if isinstance(model.fc, nn.Linear) else model.fc[0].in_features
         model = ResNetFeatures(model)
 
     if args.loaders is None or len(args.loaders) == 0:

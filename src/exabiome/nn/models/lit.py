@@ -50,6 +50,11 @@ class AbstractLit(LightningModule):
             weights = torch.as_tensor(weights, dtype=torch.float)
         self._loss = nn.CrossEntropyLoss(weight=weights)
 
+    def set_classify(self):
+        self.hparams.manifold = False
+        self.hparams.classify = True
+        self._loss = HierarchicalLoss(hparams.n_taxa_all) if self.hparams.tgt_tax_lvl == 'all' else nn.CrossEntropyLoss()
+
     def set_inference(self, inference=True):
         self._inference = inference
 
@@ -76,9 +81,15 @@ class AbstractLit(LightningModule):
 
         scheduler = None
         if self.hparams.lr_scheduler == 'cyclic':
-            scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max=self.hparams.lr)
-        if self.hparams.lr_scheduler == 'cosine':
+            scheduler = optim.lr_scheduler.CyclicLR(optimizer,
+                                                    base_lr=self.hparams.lr/100.0,
+                                                    max_lr=self.hparams.lr,
+                                                    mode='triangular2' )
+        elif self.hparams.lr_scheduler == 'cosine':
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, self.hparams.epochs*10)
+        elif self.hparams.lr_scheduler == 'cosinewr':
+            scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
+                                                                       T_0=10, T_mult=2, eta_min=1e-5)
         elif self.hparams.lr_scheduler == 'plateau':
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             scheduler = {

@@ -60,7 +60,13 @@ setup_args = {
         "Operating System :: Unix",
         "Topic :: Scientific/Engineering :: Medical Science Apps."
     ],
-    'scripts': ['bin/deep-taxon',],
+    #'scripts': ['bin/deep-taxon',],
+
+    'entry_points': {
+        'console_scripts': [
+            'deep-taxon = exabiome:main',
+        ],
+    },
     'keywords': 'python '
                 'HDF '
                 'HDF5 '

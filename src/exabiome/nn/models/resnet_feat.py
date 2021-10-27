@@ -111,6 +111,21 @@ class Bottleneck(nn.Module):
         return out
 
 
+class FeatureReduction(nn.Module):
+
+    def __init__(self, inplanes, planes):
+        super(FeatureReduction, self).__init__()
+        self.conv1 = conv1x1(inplanes, planes)
+        self.bn1 = nn.BatchNorm1d(planes)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        return out
+
+
 class ResNetFeat(AbstractLit):
 
     def __init__(self, hparams):
@@ -159,7 +174,16 @@ class ResNetFeat(AbstractLit):
                                        dilate=replace_stride_with_dilation[1])
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
+
+        n_output_channels = 512 * block.expansion
+        if hparams.bottleneck:
+            self.bottleneck = FeatureReduction(n_output_channels, 64 * block.expansion)
+            n_output_channels = 64 * block.expansion
+        else:
+            self.bottleneck = None
+
         self.avgpool = nn.AdaptiveAvgPool1d(1)
+
 
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
@@ -216,6 +240,10 @@ class ResNetFeat(AbstractLit):
         x = self.layer3(x)
         x = self.layer4(x)
 
+
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
+
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
 
@@ -223,6 +251,16 @@ class ResNetFeat(AbstractLit):
 
     def forward(self, x):
         return self._forward_impl(x)
+
+
+@model('resnet9_feat')
+class ResNet9Feat(ResNetFeat):
+
+    def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
+        hparams.block = BasicBlock
+        hparams.layers = [1, 1, 1, 1]
+        super().__init__(hparams)
 
 
 @model('resnet18_feat')
@@ -255,6 +293,16 @@ class ResNet50Feat(ResNetFeat):
         super().__init__(hparams)
 
 
+@model('resnet74_feat')
+class ResNet74Feat(ResNetFeat):
+
+    def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
+        hparams.block = Bottleneck
+        hparams.layers = [3, 4, 14, 3]
+        super().__init__(hparams)
+
+
 @model('resnet101_feat')
 class ResNet101Feat(ResNetFeat):
 
@@ -271,7 +319,7 @@ class ResNet152Feat(ResNetFeat):
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
-        hparams.layers = [3, 4, 36, 3]
+        hparams.layers = [3, 8, 36, 3]
         super().__init__(hparams)
 
 
