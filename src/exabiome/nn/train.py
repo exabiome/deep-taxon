@@ -60,8 +60,8 @@ def get_conf_args():
         'bottleneck': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=True),
         'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
                            help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species'),
-        'simple_clf': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=False),
-        'dropout_clf': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=False),
+        'simple_clf': dict(action='store_true', help='Use a single FC layer as the classifier for ResNets', default=False),
+        'dropout_clf': dict(action='store_true', help='Add dropout in FC layers as the classifier for ResNets', default=False),
     }
 
 
