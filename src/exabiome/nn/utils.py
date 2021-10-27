@@ -93,7 +93,7 @@ def process_model(args, inference=False, taxa_table=None):
             else:
                 raise e
     elif getattr(args, 'checkpoint', None) is not None:
-        model = model_cls.load_from_checkpoint(args.checkpoint)
+        model = model_cls.load_from_checkpoint(args.checkpoint, strict=False)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
