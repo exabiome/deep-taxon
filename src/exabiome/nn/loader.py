@@ -141,6 +141,58 @@ def process_dataset(args, path=None):
     return dataset, io
 
 
+class SplitCollater:
+
+    def __init__(self, padval, freq=1.0, factors=[2, 4, 8]):
+        self.padval = padval
+        self.freq = freq
+        self.factors = factors
+
+    def __call__(self, samples):
+        maxlen = 0
+        l_idx = -1
+        if isinstance(samples, tuple):
+            samples = [samples]
+        for i, X, y, seq_id in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+        X_ret = list()
+        y_ret = list()
+        idx_ret = list()
+        size_ret = list()
+        seq_id_ret = list()
+        for i, X, y, seq_id in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif), value=self.padval)
+            X_ret.append(X_)
+            y_ret.append(y)
+            size_ret.append(X.shape[l_idx])
+            idx_ret.append(i)
+            seq_id_ret.append(seq_id)
+        X_ret = torch.stack(X_ret)
+        y_ret = torch.stack(y_ret)
+        size_ret = torch.tensor(size_ret)
+        idx_ret = torch.tensor(idx_ret)
+        seq_id_ret = torch.tensor(seq_id_ret)
+
+        if self.freq == 1.0 or rs.rand() < self.freq:
+            f = factors[rs.randint(len(factors))]
+            y_ret = y_ret.repeat_interleave(f)
+            seq_id_ret = seq_id_ret.repeat_interleave(f)
+            idx_ret = idx_ret.repeat_interleave(f)
+            X_ret = X_ret.reshape((X_ret.shape[0] * f, X_ret.shape[0] // f))
+
+            q = lens // f
+            r = lens // f
+            n_bad_chunks = b.shape[-1]//f - q
+            bad_chunk_pos = torch.where(n_bad_chunks > 0)[0]
+            start_bad_chunks = bad_chunk_pos + q[bad_chunk_pos]
+
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+
+
 class SeqCollater:
 
     def __init__(self, padval):
@@ -711,6 +763,7 @@ class LazySeqDataset(Dataset):
         kwargs.setdefault('graph', False)
         kwargs.setdefault('load', False)
         kwargs.setdefault('ohe', False)
+        kwargs.setdefault('weighted', False)
 
         self.comm = kwargs.pop('comm', None)
 
@@ -787,6 +840,8 @@ class LazySeqDataset(Dataset):
             self.node_ids = node_ids
         elif hparams.classify:
             self.classify = True
+            if hparams.weighted == 'phy':
+                self.distances = self.difile.distances.data[:]
         else:
             raise ValueError('classify (-C) or manifold (-M) should be set')
 

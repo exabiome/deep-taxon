@@ -39,8 +39,9 @@ def get_conf_args():
         'model': dict(help='the model to run. see show-models for a list of available models', choices=list(models._models.keys()), default='resnet18'),
         'seed': dict(type=parse_seed, default='', help='seed to use for train-test split'),
         'downsample': dict(type=float, default=None, help='amount to downsample dataset to'),
-        'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns, or ens'),
+        'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns,ens, or phylo'),
         'ens_beta': dict(help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9),
+        'phylo_neighbors': dict(help='the number of neighbors to use for phylogenetic weighting', default=5),
         'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify', default=None),
         'accumulate': dict(help='accumulate_grad_batches argument to pl.Trainer', default=1),
         'dropout_rate': dict(help='the dropout rate to use', default=0.5),
@@ -186,6 +187,9 @@ def process_args(args=None, return_io=False):
             weights = np.sqrt(1/data_mod.dataset.taxa_counts)
         elif args.weighted == 'ins':
             weights = np.sqrt(1/data_mod.dataset.taxa_counts)
+        elif args.weighted == 'phy':
+            k = args.phylo_neighbors
+            weights = np.partition(data_mod.dataset.distances, k, axis=1)[:, :k].sum(axis=1)
         else:
             raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
         model.set_class_weights(weights)
