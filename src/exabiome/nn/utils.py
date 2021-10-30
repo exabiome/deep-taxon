@@ -70,7 +70,7 @@ def process_model(args, inference=False, taxa_table=None):
 
     if getattr(args, 'init', None) is not None:
         try:
-            model = model_cls.load_from_checkpoint(args.init)
+            model = model_cls.load_from_checkpoint(args.init, strict=False)
             ckpt_hparams = model.hparams
             if not inference:
                 if model.hparams.manifold and args.classify:
