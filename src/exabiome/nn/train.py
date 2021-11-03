@@ -48,6 +48,7 @@ def get_conf_args():
         'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
         'lr': dict(help='the learning rate for Adam', default=0.001),
         'lr_scheduler': dict(default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use'),
+        'step_size': dict(help='the step size for the StepLR scheduler', default=10),
         'batch_size': dict(help='batch size', default=64),
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
@@ -570,7 +571,7 @@ def filter_metrics(argv=None):
     import numpy as np
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("metrics", type=str, help='metrics.csv from Pytorch Lightning')
+    parser.add_argument("metrics", type=str, help='metrics.csv from Pytorch Lightning', nargs='+')
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-v', '--validation', action='store_true', default=False, help='filter validation')
     grp.add_argument('-t', '--train', action='store_true', default=False, help='filter train')
@@ -584,31 +585,38 @@ def filter_metrics(argv=None):
     if not (args.validation or args.train):
         args.validation = True
 
-    df = pd.read_csv(args.metrics)
+    dfs = list()
+    for met in args.metrics:
+        df = pd.read_csv(met)
 
-    if args.validation:
-        columns = ['epoch', 'step', 'validation_acc', 'validation_loss']
-        mask_col = 'validation_acc' if 'validation_acc' in df else 'validation_loss'
-    else:
-        columns = ['epoch', 'step', 'training_acc', 'training_loss']
-        mask_col = 'training_acc' if 'training_acc' in df else 'training_loss'
+        if args.validation:
+            columns = ['epoch', 'step', 'validation_acc', 'validation_loss']
+            mask_col = 'validation_acc' if 'validation_acc' in df else 'validation_loss'
+        else:
+            columns = ['epoch', 'step', 'training_acc', 'training_loss']
+            mask_col = 'training_acc' if 'training_acc' in df else 'training_loss'
+        if mask_col not in df:
+            continue
 
-    lrdf = None
-    if 'lr-AdamW' in df:
-        lrdf = df.filter(['lr-AdamW'], axis=1)
-        lrdf = lrdf[np.logical_not(np.isnan(lrdf['lr-AdamW']))]
+        lrdf = None
+        if 'lr-AdamW' in df:
+            lrdf = df.filter(['lr-AdamW'], axis=1)
+            lrdf = lrdf[np.logical_not(np.isnan(lrdf['lr-AdamW']))]
 
-        epdf = df.filter(['epoch'], axis=1)
-        epdf = epdf[np.logical_not(np.isnan(epdf['epoch']))].astype(int)
-        lrdf['epoch'] = np.unique(epdf['epoch'])
+            epdf = df.filter(['epoch'], axis=1)
+            epdf = epdf[np.logical_not(np.isnan(epdf['epoch']))].astype(int)
+            lrdf['epoch'] = np.unique(epdf['epoch'])
 
-    df['epoch'] = df['epoch'].values.astype(int)
-    mask = np.logical_not(np.isnan(df[mask_col].values))
-    df = df.filter(columns, axis=1)[mask]
+        df['epoch'] = df['epoch'].values.astype(int)
+        mask = np.logical_not(np.isnan(df[mask_col].values))
+        df = df.filter(columns, axis=1)[mask]
 
-    df = df.drop('step', axis=1)
-    if lrdf is not None:
-        df = df.set_index('epoch').merge(lrdf.set_index('epoch'), left_index=True, right_index=True)
+        df = df.drop('step', axis=1)
+        if lrdf is not None:
+            df = df.set_index('epoch').merge(lrdf.set_index('epoch'), left_index=True, right_index=True)
+        dfs.append(df)
+
+    df = pd.concat(dfs)
 
     out = sys.stdout
     if args.output is not None:
