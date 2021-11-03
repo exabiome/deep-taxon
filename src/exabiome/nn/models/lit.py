@@ -21,9 +21,9 @@ class AbstractLit(LightningModule):
     train_acc = 'training_acc'
     test_loss = 'test_loss'
 
-    schedules = ('adam', 'cyclic', 'plateau')
+    schedules = ('adam', 'cyclic', 'plateau', 'cosine', 'cosinewr', 'step' )
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, lr=None):
         super().__init__()
         #self.hparams = self.check_hparams(hparams)
         self.save_hyperparameters(hparams)
@@ -37,7 +37,14 @@ class AbstractLit(LightningModule):
         else:
             self._loss =  nn.MSELoss()
         self.set_inference(False)
-        self.lr = getattr(hparams, 'lr', None)
+        self.lr = lr or getattr(hparams, 'lr', None)
+
+    def copy_hparams(self, hparams):
+        if isinstance(hparams, argparse.Namespace):
+            hparams = vars(hparams)
+        for k, v in hparams.items():
+            if k in self.hparams:
+                self.hparams[k] = v
 
     @staticmethod
     def check_hparams(hparams):
@@ -91,15 +98,20 @@ class AbstractLit(LightningModule):
             scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
                                                                        T_0=10, T_mult=2, eta_min=1e-5)
         elif self.hparams.lr_scheduler == 'plateau':
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+            mode, monitor = 'min', self.val_loss
+            if self.hparams.classify:
+                mode, monitor = 'max', self.val_acc
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, threshold=0.001, mode=mode)
             scheduler = {
                 'scheduler': scheduler,         # The LR scheduler instance (required)
                 'interval': 'epoch',        # The unit of the scheduler's step size, could also be 'step'
                 'frequency': 1,             # The frequency of the scheduler
-                'monitor': self.val_loss,      # Metric for `ReduceLROnPlateau` to monitor
+                'monitor': monitor,      # Metric for `ReduceLROnPlateau` to monitor
                 'strict': True,             # Whether to crash the training if `monitor` is not found
                 'name': None,               # Custom name for `LearningRateMonitor` to use
             }
+        elif self.hparams.lr_scheduler == 'step':
+            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.hparams.step_size, gamma=0.1)
 
         if scheduler is None:
             return optimizer
