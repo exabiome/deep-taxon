@@ -209,9 +209,9 @@ class ResNet(AbstractLit):
             self.fc = nn.Sequential(
                 nn.Linear(n_output_channels, 512),
                 nn.ReLU(inplace=True),
-                nn.Linear(512, 512),
+                nn.Linear(512, 256),
                 nn.ReLU(inplace=True),
-                nn.Linear(512, hparams.n_outputs),
+                nn.Linear(256, hparams.n_outputs),
             )
 
 
@@ -345,6 +345,15 @@ class ResNet18(ResNet):
     def __init__(self, hparams):
         hparams = self.check_hparams(hparams)
         hparams.block = BasicBlock
+        hparams.layers = [2, 2, 2, 2]
+        super().__init__(hparams)
+
+@model('resnet26')
+class ResNet26(ResNet):
+
+    def __init__(self, hparams):
+        hparams = self.check_hparams(hparams)
+        hparams.block = Bottleneck
         hparams.layers = [2, 2, 2, 2]
         super().__init__(hparams)
 
