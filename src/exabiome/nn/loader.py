@@ -261,7 +261,6 @@ class DistanceCollater:
         if len(dmat.shape) == 1:
             from scipy.spatial.distance import squareform
             dmat = squareform(dmat)
-        #self.dmat = torch.as_tensor(dmat, dtype=torch.float).pow(2)
         self.dmat = torch.as_tensor(dmat, dtype=torch.float).sqrt()
 
     def __call__(self, samples):
