@@ -93,23 +93,6 @@ def get_nonrep_matrix(tids, rep_ids, dist):
     ret = ret.filter(tids)
     return ret
 
-def select_distances(ids_to_select, taxa_ids, distances):
-    id_map = {t[3:]: i for i, t in enumerate(taxa_ids)}
-    indices = np.array([id_map[tid] for tid in ids_to_select])
-    idx = np.zeros(len(indices)*(len(indices)-1)//2, dtype=int)
-    k = 0
-    n = int(1/2 + math.sqrt(1/4 + 2 * len(distances)))
-    for s_i, _i in enumerate(indices):
-        for s_j, _j in enumerate(indices[s_i+1:]):
-            if _i > _j:
-                i, j = _j, _i
-            else:
-                i, j = _i, _j
-            idx[k] = i*n - ((i+1)*(i+2)//2) + j
-            k += 1
-    return distances[idx]
-
-
 def select_embeddings(ids_to_select, taxa_ids, embeddings):
     id_map = {t[3:]: i for i, t in enumerate(taxa_ids)}
     indices = [id_map[tid] for tid in ids_to_select]
@@ -165,7 +148,6 @@ def prepare_data(argv=None):
     dep_grp = parser.add_argument_group(title="Legacy options you probably do not need")
     dep_grp.add_argument('--non_vocab', action='store_false', dest='vocab', default=True, help='bitpack sequences -- it is unlikely this works')
     dep_grp.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
-    dep_grp.add_argument('-D', '--dist_h5', type=str, help='the distances file', default=None)
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -239,10 +221,6 @@ def prepare_data(argv=None):
         taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
         logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
 
-    repdflen = len(rep_taxdf)
-    rep_taxdf = rep_taxdf.filter(np.unique(taxdf['gtdb_genome_representative']), axis=0)
-    logger.info('Discarded %d leftover representative genomes' % (repdflen - len(rep_taxdf)))
-
     dflen = len(taxdf)
     logger.info('%d remaining genomes' % dflen)
 
@@ -258,11 +236,6 @@ def prepare_data(argv=None):
     for tip in root.tips():
         tip.name = tip.name[3:].replace(' ', '_')
 
-
-    logger.info('Shearing filtered accession from tree')
-    rep_ids = taxdf['gtdb_genome_representative'].values
-    root = root.shear(rep_ids)
-    logger.info('%d tips remaning' % len(list(root.tips())))
 
     taxa_ids = taxdf.index.values
 
@@ -289,21 +262,6 @@ def prepare_data(argv=None):
     ###############################
     di_kwargs = dict()
 
-    # if a distance matrix file has been given, read and select relevant distances
-    if args.dist_h5:
-        #############################
-        # read and filter distances
-        #############################
-        logger.info('reading distances from %s' % args.dist_h5)
-        with h5py.File(args.dist_h5, 'r') as f:
-            dist = f['distances'][:]
-            dist_taxa = f['leaf_names'][:].astype('U')
-        logger.info('selecting distances for taxa found in %s' % args.accessions)
-        dist = select_distances(taxa_ids, dist_taxa, dist)
-        dist = CondensedDistanceMatrix('distances', data=dist)
-        di_kwargs['distances'] = dist
-
-
     #############################
     # read and filter embeddings
     #############################
@@ -324,15 +282,11 @@ def prepare_data(argv=None):
     tree = NewickString('tree', data=tree_str)
 
     # get distances from tree if they are not provided
-    if di_kwargs.get('distances') is None:
-        from scipy.spatial.distance import squareform
-        tt_dmat = root.tip_tip_distances()
-        if (rep_ids != taxa_ids).any():
-            tt_dmat = get_nonrep_matrix(taxa_ids, rep_ids, tt_dmat)
-        dmat = tt_dmat.data
-        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=dmat)
+    tt_dmat = root.tip_tip_distances().filter(rep_taxdf.index)
+    di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=tt_dmat.data)
 
 
+    logger.info(f'Writing {len(rep_taxdf)} taxa to taxa table')
     tt_args = ['taxa_table', 'a table for storing taxa data', rep_taxdf.index.values]
     tt_kwargs = dict()
     for t in taxlevels[1:-1]:
