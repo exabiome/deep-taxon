@@ -47,8 +47,8 @@ def get_conf_args():
         'dropout_rate': dict(help='the dropout rate to use', default=0.5),
         'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
         'lr': dict(help='the learning rate for Adam', default=0.001),
-        'lr_scheduler': dict(default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use'),
-        'step_size': dict(help='the step size for the StepLR scheduler', default=10),
+        'lr_scheduler': dict(default='step', choices=AbstractLit.schedules, help='the learning rate schedule to use'),
+        'step_size': dict(help='the step size for the StepLR scheduler', default=5),
         'batch_size': dict(help='batch size', default=64),
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
@@ -131,7 +131,8 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
-    parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
+    parser.add_argument('--sanity', action='store_true', default=False,
+                        help='run five epochs with 40 batches for training and 5 batches for validation ')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
     grp.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
@@ -358,7 +359,7 @@ def run_lightning(argv=None):
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
 
     if args.swa:
-        callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
+        callbacks.append(StochasticWeightAveraging(swa_epoch_start=10, annealing_epochs=10))
 
     targs = dict(
         checkpoint_callback=True,

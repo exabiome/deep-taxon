@@ -11,7 +11,7 @@ import argparse
 from ..loader import process_dataset
 
 from ...sequence import WindowChunkedDIFile
-from ..loss import DistMSELoss
+from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
 
 class AbstractLit(LightningModule):
 
@@ -28,7 +28,9 @@ class AbstractLit(LightningModule):
         #self.hparams = self.check_hparams(hparams)
         self.save_hyperparameters(hparams)
         if self.hparams.manifold:
-            self._loss = DistMSELoss()
+            #self._loss = DistMSELoss()
+            self._loss = HyperbolicMAELoss()
+            #self._loss = EuclideanMAELoss()
         elif self.hparams.classify:
             if self.hparams.tgt_tax_lvl == 'all':
                 self._loss = HierarchicalLoss(hparams.n_taxa_all)
@@ -113,6 +115,7 @@ class AbstractLit(LightningModule):
         elif self.hparams.lr_scheduler == 'step':
             scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.hparams.step_size, gamma=0.1)
 
+        print(scheduler)
         if scheduler is None:
             return optimizer
         else:

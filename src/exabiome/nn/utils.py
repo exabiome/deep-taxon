@@ -60,10 +60,6 @@ def process_model(args, inference=False, taxa_table=None):
         args (Namespace):       command-line arguments passed by parser
         inference (bool):       load data for inference
     """
-
-    if taxa_table is not None:
-        args.n_outputs = taxa_table.get_num_classes(args.tgt_tax_lvl)
-
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
     model_cls = models._models[args.model]
