@@ -230,7 +230,7 @@ def process_args(args=None, return_io=False):
     if targs['gpus'] is not None:
         if targs['gpus'] == 1:
             targs['accelerator'] = GPUAccelerator(
-                precision_plugin = NativeMixedPrecisionPlugin(),
+                precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda'),
                 training_type_plugin = SingleDevicePlugin(torch.device(0))
             )
         else:
@@ -238,9 +238,10 @@ def process_args(args=None, return_io=False):
                 raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
             parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count())]
             targs['accelerator'] = GPUAccelerator(
-                precision_plugin = NativeMixedPrecisionPlugin(),
+                precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda'),
                 training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
-                                                 cluster_environment=env, num_nodes=args.num_nodes)
+                                                 cluster_environment=env, num_nodes=args.num_nodes,
+                                                 find_unused_parameters=False)
             )
             torch.cuda.set_device(env.local_rank())
             print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
@@ -306,18 +307,19 @@ def run_lightning(argv=None):
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
-    if 'OMPI_COMM_WORLD_RANK' in os.environ:
+    print0(os.environ)
+    if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
         from mpi4py import MPI
         comm = MPI.COMM_WORLD
         RANK = comm.Get_rank()
     else:
         RANK = 0
-        print('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
+        print('OMPI_COMM_WORLD_RANK or SLURMD_NODENAME not set in environment -- not using MPI')
 
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
     check_directory(outdir)
-    print0(args)
+    print0("Processed Args:", args)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
