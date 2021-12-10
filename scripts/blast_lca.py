@@ -52,7 +52,7 @@ def agg_orfs(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('orf_lca', type=str, help='LCA ORFs files', nargs='+')
     parser.add_argument('-o', '--output', type=str, help='the file to save LCA ORFs output to')
-    parser.add_argument('-m', '--bsmax_cutoff', type=float, help='fraction of Bmax cutoff for assigning taxa', default=0.5)
+    parser.add_argument('-m', '--bsmax_cutoff', type=float, help='fraction of Bmax cutoff for assigning taxa. default=0.5', default=0.5)
 
     args = parser.parse_args(argv)
 
@@ -114,12 +114,33 @@ def read_metadata(path):
                         .apply(func, axis=1).set_index('accession')
     return taxdf
 
+
+def prepare_metadata(argv):
+    '''Merge the GTDB metadata files'''
+    parser = argparse.ArgumentParser()
+    parser.add_argument('ar122_metadata', type=str, help='ar122 GTDB metadata files')
+    parser.add_argument('bac120_metadata', type=str, help='bac120 GTDB metadata files')
+    parser.add_argument('output', type=str, help='the CSV to save preprocessed taxonomy info to', default='gtdb.taxonomy.csv')
+
+    args = parser.parse_args(argv)
+    logger = get_logger()
+
+    logger.info(f'reading {args.ar122_metadata}')
+    ar122_df = read_metadata(args.ar122_metadata)
+    logger.info(f'reading {args.bac120_metadata}')
+    bac120_df = read_metadata(args.bac120_metadata)
+    logger.info(f'concatenating DataFrames')
+    taxdf = pd.concat([ar122_df, bac120_df], axis=0)
+    logger.info(f'saving taxonomy to {args.output}')
+    taxdf.to_csv(args.output)
+    logger.info(f'done')
+
 def orf_lca(argv):
     '''Aggregate hits for each ORF to get the LCA for individual ORFS'''
     parser = argparse.ArgumentParser()
     parser.add_argument('daln', type=str, help='diamond output in Blast 6 format')
     parser.add_argument('output', type=str, help='the file to save LCA ORFs output to')
-    parser.add_argument('-s', '--bitscore_cutoff', type=float, help='fraction of max bitscore for including hits', default=0.9)
+    parser.add_argument('-s', '--bitscore_cutoff', type=float, help='fraction of max bitscore for including hits. default=0.9', default=0.9)
     parser.add_argument('-a', '--ar122_metadata', type=str, help='ar122 GTDB metadata files', default=None)
     parser.add_argument('-b', '--bac120_metadata', type=str, help='bac120 GTDB metadata files', default=None)
     parser.add_argument('-t', '--taxonomy', type=str, help='the CSV to save preprocessed taxonomy info to', default=None)
@@ -197,6 +218,7 @@ def main():
     cmds = {
         'orf-lca': orf_lca,
         'agg-orfs': agg_orfs,
+        'prep-meta': prepare_metadata,
     }
     if len(sys.argv) == 1 or sys.argv[1] not in cmds or sys.argv[1] in ('-h', '--help', 'help'):
         print("Usage: blast_lca.py [cmd]")
