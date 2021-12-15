@@ -1,7 +1,8 @@
 import sys
 import numpy as np
 import os
-from ..utils import check_argv, parse_logger, ccm
+from functools import partial
+from ..utils import check_argv, parse_logger, ccm, distsplit
 from .utils import process_gpus, process_model, process_output
 from .train import process_config
 from .loader import LazySeqDataset, get_loader, DeepIndexDataModule
@@ -34,7 +35,8 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('input', type=str, help='the input file to run inference on')
     parser.add_argument('checkpoint', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
-    parser.add_argument('-f', '--features', action='store_true', help='drop classifier from ResNet model before inference', default=False)
+    parser.add_argument('-f', '--resnet_features', action='store_true', help='drop classifier from ResNet model before inference', default=False)
+    parser.add_argument('-F', '--features', action='store_true', help='outputs are features i.e. do not softmax and compute predictions', default=False)
     parser.add_argument('-E', '--experiment', type=str, default='default',
                         help='the experiment name to get the checkpoint from')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
@@ -72,18 +74,6 @@ def parse_args(*addl_args, argv=None):
     args.init = args.checkpoint
 
     return args
-
-
-def split(dset_len, size, rank):
-    q, r = divmod(dset_len, size)
-    if rank < r:
-        q += 1
-        b = rank*q
-        return np.arange(b, b+q)
-    else:
-        offset = (q+1)*r
-        b = (rank - r)*q + offset
-        return np.arange(b, b+q)
 
 
 def process_args(args, size=1, rank=0, comm=None):
@@ -158,12 +148,13 @@ def process_args(args, size=1, rank=0, comm=None):
     args.save_seq_ids = model.hparams.window is not None
 
     # remove ResNet features
-    if args.features:
+    if args.resnet_features:
         if 'ResNet' not in model.__class__.__name__:
             raise ValueError("Cannot use -f without ResNet model - got %s" % model.__class__.__name__)
         from .models.resnet import ResNetFeatures
         args.n_outputs = model.fc.in_features if isinstance(model.fc, nn.Linear) else model.fc[0].in_features
         model = ResNetFeatures(model)
+        args.features = True
 
     if args.loaders is None or len(args.loaders) == 0:
         args.loaders = ['train', 'validate', 'test']
@@ -178,15 +169,16 @@ def process_args(args, size=1, rank=0, comm=None):
             tmp_dset = Subset(tmp_dset, np.arange(args.start, len(dataset)))
 
         if size > 1:
-            subset = split(len(tmp_dset), size, rank)
+            subset = distsplit(len(tmp_dset), size, rank)
             tmp_dset = Subset(tmp_dset, subset)
             args.logger.info(f'rank {rank} - processing {len(subset)} samples subset')
 
         ldr = get_loader(tmp_dset, batch_size=args.batch_size, distances=False)
-        args.loaders = {'input': ldr}
+        args.loaders = {'nonrep': ldr}
         args.difile = dataset.difile
     else:
-        data_mod = DeepIndexDataModule(args, inference=True)
+        args.loader_kwargs = {'rank': rank, 'size': size}
+        data_mod = DeepIndexDataModule(args, inference=True, keep_open=True)
         args.loaders = {'train': data_mod.train_dataloader(),
                         'validate': data_mod.val_dataloader(),
                         'test': data_mod.test_dataloader()}
@@ -256,10 +248,12 @@ def run_inference(argv=None):
             args.logger.info(f'running parallel chunked inference')
         else:
             args.logger.info(f'running serial chunked inference')
-        parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK, f_kwargs)
+        parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK, f_kwargs, probs=not args.features)
 
 
-def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, rank, fkwargs):
+def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, rank, fkwargs, probs=True):
+    from sklearn.metrics import confusion_matrix
+
     n_samples = len(dataset)
     f = h5py.File(args.output, 'w', **fkwargs)
     outputs = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
@@ -271,9 +265,17 @@ def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, ran
 
     if size > 1: comm.Barrier()
 
+    confmats = dict()
+    if probs:
+        confmat_grp = f.require_group('confusion')
+        preds = f.require_dataset('preds', shape=(n_samples,), dtype=int)
+        confusion_matrix = partial(confusion_matrix, labels=np.arange(args.n_outputs))
+
     for loader_key, loader in args.loaders.items():
         if rank == 0: args.logger.info(f'computing outputs for {loader_key}')
         mask = f.require_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
+        if probs:
+            confmats[loader_key] = np.zeros((args.n_outputs, args.n_outputs), dtype=int)
         for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=rank==0):
             order = np.argsort(idx)
             idx = idx[order]
@@ -287,8 +289,26 @@ def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, ran
                 seq_ids[idx] = _seq_ids[order]
             with ccm(size > 1, mask.collective):
                 mask[idx] = True
+            if probs:
+                _preds = _outputs.argmax(axis=1)
+                confmats[loader_key] += confusion_matrix(_labels, _preds)
+                with ccm(size > 1, preds.collective):
+                    preds[idx] = _preds[order]
 
-    if size > 1: comm.Barrier()
+    if size > 1:
+        comm.Barrier()
+        for loader_key, confmat in confmats.items():
+            if rank == 0: args.logger.info(f'reducing {loader_key} confusion matrix')
+            recv = np.zeros_like(confmat)
+            comm.Reduce(confmat, recv)
+            confmats[loader_key] = recv
+        comm.Barrier()
+
+    confdsets = {loader_key: confmat_grp.require_dataset(loader_key, shape=(args.n_outputs, args.n_outputs), dtype=int) for loader_key in confmats}
+    if rank == 0:
+        for loader_key, confmat in confmats.items():
+            if rank == 0: args.logger.info(f'writing {loader_key} confusion matrix')
+            confdsets[loader_key][:] = confmat
 
     f.close()
     if rank == 0: args.logger.info(f'closing {args.output}')

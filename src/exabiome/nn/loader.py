@@ -12,7 +12,7 @@ from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
 from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence
-from ..utils import parse_seed
+from ..utils import parse_seed, distsplit
 
 
 def check_window(window, step):
@@ -573,6 +573,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     train_idx, test_idx, validate_idx = train_test_validate_split(index,
                                                                   stratify=stratify,
                                                                   random_state=random_state)
+
     if dataset.tnf:
         collater = TnfCollater(dataset.vocab)
     else:
@@ -595,6 +596,13 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     train_dataset = DatasetSubset(dataset, train_idx)
     test_dataset = DatasetSubset(dataset, test_idx)
     validate_dataset = DatasetSubset(dataset, validate_idx)
+
+    s = kwargs.pop('size', 1)
+    r = kwargs.pop('rank', -1)
+    if s > 1 and r >= 0:
+        train_dataset = Subset(train_dataset, distsplit(len(train_dataset), s, r))
+        test_dataset = Subset(test_dataset, distsplit(len(test_dataset), s, r))
+        validate_dataset = Subset(validate_dataset, distsplit(len(validate_dataset), s, r))
 
     tr_dl = DataLoader(train_dataset, collate_fn=collater, **kwargs)
     kwargs.pop('shuffle', None)
@@ -642,13 +650,14 @@ class DeepIndexDataModule(pl.LightningDataModule):
             hparams.manifold = False
             hparams.graph = False
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
+            kwargs['shuffle'] = False
         else:
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = False
             kwargs['shuffle'] = hparams.shuffle
-            kwargs.update(hparams.loader_kwargs)
 
+        kwargs.update(hparams.loader_kwargs)
         kwargs['num_workers'] = hparams.num_workers
         if hparams.num_workers > 0:
             kwargs['multiprocessing_context'] = 'spawn'

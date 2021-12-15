@@ -216,10 +216,12 @@ def run_train(argv=None):
             job.add_addl_jobflag(job.wait_flag, job_dep)
         job.set_env_var('CKPT', args.checkpoint)
         options += f' -c $CKPT'
-
     elif args.init:
         job.set_env_var('CKPT', args.init)
         options += f' -i $CKPT'
+    elif args.chain > 1:
+        job.set_env_var('CKPT', '')
+
 
     if args.features:
         job.set_env_var('FEATS_CKPT', args.features)
@@ -335,6 +337,8 @@ def run_train(argv=None):
                     job_dep = f'ended({job_dep})'
                 job.add_addl_jobflag(job.wait_flag, job_dep)
                 job.set_env_var('CKPT', os.path.join(jobdir, 'last.ckpt'))
+                job.set_env_var('OPTIONS', options + ' -c $CKPT')
+                job.set_env_var('CMD', train_cmd)
                 args.message = args.message[:args.message.find("resume")].strip().strip(',')
         else:
             with open(args.sh, 'w') as out:

@@ -47,9 +47,18 @@ def get_conf_args():
         'dropout_rate': dict(help='the dropout rate to use', default=0.5),
         'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
         'lr': dict(help='the learning rate for Adam', default=0.001),
-        'lr_scheduler': dict(default='step', choices=AbstractLit.schedules, help='the learning rate schedule to use'),
-        'step_size': dict(help='the step size for the StepLR scheduler', default=5),
         'batch_size': dict(help='batch size', default=64),
+        'lr_scheduler': dict(default='step', choices=AbstractLit.schedules, help='the learning rate schedule to use'),
+
+        # step learning rate parameters
+        'step_size': dict(help='the number of epochs between steps when using lr_scheduler="step"', default=2),
+        'n_steps': dict(help='the number of steps to take when using lr_scheduler="step"', default=3),
+        'step_factor': dict(help='the factor to multiple LR when using lr_scheduler="step"', default=0.1),
+
+        # stochastic weight averaging parameters
+        'swa_start': dict(help='the epoch to start stochastic weight averaging', default=7),
+        'swa_anneal': dict(help='the number of epochs to anneal for when using SWA', default=1),
+
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
         'tnf': dict(help='input transform data to tetranucleotide frequency', default=False),
@@ -257,7 +266,6 @@ def process_args(args=None, return_io=False):
     if args.sanity:
         targs['limit_train_batches'] = 40
         targs['limit_val_batches'] = 5
-        targs['max_epochs'] = min(args.epochs, 5)
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -359,7 +367,7 @@ def run_lightning(argv=None):
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
 
     if args.swa:
-        callbacks.append(StochasticWeightAveraging(swa_epoch_start=10, annealing_epochs=10))
+        callbacks.append(StochasticWeightAveraging(swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
 
     targs = dict(
         checkpoint_callback=True,
@@ -588,7 +596,7 @@ def filter_metrics(argv=None):
 
     dfs = list()
     for met in args.metrics:
-        df = pd.read_csv(met)
+        df = pd.read_csv(met, na_values='', keep_default_na=False)
 
         if args.validation:
             columns = ['epoch', 'step', 'validation_acc', 'validation_loss']
@@ -602,14 +610,17 @@ def filter_metrics(argv=None):
         lrdf = None
         if 'lr-AdamW' in df:
             lrdf = df.filter(['lr-AdamW'], axis=1)
-            lrdf = lrdf[np.logical_not(np.isnan(lrdf['lr-AdamW']))]
+            #lrdf = lrdf[np.logical_not(np.isnan(lrdf['lr-AdamW']))]
+            lrdf = lrdf[np.logical_not(lrdf['lr-AdamW'].isna())]
 
             epdf = df.filter(['epoch'], axis=1)
+            #epdf = epdf[np.logical_not(epdf['epoch'].isna()].astype(int)
             epdf = epdf[np.logical_not(np.isnan(epdf['epoch']))].astype(int)
             lrdf['epoch'] = np.unique(epdf['epoch'])
 
         df['epoch'] = df['epoch'].values.astype(int)
-        mask = np.logical_not(np.isnan(df[mask_col].values))
+        #mask = np.logical_not(np.isnan(df[mask_col].values))
+        mask = np.logical_not(df[mask_col].isna())
         df = df.filter(columns, axis=1)[mask]
 
         df = df.drop('step', axis=1)
