@@ -196,6 +196,8 @@ class ResNet(AbstractLit):
         
         if hparams.attention:
             self.attention = nn.MultiheadAttention(n_output_channels, 16)
+        else:
+            self.attention = None
 
         if hparams.tgt_tax_lvl == 'all':
             self.fc = HierarchicalClassifier(n_output_channels, hparams.n_taxa_all)
