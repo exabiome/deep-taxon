@@ -185,14 +185,16 @@ class ResNet(AbstractLit):
                                        dilate=replace_stride_with_dilation[2])
 
         n_output_channels = 512 * block.expansion
-
-        self.avgpool = nn.AdaptiveAvgPool1d(1)
+        if hparams.attention:
+            hparams.bottleneck = True #just to make sure bottleneck is on if using attention
         
         if hparams.bottleneck:
             self.bottleneck = FeatureReduction(n_output_channels, 64 * block.expansion)
             n_output_channels = 64 * block.expansion
         else:
             self.bottleneck = None
+            
+        self.avgpool = nn.AdaptiveAvgPool1d(1)
         
         if hparams.attention:
             self.attention = nn.MultiheadAttention(n_output_channels, 16)
