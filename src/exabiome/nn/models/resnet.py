@@ -145,6 +145,8 @@ class ResNet(AbstractLit):
             hparams.simple_clf = False
         if not hasattr(hparams, 'dropout_clf'):
             hparams.dropout_clf = False
+        if not hasattr(hparams, 'attention'):
+            hparams.attention = False    
 
         super(ResNet, self).__init__(hparams)
 
@@ -183,13 +185,17 @@ class ResNet(AbstractLit):
                                        dilate=replace_stride_with_dilation[2])
 
         n_output_channels = 512 * block.expansion
+
+        self.avgpool = nn.AdaptiveAvgPool1d(1)
+        
         if hparams.bottleneck:
             self.bottleneck = FeatureReduction(n_output_channels, 64 * block.expansion)
             n_output_channels = 64 * block.expansion
         else:
             self.bottleneck = None
-
-        self.avgpool = nn.AdaptiveAvgPool1d(1)
+        
+        if hparams.attention:
+            self.attention = nn.MultiheadAttention(n_output_channels, 16)
 
         if hparams.tgt_tax_lvl == 'all':
             self.fc = HierarchicalClassifier(n_output_channels, hparams.n_taxa_all)
@@ -315,15 +321,19 @@ class ResNet(AbstractLit):
         x = self.layer3(x)
         x = self.layer4(x)
         
-
-
         if self.bottleneck is not None:
             x = self.bottleneck(x)
 
         x = self.avgpool(x)
+        
+        if self.attention is not False:
+            x = x.permute(2, 0, 1)
+            x, _ = self.attention(x, x, x)
+            x = x.permute(1, 2, 0)
+            
         x = torch.flatten(x, 1)
         x = self.fc(x)
-
+        
         return x
 
     def forward(self, x):

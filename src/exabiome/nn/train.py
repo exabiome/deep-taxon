@@ -60,6 +60,7 @@ def get_conf_args():
         'classify': dict(action='store_true', help='run a classification problem', default=False),
         'manifold': dict(action='store_true', help='run a manifold learning problem', default=False),
         'bottleneck': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=True),
+        'attention' : dict(help='add an attention layer at end of ResNet features', default=False),
         'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
                            help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species'),
         'simple_clf': dict(action='store_true', help='Use a single FC layer as the classifier for ResNets', default=False),
