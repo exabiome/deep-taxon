@@ -230,6 +230,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
 
     __columns__ = (
         {'name': 'taxon_id', 'description': 'the taxon ID'},
+        {'name': 'domain', 'description': 'the domain of each taxon', 'enum': True},
         {'name': 'phylum', 'description': 'the phylum for each taxon', 'enum': True},
         {'name': 'class', 'description': 'the class for each taxon', 'enum': True},
         {'name': 'order', 'description': 'the order for each taxon', 'enum': True},
@@ -242,6 +243,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
+            {'name': 'domain', 'type': ('array_data', 'data', EnumData), 'doc': 'the domain for each taxon'},
             {'name': 'phylum', 'type': ('array_data', 'data', EnumData), 'doc': 'the phylum for each taxon'},
             {'name': 'class', 'type': ('array_data', 'data', EnumData), 'doc': 'the class for each taxon'},
             {'name': 'order', 'type': ('array_data', 'data', EnumData), 'doc': 'the order for each taxon'},
@@ -252,7 +254,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
             {'name': 'rep_taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID for the species representative', 'default': None})
     def __init__(self, **kwargs):
         taxon_id, embedding, rep_taxon_id = popargs('taxon_id', 'embedding', 'rep_taxon_id', kwargs)
-        taxonomy_labels = ['phylum', 'class', 'order', 'family', 'genus', 'species']
+        taxonomy_labels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
         taxonomy = popargs(*taxonomy_labels, kwargs)
         self.__taxmap = {t: i for i, t in enumerate(taxonomy_labels)}
 
@@ -389,7 +391,7 @@ class TreeGraph(CSRMatrix):
 @register_class('DeepIndexFile', NS)
 class DeepIndexFile(Container):
 
-    taxonomic_levels = ("phylum", "class", "order", "family", "genus", "species")
+    taxonomic_levels = ("domain", "phylum", "class", "order", "family", "genus", "species")
 
     __fields__ = ({'name': 'seq_table', 'child': True},
                   {'name': 'taxa_table', 'child': True},
@@ -401,8 +403,8 @@ class DeepIndexFile(Container):
     @docval({'name': 'seq_table', 'type': (AATable, DNATable, SequenceTable), 'doc': 'the table storing DNA sequences'},
             {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
             {'name': 'genome_table', 'type': GenomeTable, 'doc': 'the table storing taxonomic information about species in this file'},
-            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'},
-            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree'},
+            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information', 'default': None},
+            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree', 'default': None},
             {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information', 'default': None})
     def __init__(self, **kwargs):
         seq_table, taxa_table, genome_table, distances, tree, tree_graph = popargs('seq_table', 'taxa_table', 'genome_table',
