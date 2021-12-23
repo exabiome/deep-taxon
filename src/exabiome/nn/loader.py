@@ -30,12 +30,13 @@ def add_dataset_arguments(parser):
     group.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
     group.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
     group.add_argument('--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
+    group.add_argument('--tnf', default=False, action='store_true', help='use tetranucleotide frequencies as inputs')
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
     choices = list(DeepIndexFile.taxonomic_levels) + ['all']
     group.add_argument('-t', '--tgt_tax_lvl', choices=choices, metavar='LEVEL', default='species',
-                       help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species, all')
+                       help='the taxonomic level to predict. choices are domain, phylum, class, order, family, genus, species, all')
 
     return None
 
@@ -71,7 +72,7 @@ def dataset_stats(argv=None):
 
     if args.test_read:
         print("Attempting to read training data")
-        tr, va, te = train_test_loaders(dataset, random_state=args.seed, downsample=None, distances=args.manifold)
+        tr, va, te = train_test_loaders(dataset, random_state=args.seed, downsample=None)
         from tqdm import tqdm
         for i in tqdm(tr):
             continue
@@ -936,26 +937,10 @@ class LazySeqDataset(Dataset):
         _load = lambda x: x[:]
         self.orig_difile.seq_table['id'].transform(_load)
         self.orig_difile.seq_table['length'].transform(_load)
-        self.orig_difile.seq_table['sequence'].transform(_load)
+        self.orig_difile.seq_table['sequence_index'].transform(_load)
+        if sequence:
+            self.orig_difile.seq_table['sequence_index'].target.transform(_load)
 
-        #old code I'm keeping around just in case
-        #tfm = self._to_torch(device)
-
-        #def to_sint(data):
-        #    return data[:].astype(np.int16)
-        #self._check_load(self.orig_difile.seq_table['sequence'].target, [to_sint, tfm])
-        ##self._check_load(self.orig_difile.taxa_table[self._label_key], tfm)
-        #self._check_load(self.orig_difile.distances, tfm)
-
-        #for col in self.orig_difile.seq_table.children:
-        #    if col.name == 'sequence':
-        #        continue
-        #    col.transform(_load)
-
-        #for col in self.orig_difile.taxa_table.children:
-        #    if col.name == self._label_key:
-        #        continue
-        #    col.transform(_load)
 
     def __getitem__(self, i):
         # get sequence
