@@ -6,7 +6,6 @@ from .loader import read_dataset
 from . import models
 
 from ..utils import check_directory
-from pytorch_lightning.core.decorators import auto_move_data
 import torch
 
 

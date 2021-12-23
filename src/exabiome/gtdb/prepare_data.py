@@ -145,6 +145,8 @@ def prepare_data(argv=None):
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
+    parser.add_argument('-z', '--gzip', action='store_true', default=False,
+                        help='GZip sequence table')
     dep_grp = parser.add_argument_group(title="Legacy options you probably do not need")
     dep_grp.add_argument('--non_vocab', action='store_false', dest='vocab', default=True, help='bitpack sequences -- it is unlikely this works')
     dep_grp.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
@@ -375,12 +377,13 @@ def prepare_data(argv=None):
             else:
                 tmpdir = tempfile.mkdtemp()
 
+            comp = 'gzip' if args.gzip else None
             tmp_h5_file = h5py.File(os.path.join(tmpdir, 'sequences.h5'), 'w')
-            sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression='gzip')
-            seqindex = tmp_h5_file.create_dataset('sequences_index', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
-            genomes = tmp_h5_file.create_dataset('genomes', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
-            seqlens = tmp_h5_file.create_dataset('seqlens', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
-            names = tmp_h5_file.create_dataset('seqnames', shape=(n_seqs,), dtype=h5py.special_dtype(vlen=str), compression='gzip')
+            sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression=comp)
+            seqindex = tmp_h5_file.create_dataset('sequences_index', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+            genomes = tmp_h5_file.create_dataset('genomes', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+            seqlens = tmp_h5_file.create_dataset('seqlens', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+            names = tmp_h5_file.create_dataset('seqnames', shape=(n_seqs,), dtype=h5py.special_dtype(vlen=str), compression=comp)
 
             taxa = np.zeros(len(fapaths), dtype=int)
 
@@ -417,14 +420,18 @@ def prepare_data(argv=None):
     tree_graph = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
 
 
+    if args.gzip:
+        names = io.set_dataio(names,    compression='gzip', chunks=True)
+        sequence = io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=True)
+        seqindex = io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=True)
+        seqlens = io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=True)
+        genomes = io.set_dataio(genomes, compression='gzip', maxshape=(None,), chunks=True)
+        ids = io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=True)
+
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
-                         io.set_dataio(names,    compression='gzip', chunks=True),
-                         io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=True),
-                         io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=True),
-                         io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=True),
-                         io.set_dataio(genomes, compression='gzip', maxshape=(None,), chunks=True),
+                         names, sequence, seqindex, seqlens, genomes,
                          genome_table=genome_table,
-                         id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=True),
+                         id=ids,
                          vocab=vocab)
 
 
