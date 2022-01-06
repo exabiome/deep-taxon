@@ -101,9 +101,15 @@ class AbstractJob(metaclass=ABCMeta):
     def set_env_var(self, var, value):
         self.env_vars[var] = value
 
-    def add_command(self, cmd, run=None):
+    def add_command(self, cmd, run=None, env_vars=None):
         if run is not None:
             cmd = f'{run} {cmd}'
+
+        if env_vars:
+            if not isinstance(env_vars, (list, tuple)):
+                raise ValueError("'env_vars' must be a list or tuple. got %s" % type(env_vars))
+            cmd = " ".join(f'{s}=${s}' for s in env_vars) + " " + cmd
+
         self.commands.append(cmd)
 
     def set_debug(self, debug):

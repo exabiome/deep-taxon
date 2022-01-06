@@ -292,7 +292,7 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
-        job.add_command('$CMD >> $LOG 2>&1', run='srun')
+        job.add_command('$CMD >> $LOG 2>&1', run='srun', env_vars=["NCCL_DEBUG", "NCCL_IB_HCA", "NCCL_SOCKET_IFNAME"])
 
 
     def submit(job, shell, message):
