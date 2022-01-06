@@ -5,13 +5,14 @@ import torch.optim as optim
 import torch.nn as nn
 import torch
 import argparse
+from time import time
 
 #from .. import SeqDataset
 #from hdmf.common import get_hdf5io
 from ..loader import process_dataset
 
 from ...sequence import WindowChunkedDIFile
-from ..loss import DistMSELoss
+from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
 
 class AbstractLit(LightningModule):
 
@@ -28,7 +29,9 @@ class AbstractLit(LightningModule):
         #self.hparams = self.check_hparams(hparams)
         self.save_hyperparameters(hparams)
         if self.hparams.manifold:
-            self._loss = DistMSELoss()
+            #self._loss = DistMSELoss()
+            self._loss = HyperbolicMAELoss()
+            #self._loss = EuclideanMAELoss()
         elif self.hparams.classify:
             if self.hparams.tgt_tax_lvl == 'all':
                 self._loss = HierarchicalLoss(hparams.n_taxa_all)
@@ -111,7 +114,11 @@ class AbstractLit(LightningModule):
                 'name': None,               # Custom name for `LearningRateMonitor` to use
             }
         elif self.hparams.lr_scheduler == 'step':
-            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.hparams.step_size, gamma=0.1)
+            step_size = getattr(self.hparams, 'step_size', 2)
+            n_steps = getattr(self.hparams, 'n_steps', 3)
+            step_factor = getattr(self.hparams, 'step_factor', 0.1)
+            milestones = list(range(step_size, step_size * (n_steps + 1), step_size))
+            scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=step_factor)
 
         if scheduler is None:
             return optimizer
@@ -136,6 +143,7 @@ class AbstractLit(LightningModule):
         if self.hparams.classify:
             self.log(self.train_acc, self.accuracy(output, target))
         self.log(self.train_loss, loss)
+        self.log('time', time())
         return loss
 
     def training_epoch_end(self, outputs):
@@ -149,6 +157,7 @@ class AbstractLit(LightningModule):
         if self.hparams.classify:
             self.log(self.val_acc, self.accuracy(output, target))
         self.log(self.val_loss, loss)
+        self.log('time', time())
         return loss
 
     def validation_epoch_end(self, outputs):
@@ -160,6 +169,7 @@ class AbstractLit(LightningModule):
         output = self(seqs)
         loss = self._loss(output, target)
         self.log(self.test_loss, loss)
+        self.log('time', time())
         return loss
 
     def test_epoch_end(self, outputs):

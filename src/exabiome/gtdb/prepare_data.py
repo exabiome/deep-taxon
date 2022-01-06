@@ -1,5 +1,10 @@
+import argparse
+import logging
+import sys
+
 import math
 import numpy as np
+import pandas as pd
 import scipy.sparse as sps
 import skbio.stats.distance as ssd
 from skbio.sequence import DNA, Protein
@@ -101,13 +106,9 @@ def select_embeddings(ids_to_select, taxa_ids, embeddings):
 
 def prepare_data(argv=None):
     '''Aggregate sequence data GTDB using a file-of-files'''
-    import argparse
-    import io
-    import sys
+    from io import BytesIO
     import tempfile
-    import logging
     import h5py
-    import pandas as pd
 
     from datetime import datetime
 
@@ -126,14 +127,14 @@ def prepare_data(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
-    parser.add_argument('tree', type=str, help='the distances file')
     parser.add_argument('out', type=str, help='output HDF5')
+    parser.add_argument('-T', '--tree', type=str, help='a Newick file with a tree of representative taxa', default=None)
     parser.add_argument('-A', '--accessions', type=str, default=None, help='file of the NCBI accessions of the genomes to convert')
     parser.add_argument('-d', '--max_deg', type=float, default=None, help='max number of degenerate characters in protein sequences')
     parser.add_argument('-l', '--min_len', type=float, default=None, help='min length of sequences')
     parser.add_argument('--iter', action='store_true', default=False, help='convert using iterators')
     parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
-    parser.add_argument('-T', '--total_seq_len', type=int, default=None, help='the total sequence length')
+    parser.add_argument('-L', '--total_seq_len', type=int, default=None, help='the total sequence length')
     parser.add_argument('-t', '--tmpdir', type=str, default=None, help='a temporary directory to store sequences')
     parser.add_argument('-N', '--n_seqs', type=int, default=None, help='the total number of sequences')
     rep_grp = parser.add_mutually_exclusive_group()
@@ -145,6 +146,8 @@ def prepare_data(argv=None):
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
     grp.add_argument('-G', '--genomic', action='store_true', default=False, help='get paths for genomic files (default)')
+    parser.add_argument('-z', '--gzip', action='store_true', default=False,
+                        help='GZip sequence table')
     dep_grp = parser.add_argument_group(title="Legacy options you probably do not need")
     dep_grp.add_argument('--non_vocab', action='store_false', dest='vocab', default=True, help='bitpack sequences -- it is unlikely this works')
     dep_grp.add_argument('-e', '--emb', type=str, help='embedding file', default=None)
@@ -224,18 +227,11 @@ def prepare_data(argv=None):
     dflen = len(taxdf)
     logger.info('%d remaining genomes' % dflen)
 
-    #############################
-    # read and trim tree
-    #############################
-    logger.info('Reading tree from %s' % args.tree)
-    root = TreeNode.read(args.tree, format='newick')
 
-    logger.info('Found %d tips' % len(list(root.tips())))
-
-    logger.info('Transforming leaf names for shearing')
-    for tip in root.tips():
-        tip.name = tip.name[3:].replace(' ', '_')
-
+    ###############################
+    # Arguments for constructing the DeepIndexFile object
+    ###############################
+    di_kwargs = dict()
 
     taxa_ids = taxdf.index.values
 
@@ -257,11 +253,6 @@ def prepare_data(argv=None):
 
     logger.info('Found Fasta files for all accessions')
 
-    ###############################
-    # Arguments for constructing the DeepIndexFile object
-    ###############################
-    di_kwargs = dict()
-
     #############################
     # read and filter embeddings
     #############################
@@ -275,21 +266,10 @@ def prepare_data(argv=None):
         emb = select_embeddings(taxa_ids, emb_taxa, emb)
 
 
-    logger.info('converting tree to Newick string')
-    bytes_io = io.BytesIO()
-    root.write(bytes_io, format='newick')
-    tree_str = bytes_io.getvalue()
-    tree = NewickString('tree', data=tree_str)
-
-    # get distances from tree if they are not provided
-    tt_dmat = root.tip_tip_distances().filter(rep_taxdf.index)
-    di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=tt_dmat.data)
-
-
     logger.info(f'Writing {len(rep_taxdf)} taxa to taxa table')
     tt_args = ['taxa_table', 'a table for storing taxa data', rep_taxdf.index.values]
     tt_kwargs = dict()
-    for t in taxlevels[1:-1]:
+    for t in taxlevels[:-1]:
         enc = LabelEncoder().fit(rep_taxdf[t].values)
         _data = enc.transform(rep_taxdf[t].values).astype(np.uint32)
         _vocab = enc.classes_.astype('U')
@@ -375,12 +355,13 @@ def prepare_data(argv=None):
             else:
                 tmpdir = tempfile.mkdtemp()
 
+            comp = 'gzip' if args.gzip else None
             tmp_h5_file = h5py.File(os.path.join(tmpdir, 'sequences.h5'), 'w')
-            sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression='gzip')
-            seqindex = tmp_h5_file.create_dataset('sequences_index', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
-            genomes = tmp_h5_file.create_dataset('genomes', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
-            seqlens = tmp_h5_file.create_dataset('seqlens', shape=(n_seqs,), dtype=np.uint64, compression='gzip')
-            names = tmp_h5_file.create_dataset('seqnames', shape=(n_seqs,), dtype=h5py.special_dtype(vlen=str), compression='gzip')
+            sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression=comp)
+            seqindex = tmp_h5_file.create_dataset('sequences_index', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+            genomes = tmp_h5_file.create_dataset('genomes', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+            seqlens = tmp_h5_file.create_dataset('seqlens', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+            names = tmp_h5_file.create_dataset('seqnames', shape=(n_seqs,), dtype=h5py.special_dtype(vlen=str), compression=comp)
 
             taxa = np.zeros(len(fapaths), dtype=int)
 
@@ -413,23 +394,50 @@ def prepare_data(argv=None):
     genome_table = GenomeTable('genome_table', 'information about the genome each sequence comes from',
                                taxa_ids, taxa, taxa_table=taxa_table)
 
-    adj, gt_indices = get_tree_graph(root, rep_taxdf)
-    tree_graph = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
+    #############################
+    # read and trim tree
+    #############################
+    if args.tree:
+        logger.info('Reading tree from %s' % args.tree)
+        root = TreeNode.read(args.tree, format='newick')
 
+        logger.info('Found %d tips' % len(list(root.tips())))
+
+        logger.info('Transforming leaf names for shearing')
+        for tip in root.tips():
+            tip.name = tip.name[3:].replace(' ', '_')
+
+        logger.info('converting tree to Newick string')
+        bytes_io = BytesIO()
+        root.write(bytes_io, format='newick')
+        tree_str = bytes_io.getvalue()
+        di_kwargs['tree'] = NewickString('tree', data=tree_str)
+
+        # get distances from tree if they are not provided
+        tt_dmat = root.tip_tip_distances().filter(rep_taxdf.index)
+        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=tt_dmat.data)
+
+        adj, gt_indices = get_tree_graph(root, rep_taxdf)
+        di_kwargs['tree_graph'] = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
+
+
+    if args.gzip:
+        names = io.set_dataio(names,    compression='gzip', chunks=True)
+        sequence = io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=True)
+        seqindex = io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=True)
+        seqlens = io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=True)
+        genomes = io.set_dataio(genomes, compression='gzip', maxshape=(None,), chunks=True)
+        ids = io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=True)
 
     seq_table = SeqTable('seq_table', 'a table storing sequences for computing sequence embedding',
-                         io.set_dataio(names,    compression='gzip', chunks=True),
-                         io.set_dataio(sequence,   compression='gzip', maxshape=(None,), chunks=True),
-                         io.set_dataio(seqindex, compression='gzip', maxshape=(None,), chunks=True),
-                         io.set_dataio(seqlens, compression='gzip', maxshape=(None,), chunks=True),
-                         io.set_dataio(genomes, compression='gzip', maxshape=(None,), chunks=True),
+                         names, sequence, seqindex, seqlens, genomes,
                          genome_table=genome_table,
-                         id=io.set_dataio(ids, compression='gzip', maxshape=(None,), chunks=True),
+                         id=ids,
                          vocab=vocab)
 
 
 
-    difile = DeepIndexFile(seq_table, taxa_table, genome_table, tree, tree_graph, **di_kwargs)
+    difile = DeepIndexFile(seq_table, taxa_table, genome_table, **di_kwargs)
 
     before = datetime.now()
     io.write(difile, exhaust_dci=False, link_data=False)
@@ -495,6 +503,37 @@ def count_sequence(argv=None):
         logger.info(f'{size} - {path}')
         total += size
     logger.info(f'{total} total bases')
+
+
+def merge_metadata(argv=None):
+    """Merge metadata file from different sources"""
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('output', type=str, help='the path to write merged metadata CSV to')
+    parser.add_argument('-g', '--gtdb', type=str, nargs='*', help='metadata files from GTDB', default=list())
+    parser.add_argument('-i', '--ictv', type=str, nargs='*', help='metadata files from ICTV -- not implemented yet', default=list())
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
+
+    args = parser.parse_args(args=argv)
+
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s - %(message)s')
+    logger = logging.getLogger()
+
+    df = None
+
+    if args.gtdb:
+        dfs = list()
+        for csv in args.gtdb:
+            logger.info(f'reading {csv}')
+            dfs.append(pd.read_csv(csv, header=0, sep='\t'))
+        df = pd.concat(dfs)
+
+    df.to_csv(args.output, sep='\t', index=False)
+
+
 
 if __name__ == '__main__':
     prepare_data()

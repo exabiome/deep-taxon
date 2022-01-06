@@ -80,6 +80,13 @@ groups:
     doc: embedding of each taxa on n-dimensional space
     required: false
 
+  - name: domain
+    data_type_inc: EnumData
+    doc: The domain in the taxonomy
+  - name: domain_elements
+    data_type_inc: VectorData
+    doc: The available domains in the taxonomy
+
   - name: phylum
     data_type_inc: EnumData
     doc: The phylum in the taxonomy
@@ -154,6 +161,7 @@ groups:
   - name: tree
     data_type_inc: NewickString
     doc: the tree for the taxa in this file
+    quantity: '?'
   - name: distances
     data_type_inc: CondensedDistanceMatrix
     doc: distances between all pairs of taxa in this file
@@ -172,3 +180,4 @@ groups:
   - name: tree_graph
     data_type_inc: TreeGraph
     doc: A sparse form of the adjacency matrix for the phylogenetic tree
+    quantity: '?'

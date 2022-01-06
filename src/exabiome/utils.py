@@ -7,6 +7,8 @@ import sys
 import logging
 import warnings
 
+import numpy as np
+
 
 @contextmanager
 def ccm(cond, cm):
@@ -142,3 +144,15 @@ def int_list(string):
 
 def float_list(string):
     return _num_list(string, float)
+
+
+def distsplit(dset_len, size, rank):
+    q, r = divmod(dset_len, size)
+    if rank < r:
+        q += 1
+        b = rank*q
+        return np.arange(b, b+q)
+    else:
+        offset = (q+1)*r
+        b = (rank - r)*q + offset
+        return np.arange(b, b+q)

@@ -717,6 +717,7 @@ def aggregate_chunks(argv=None):
         logger.info('data are probabilities. computing and saving predictions')
         seq_preds = np.zeros(N, dtype=int)
         seq_votes = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
+
     seq_labels = np.zeros(N, dtype=int)
     seq_lens = np.zeros(N, dtype=int)
     seq_outputs = np.zeros((N, chunk_outputs.shape[1]), dtype=float)
@@ -734,8 +735,9 @@ def aggregate_chunks(argv=None):
     for i, seq in enumerate(uniq_seqs):
         mask = chunk_seq_ids == seq
         idx = np.where(mask)[0]
+        sub_outputs = chunk_outputs[idx]
 
-        tmp_outputs = torch.tensor(chunk_outputs[idx], device=gpu)
+        tmp_outputs = torch.tensor(sub_outputs, device=gpu)
         if args.prob:
             tmp_outputs = F.softmax(tmp_outputs, dim=1)
             shape = tmp_outputs.shape
@@ -750,8 +752,11 @@ def aggregate_chunks(argv=None):
         else:
             seq_outputs_var[i] = tmp_outputs.var(dim=0, unbiased=False).cpu()
             seq_outputs[i] = tmp_outputs.mean(dim=0).cpu()
-        seq_labels[i] = chunk_labels[mask][0]
+
+        sub_labels = chunk_labels[mask]
+        seq_labels[i] = sub_labels[0]
         seq_lens[i] = chunk_lens[mask].sum()
+
 
         # delete this for good measure so we don't leave data on the GPU
         del tmp_outputs
@@ -773,6 +778,9 @@ def aggregate_chunks(argv=None):
     if args.prob:
         seq_preds_dset = out.create_dataset('preds', shape=(N,), dtype=int)
         seq_votes_dset = out.create_dataset('votes', shape=(N, seq_outputs.shape[1]), dtype=float)
+
+
+
     seq_labels_dset = out.create_dataset('labels', shape=(N,), dtype=int)
     seq_lens_dset = out.create_dataset('lengths', shape=(N,), dtype=int)
     seq_ids_dset = out.create_dataset('seq_ids', shape=(N,), dtype=int)

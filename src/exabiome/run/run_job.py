@@ -59,6 +59,7 @@ def run_train(argv=None):
     parser.add_argument('-L', '--log',         help="the log file to store run information in", default='jobs.log')
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
     parser.add_argument('--profile',           help="use PTL profiling", action='store_true', default=False)
+    parser.add_argument('-a', '--chain',       help="chain jobs in submission", type=int, default=1)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
     rsc_grp.add_argument('-T', '--time',       help='the time to run the job for', default='01:00:00')
@@ -215,10 +216,12 @@ def run_train(argv=None):
             job.add_addl_jobflag(job.wait_flag, job_dep)
         job.set_env_var('CKPT', args.checkpoint)
         options += f' -c $CKPT'
-
     elif args.init:
         job.set_env_var('CKPT', args.init)
         options += f' -i $CKPT'
+    elif args.chain > 1:
+        job.set_env_var('CKPT', '')
+
 
     if args.features:
         job.set_env_var('FEATS_CKPT', args.features)
@@ -289,38 +292,57 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
-        job.add_command('$CMD >> $LOG 2>&1', run='srun')
+        job.add_command('$CMD >> $LOG 2>&1', run='srun', env_vars=["NCCL_DEBUG", "NCCL_IB_HCA", "NCCL_SOCKET_IFNAME"])
+
+
+    def submit(job, shell, message):
+        job_id = job.submit_job(shell)
+        if job_id is None:
+            print("unable to submit job")
+        else:
+            jobdir = f'{expdir}/train.{job_id}'
+            print(f'running job out of {jobdir}')
+            cfg_path = f'{jobdir}.yml'
+            print(f'writing config file to {cfg_path}')
+            with open(cfg_path, 'w') as f:
+                yaml.main.safe_dump(conf, f, default_flow_style=False)
+            dest = f'{jobdir}.sh'
+            print(f'copying submission script to {os.path.relpath(dest)}')
+            logpath = os.path.relpath(f'{jobdir}.log')
+            print(f'logging to {logpath}')
+            shutil.copyfile(args.sh, dest)
+            with open(args.log, 'a') as logout:
+                if message is None:
+                    message = input("please provide a message about this run:\n")
+                print(f'- {message}', file=logout)
+                print(f'  - date:          %s' % datetime.now().strftime("%c"), file=logout)
+                print(f'  - cmd:           {" ".join(argv)}', file=logout)
+                print(f'  - job directory: {jobdir}', file=logout)
+                print(f'  - log file:      {logpath}', file=logout)
+                print(f'  - config file:   {jobdir}.yml', file=logout)
+                print(f'  - batch script:  {jobdir}.sh', file=logout)
+                print('-------------------------------------------------------------------------------', file=logout)
+        return job_id, jobdir
 
     if args.sh is not None:
-        with open(args.sh, 'w') as out:
-            job.write(out)
         if args.submit:
-            job_id = job.submit_job(args.sh)
-            if job_id is None:
-                print("unable to submit job")
-            else:
-                jobdir = f'{expdir}/train.{job_id}'
-                print(f'running job out of {jobdir}')
-                cfg_path = f'{jobdir}.yml'
-                print(f'writing config file to {cfg_path}')
-                with open(cfg_path, 'w') as f:
-                    yaml.main.safe_dump(conf, f, default_flow_style=False)
-                dest = f'{jobdir}.sh'
-                print(f'copying submission script to {os.path.relpath(dest)}')
-                logpath = os.path.relpath(f'{jobdir}.log')
-                print(f'logging to {logpath}')
-                shutil.copyfile(args.sh, dest)
-                with open(args.log, 'a') as logout:
-                    if args.message is None:
-                        args.message = input("please provide a message about this run:\n")
-                    print(f'- {args.message}', file=logout)
-                    print(f'  - date:          %s' % datetime.now().strftime("%c"), file=logout)
-                    print(f'  - cmd:           {" ".join(argv)}', file=logout)
-                    print(f'  - job directory: {jobdir}', file=logout)
-                    print(f'  - log file:      {logpath}', file=logout)
-                    print(f'  - config file:   {jobdir}.yml', file=logout)
-                    print(f'  - batch script:  {jobdir}.sh', file=logout)
-                    print('-------------------------------------------------------------------------------', file=logout)
+            msg = args.message
+            for i in range(args.chain):
+                with open(args.sh, 'w') as out:
+                    job.write(out)
+                jobid, jobdir = submit(job, args.sh, msg)
+                msg = f'{args.message}, continue from {jobid}'
+                job_dep = jobid
+                if args.summit:
+                    job_dep = f'ended({job_dep})'
+                job.add_addl_jobflag(job.wait_flag, job_dep)
+                job.set_env_var('CKPT', os.path.join(jobdir, 'last.ckpt'))
+                job.set_env_var('OPTIONS', options + ' -c $CKPT')
+                job.set_env_var('CMD', train_cmd)
+                args.message = args.message[:args.message.find("resume")].strip().strip(',')
+        else:
+            with open(args.sh, 'w') as out:
+                job.write(out)
 
     else:
         job.write(sys.stdout)

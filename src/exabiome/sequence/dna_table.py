@@ -230,6 +230,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
 
     __columns__ = (
         {'name': 'taxon_id', 'description': 'the taxon ID'},
+        {'name': 'domain', 'description': 'the domain of each taxon', 'enum': True},
         {'name': 'phylum', 'description': 'the phylum for each taxon', 'enum': True},
         {'name': 'class', 'description': 'the class for each taxon', 'enum': True},
         {'name': 'order', 'description': 'the order for each taxon', 'enum': True},
@@ -242,6 +243,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
 
     @docval(*get_docval(DynamicTable.__init__),
             {'name': 'taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID'},
+            {'name': 'domain', 'type': ('array_data', 'data', EnumData), 'doc': 'the domain for each taxon'},
             {'name': 'phylum', 'type': ('array_data', 'data', EnumData), 'doc': 'the phylum for each taxon'},
             {'name': 'class', 'type': ('array_data', 'data', EnumData), 'doc': 'the class for each taxon'},
             {'name': 'order', 'type': ('array_data', 'data', EnumData), 'doc': 'the order for each taxon'},
@@ -252,7 +254,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
             {'name': 'rep_taxon_id', 'type': ('array_data', 'data', VectorData), 'doc': 'the taxon ID for the species representative', 'default': None})
     def __init__(self, **kwargs):
         taxon_id, embedding, rep_taxon_id = popargs('taxon_id', 'embedding', 'rep_taxon_id', kwargs)
-        taxonomy_labels = ['phylum', 'class', 'order', 'family', 'genus', 'species']
+        taxonomy_labels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
         taxonomy = popargs(*taxonomy_labels, kwargs)
         self.__taxmap = {t: i for i, t in enumerate(taxonomy_labels)}
 
@@ -389,7 +391,7 @@ class TreeGraph(CSRMatrix):
 @register_class('DeepIndexFile', NS)
 class DeepIndexFile(Container):
 
-    taxonomic_levels = ("phylum", "class", "order", "family", "genus", "species")
+    taxonomic_levels = ("domain", "phylum", "class", "order", "family", "genus", "species")
 
     __fields__ = ({'name': 'seq_table', 'child': True},
                   {'name': 'taxa_table', 'child': True},
@@ -401,8 +403,8 @@ class DeepIndexFile(Container):
     @docval({'name': 'seq_table', 'type': (AATable, DNATable, SequenceTable), 'doc': 'the table storing DNA sequences'},
             {'name': 'taxa_table', 'type': TaxaTable, 'doc': 'the table storing taxa information'},
             {'name': 'genome_table', 'type': GenomeTable, 'doc': 'the table storing taxonomic information about species in this file'},
-            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information'},
-            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree'},
+            {'name': 'tree', 'type': NewickString, 'doc': 'the table storing taxa information', 'default': None},
+            {'name': 'tree_graph', 'type': TreeGraph, 'doc': 'the graph representation of the tree', 'default': None},
             {'name': 'distances', 'type': CondensedDistanceMatrix, 'doc': 'the table storing taxa information', 'default': None})
     def __init__(self, **kwargs):
         seq_table, taxa_table, genome_table, distances, tree, tree_graph = popargs('seq_table', 'taxa_table', 'genome_table',
@@ -590,16 +592,18 @@ def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     if step is None:
         step = wlen
 
-    lengths = difile.seq_table['length'][:].astype(int)
+    dtype = np.uint32
+
+    lengths = difile.seq_table['length'][:].astype(dtype)
     # compute the number of chunks proced by each sequecne by adding
     # the number of full chunks in each sequence to the number of incomplete chunks
     n_chunks = ((lengths // step) +
                 (lengths % step > 0))                  # the number of chunks each sequence will produce
-    labels = np.repeat(difile.labels, n_chunks, axis=0)             # the labels for each chunks
-    seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
+    labels = np.repeat(difile.labels.astype(dtype), n_chunks, axis=0)             # the labels for each chunks
+    seq_idx = np.repeat(np.arange(len(n_chunks), dtype=dtype), n_chunks) # the index of the sequence for each chunk
     chunk_start = list()
     for i in range(len(difile)):
-        chunk_start.append(np.arange(0, lengths[i], step))
+        chunk_start.append(np.arange(0, lengths[i], step, dtype=dtype))
     chunk_start = np.concatenate(chunk_start)               # the start of each chunk in it's respective sequence
     chunk_end = chunk_start + wlen                     # the end of each chunk in it's respective sequence
     chunk_end = np.min(np.array([chunk_end,                 # trim any ends that go over the end of a sequence

@@ -18,7 +18,7 @@ import logging
 
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
@@ -47,9 +47,18 @@ def get_conf_args():
         'dropout_rate': dict(help='the dropout rate to use', default=0.5),
         'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
         'lr': dict(help='the learning rate for Adam', default=0.001),
-        'lr_scheduler': dict(default='adam', choices=AbstractLit.schedules, help='the learning rate schedule to use'),
-        'step_size': dict(help='the step size for the StepLR scheduler', default=10),
         'batch_size': dict(help='batch size', default=64),
+        'lr_scheduler': dict(default='step', choices=AbstractLit.schedules, help='the learning rate schedule to use'),
+
+        # step learning rate parameters
+        'step_size': dict(help='the number of epochs between steps when using lr_scheduler="step"', default=2),
+        'n_steps': dict(help='the number of steps to take when using lr_scheduler="step"', default=3),
+        'step_factor': dict(help='the factor to multiple LR when using lr_scheduler="step"', default=0.1),
+
+        # stochastic weight averaging parameters
+        'swa_start': dict(help='the epoch to start stochastic weight averaging', default=7),
+        'swa_anneal': dict(help='the number of epochs to anneal for when using SWA', default=1),
+
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
         'tnf': dict(help='input transform data to tetranucleotide frequency', default=False),
@@ -131,7 +140,8 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
-    parser.add_argument('--sanity', action='store_true', default=False, help='copy response data into input data')
+    parser.add_argument('--sanity', action='store_true', default=False,
+                        help='run five epochs with 40 batches for training and 5 batches for validation ')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
     grp.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
@@ -203,9 +213,6 @@ def process_args(args=None, return_io=False):
         num_nodes=args.num_nodes,
     )
 
-    if args.profile:
-        targs['profiler'] = True
-
     targs['accumulate_grad_batches'] = args.accumulate
 
     targs['gpus'] = process_gpus(args.gpus)
@@ -229,7 +236,7 @@ def process_args(args=None, return_io=False):
     if targs['gpus'] is not None:
         if targs['gpus'] == 1:
             targs['accelerator'] = GPUAccelerator(
-                precision_plugin = NativeMixedPrecisionPlugin(),
+                precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda'),
                 training_type_plugin = SingleDevicePlugin(torch.device(0))
             )
         else:
@@ -237,9 +244,10 @@ def process_args(args=None, return_io=False):
                 raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
             parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count())]
             targs['accelerator'] = GPUAccelerator(
-                precision_plugin = NativeMixedPrecisionPlugin(),
+                precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda'),
                 training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
-                                                 cluster_environment=env, num_nodes=args.num_nodes)
+                                                 cluster_environment=env, num_nodes=args.num_nodes,
+                                                 find_unused_parameters=False)
             )
             torch.cuda.set_device(env.local_rank())
             print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
@@ -256,7 +264,6 @@ def process_args(args=None, return_io=False):
     if args.sanity:
         targs['limit_train_batches'] = 40
         targs['limit_val_batches'] = 5
-        targs['max_epochs'] = min(args.epochs, 5)
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -293,30 +300,24 @@ def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
     global RANK
 
-    import signal
+    import numpy as np
     import traceback
-    def signal_handler(sig, frame):
-        print('I caught SIG_KILL!')
-        track = traceback.format_exc()
-        print(track)
-        raise KeyboardInterrupt
-        sys.exit(0)
-    signal.signal(signal.SIGTERM, signal_handler)
+    import os
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
-    if 'OMPI_COMM_WORLD_RANK' in os.environ:
+    if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
         from mpi4py import MPI
         comm = MPI.COMM_WORLD
         RANK = comm.Get_rank()
     else:
         RANK = 0
-        print('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
+        print('OMPI_COMM_WORLD_RANK or SLURMD_NODENAME not set in environment -- not using MPI')
 
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
     check_directory(outdir)
-    print0(args)
+    print0("Processed Args:", args)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -351,14 +352,15 @@ def run_lightning(argv=None):
     monitor, mode = (AbstractLit.val_loss, 'min') if args.manifold else (AbstractLit.val_acc, 'max')
     callbacks = [
         ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode=mode, monitor=monitor),
-        LearningRateMonitor(logging_interval='epoch')
+        LearningRateMonitor(logging_interval='epoch'),
+        DeviceStatsMonitor()
     ]
 
     if args.early_stop:
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
 
     if args.swa:
-        callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
+        callbacks.append(StochasticWeightAveraging(swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
 
     targs = dict(
         checkpoint_callback=True,
@@ -587,7 +589,7 @@ def filter_metrics(argv=None):
 
     dfs = list()
     for met in args.metrics:
-        df = pd.read_csv(met)
+        df = pd.read_csv(met, na_values='', keep_default_na=False)
 
         if args.validation:
             columns = ['epoch', 'step', 'validation_acc', 'validation_loss']
@@ -601,14 +603,17 @@ def filter_metrics(argv=None):
         lrdf = None
         if 'lr-AdamW' in df:
             lrdf = df.filter(['lr-AdamW'], axis=1)
-            lrdf = lrdf[np.logical_not(np.isnan(lrdf['lr-AdamW']))]
+            #lrdf = lrdf[np.logical_not(np.isnan(lrdf['lr-AdamW']))]
+            lrdf = lrdf[np.logical_not(lrdf['lr-AdamW'].isna())]
 
             epdf = df.filter(['epoch'], axis=1)
+            #epdf = epdf[np.logical_not(epdf['epoch'].isna()].astype(int)
             epdf = epdf[np.logical_not(np.isnan(epdf['epoch']))].astype(int)
             lrdf['epoch'] = np.unique(epdf['epoch'])
 
         df['epoch'] = df['epoch'].values.astype(int)
-        mask = np.logical_not(np.isnan(df[mask_col].values))
+        #mask = np.logical_not(np.isnan(df[mask_col].values))
+        mask = np.logical_not(df[mask_col].isna())
         df = df.filter(columns, axis=1)[mask]
 
         df = df.drop('step', axis=1)
