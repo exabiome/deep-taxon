@@ -1,5 +1,6 @@
 import argparse
 import sys
+from time import time
 import warnings
 
 import pytorch_lightning as pl
@@ -55,7 +56,9 @@ def dataset_stats(argv=None):
 
 
     args = parser.parse_args(argv)
+    before = time()
     dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+    print(f'Took {int(time() - before)} seconds to open {args.input}')
     difile = dataset.difile
 
     n_taxa = len(difile.taxa_table)
@@ -65,10 +68,10 @@ def dataset_stats(argv=None):
     wlen = args.window
     step = args.step
     if wlen is not None:
-        print(("Splitting %d sequences (from %d species) into %d "
-               "bp windows every %d bps produces %d samples") % (n_seqs, n_taxa, wlen, step, n_samples))
+        print((f'Splitting {n_seqs} sequences (from {n_taxa} species) into {wlen} '
+               f'bp windows every {step} bps produces {n_samples} samples'))
     else:
-        print(("Found %d sequences across %d species. %d total samples") % (n_seqs, n_taxa, n_samples))
+        print(f'Found {n_seqs} sequences across {n_taxa} species. {n_samples} total samples')
 
     if args.test_read:
         print("Attempting to read training data")
