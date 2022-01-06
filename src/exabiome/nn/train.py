@@ -18,7 +18,7 @@ import logging
 
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
@@ -213,9 +213,6 @@ def process_args(args=None, return_io=False):
         num_nodes=args.num_nodes,
     )
 
-    if args.profile:
-        targs['profiler'] = True
-
     targs['accumulate_grad_batches'] = args.accumulate
 
     targs['gpus'] = process_gpus(args.gpus)
@@ -303,19 +300,12 @@ def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
     global RANK
 
-    import signal
+    import numpy as np
     import traceback
-    def signal_handler(sig, frame):
-        print('I caught SIG_KILL!')
-        track = traceback.format_exc()
-        print(track)
-        raise KeyboardInterrupt
-        sys.exit(0)
-    signal.signal(signal.SIGTERM, signal_handler)
+    import os
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
-    print0(os.environ)
     if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
         from mpi4py import MPI
         comm = MPI.COMM_WORLD
@@ -362,7 +352,8 @@ def run_lightning(argv=None):
     monitor, mode = (AbstractLit.val_loss, 'min') if args.manifold else (AbstractLit.val_acc, 'max')
     callbacks = [
         ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode=mode, monitor=monitor),
-        LearningRateMonitor(logging_interval='epoch')
+        LearningRateMonitor(logging_interval='epoch'),
+        DeviceStatsMonitor()
     ]
 
     if args.early_stop:
