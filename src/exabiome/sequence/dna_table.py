@@ -592,16 +592,18 @@ def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     if step is None:
         step = wlen
 
-    lengths = difile.seq_table['length'][:].astype(int)
+    dtype = np.uint32
+
+    lengths = difile.seq_table['length'][:].astype(dtype)
     # compute the number of chunks proced by each sequecne by adding
     # the number of full chunks in each sequence to the number of incomplete chunks
     n_chunks = ((lengths // step) +
                 (lengths % step > 0))                  # the number of chunks each sequence will produce
-    labels = np.repeat(difile.labels, n_chunks, axis=0)             # the labels for each chunks
-    seq_idx = np.repeat(np.arange(len(n_chunks)), n_chunks) # the index of the sequence for each chunk
+    labels = np.repeat(difile.labels.astype(dtype), n_chunks, axis=0)             # the labels for each chunks
+    seq_idx = np.repeat(np.arange(len(n_chunks), dtype=dtype), n_chunks) # the index of the sequence for each chunk
     chunk_start = list()
     for i in range(len(difile)):
-        chunk_start.append(np.arange(0, lengths[i], step))
+        chunk_start.append(np.arange(0, lengths[i], step, dtype=dtype))
     chunk_start = np.concatenate(chunk_start)               # the start of each chunk in it's respective sequence
     chunk_end = chunk_start + wlen                     # the end of each chunk in it's respective sequence
     chunk_end = np.min(np.array([chunk_end,                 # trim any ends that go over the end of a sequence

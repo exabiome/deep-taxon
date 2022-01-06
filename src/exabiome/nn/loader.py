@@ -221,7 +221,7 @@ class SeqCollater:
             y_ret.append(y)
             size_ret.append(X.shape[l_idx])
             idx_ret.append(i)
-            seq_id_ret.append(seq_id)
+            seq_id_ret.append(int(seq_id))
         X_ret = torch.stack(X_ret)
         y_ret = torch.stack(y_ret)
         size_ret = torch.tensor(size_ret)
