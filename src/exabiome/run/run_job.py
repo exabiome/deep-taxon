@@ -6,7 +6,7 @@ import sys
 import ruamel.yaml as yaml
 
 from .summit import LSFJob
-from .cori import SlurmJob
+from .nersc import SlurmJob
 
 from ..utils import get_seed, check_argv
 
@@ -25,13 +25,13 @@ def check_summit(args):
         #args.conda_env = 'exabiome-wml-1.7.0-3'
 
 
-def check_cori(args):
+def check_nersc(args):
     if args.gpus is None:
         args.gpus = 4
     if args.nodes is None:
         args.nodes = 1
     if args.outdir is None:
-        args.outdir = os.path.abspath(os.path.expandvars("$CSCRATCH/exabiome/deep-taxon"))
+        args.outdir = os.path.abspath(os.path.expandvars("$SCRATCH/exabiome/deep-taxon"))
     if args.queue is None:
         args.queue = 'regular'
 
@@ -71,8 +71,9 @@ def run_train(argv=None):
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
-    grp.add_argument('--cori',   help='make script for running on NERSC Cori',  action='store_true', default=False)
-    grp.add_argument('--summit', help='make script for running on OLCF Summit', action='store_true', default=False)
+    grp.add_argument('--cori',        help='make script for running on NERSC Cori',  action='store_true', default=False)
+    grp.add_argument('--perlmutter',  help='make script for running on NERSC Perlmutter',  action='store_true', default=False)
+    grp.add_argument('--summit',      help='make script for running on OLCF Summit', action='store_true', default=False)
 
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
@@ -130,9 +131,10 @@ def run_train(argv=None):
         if not args.load:
             job.set_use_bb(True)
     else:
-        check_cori(args)
+        check_nersc(args)
         jobargs = get_jobargs(args)
         job = SlurmJob(**jobargs)
+        job.set_env_var('NCCL_IB_HCA', 'mlx5_0:1,mlx5_2:1,mlx5_4:1,mlx5_6:1')
 
     if args.conda_env is None:
         args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
@@ -265,6 +267,7 @@ def run_train(argv=None):
             job.add_command('ls $BB_INPUT', run='jsrun -n 1')
     elif args.cori:
         train_cmd += ' --slurm'
+        job.set_env_var('NCCL_SOCKET_IFNAME', 'eth')
         if job.use_bb:
             job.set_env_var('BB_INPUT', '/tmp/`basename $INPUT`')
             input_var = 'BB_INPUT'
@@ -273,6 +276,18 @@ def run_train(argv=None):
             job.add_command('cp $INPUT $BB_INPUT') #, run=f'srun -n {args.nodes} -r 1 -a 1')
             job.add_command('ls /tmp') #, run='jsrun -n 1')
             job.add_command('ls $BB_INPUT') #, run='jsrun -n 1')
+    elif args.perlmutter:
+        train_cmd += ' --slurm'
+        job.set_env_var('NCCL_SOCKET_IFNAME', 'hsn')
+        if job.use_bb:
+            job.set_env_var('BB_INPUT', '/tmp/`basename $INPUT`')
+            input_var = 'BB_INPUT'
+
+            job.add_command('echo "$INPUT to $BB_INPUT" >> $LOG')
+            job.add_command('cp $INPUT $BB_INPUT') #, run=f'srun -n {args.nodes} -r 1 -a 1')
+            job.add_command('ls /tmp') #, run='jsrun -n 1')
+            job.add_command('ls $BB_INPUT') #, run='jsrun -n 1')
+
 
     train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
 
