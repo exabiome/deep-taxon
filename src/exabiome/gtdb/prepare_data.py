@@ -106,7 +106,7 @@ def select_embeddings(ids_to_select, taxa_ids, embeddings):
 
 def prepare_data(argv=None):
     '''Aggregate sequence data GTDB using a file-of-files'''
-    import io
+    from io import BytesIO
     import tempfile
     import h5py
 
@@ -232,33 +232,6 @@ def prepare_data(argv=None):
     # Arguments for constructing the DeepIndexFile object
     ###############################
     di_kwargs = dict()
-
-    #############################
-    # read and trim tree
-    #############################
-    if args.tree:
-        logger.info('Reading tree from %s' % args.tree)
-        root = TreeNode.read(args.tree, format='newick')
-
-        logger.info('Found %d tips' % len(list(root.tips())))
-
-        logger.info('Transforming leaf names for shearing')
-        for tip in root.tips():
-            tip.name = tip.name[3:].replace(' ', '_')
-
-        logger.info('converting tree to Newick string')
-        bytes_io = io.BytesIO()
-        root.write(bytes_io, format='newick')
-        tree_str = bytes_io.getvalue()
-        di_kwargs['tree'] = NewickString('tree', data=tree_str)
-
-        # get distances from tree if they are not provided
-        tt_dmat = root.tip_tip_distances().filter(rep_taxdf.index)
-        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=tt_dmat.data)
-
-        adj, gt_indices = get_tree_graph(root, rep_taxdf)
-        di_kwargs['tree_graph'] = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
-
 
     taxa_ids = taxdf.index.values
 
@@ -420,6 +393,32 @@ def prepare_data(argv=None):
 
     genome_table = GenomeTable('genome_table', 'information about the genome each sequence comes from',
                                taxa_ids, taxa, taxa_table=taxa_table)
+
+    #############################
+    # read and trim tree
+    #############################
+    if args.tree:
+        logger.info('Reading tree from %s' % args.tree)
+        root = TreeNode.read(args.tree, format='newick')
+
+        logger.info('Found %d tips' % len(list(root.tips())))
+
+        logger.info('Transforming leaf names for shearing')
+        for tip in root.tips():
+            tip.name = tip.name[3:].replace(' ', '_')
+
+        logger.info('converting tree to Newick string')
+        bytes_io = BytesIO()
+        root.write(bytes_io, format='newick')
+        tree_str = bytes_io.getvalue()
+        di_kwargs['tree'] = NewickString('tree', data=tree_str)
+
+        # get distances from tree if they are not provided
+        tt_dmat = root.tip_tip_distances().filter(rep_taxdf.index)
+        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=tt_dmat.data)
+
+        adj, gt_indices = get_tree_graph(root, rep_taxdf)
+        di_kwargs['tree_graph'] = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')
 
 
     if args.gzip:
