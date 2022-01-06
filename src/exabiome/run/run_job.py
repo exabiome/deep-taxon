@@ -92,24 +92,6 @@ def run_train(argv=None):
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
 
-
-    #parser.add_argument('-M', '--model',        help="the model name", default='roznet')
-    #parser.add_argument('-s', '--seed',         help="the seed to use", default=None)
-    #parser.add_argument('-w', '--weighted',     help='weight classes in classification',
-    #                     nargs='?', const=True, default=False, choices=['ins', 'isns', 'ens'])
-    #parser.add_argument('-o', '--output_dims',  help="the number of dimensions to output", default=None)
-    #parser.add_argument('-A', '--accum',        help="the number of batches to accumulate", default=1)
-    #parser.add_argument('-b', '--batch_size',   help="the number of batches to accumulate", default=64)
-    #parser.add_argument('-W', '--window',       help="the size of chunks to use", default=4000)
-    #parser.add_argument('-S', '--step',         help="the chunking step size", default=4000)
-    #parser.add_argument('-s', '--seed',         help="the seed to use", default=None)
-    #parser.add_argument('-L', '--loss',         help="the loss function to use", default='M')
-    #parser.add_argument('-t', '--tgt_tax_lvl',  help='the taxonomic level to use', default=None)
-    #parser.add_argument('-O', '--optimizer', type=str, choices=['adam', 'lamb'], help='the optimizer to use', default='adam')
-    #parser.add_argument('--fwd_only',     help="use only fwd strand", action='store_true', default=False)
-    #parser.add_argument('-u', '--scheduler',    help="the learning rate scheduler to use", default=None)
-    #parser.add_argument('-r', '--rate',         help="the learning rate to use for training", default=0.001)
-
     args = parser.parse_args(argv)
 
     with open(args.config, 'r') as f:
@@ -134,24 +116,12 @@ def run_train(argv=None):
         check_nersc(args)
         jobargs = get_jobargs(args)
         job = SlurmJob(**jobargs)
-        job.set_env_var('NCCL_IB_HCA', 'mlx5_0:1,mlx5_2:1,mlx5_4:1,mlx5_6:1')
 
     if args.conda_env is None:
         args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
 
     if args.conda_env != 'none':
         job.set_conda_env(args.conda_env)
-
-    # job.nodes = args.nodes
-    # job.time = args.time
-    # job.gpus = args.gpus
-    # job.jobname = args.jobname
-
-    # if args.queue is not None:
-    #     job.queue = args.queue
-
-    # if args.project is not None:
-    #     job.project = args.project
 
     args.input = os.path.abspath(args.input)
 
@@ -244,7 +214,6 @@ def run_train(argv=None):
     job.error = job.output
 
     job.set_env_var('OMP_NUM_THREADS', 1)
-    job.set_env_var('NCCL_DEBUG', 'INFO')
 
     job.set_env_var('OPTIONS', options)
     job.set_env_var('OUTDIR', f'{expdir}/train.$JOB')
@@ -265,20 +234,8 @@ def run_train(argv=None):
             job.add_command('cp $INPUT $BB_INPUT', run=f'jsrun -n {args.nodes} -r 1 -a 1')
             job.add_command('ls /mnt/bb/$USER', run='jsrun -n 1')
             job.add_command('ls $BB_INPUT', run='jsrun -n 1')
-    elif args.cori:
+    else:
         train_cmd += ' --slurm'
-        job.set_env_var('NCCL_SOCKET_IFNAME', 'eth')
-        if job.use_bb:
-            job.set_env_var('BB_INPUT', '/tmp/`basename $INPUT`')
-            input_var = 'BB_INPUT'
-
-            job.add_command('echo "$INPUT to $BB_INPUT" >> $LOG')
-            job.add_command('cp $INPUT $BB_INPUT') #, run=f'srun -n {args.nodes} -r 1 -a 1')
-            job.add_command('ls /tmp') #, run='jsrun -n 1')
-            job.add_command('ls $BB_INPUT') #, run='jsrun -n 1')
-    elif args.perlmutter:
-        train_cmd += ' --slurm'
-        job.set_env_var('NCCL_SOCKET_IFNAME', 'hsn')
         if job.use_bb:
             job.set_env_var('BB_INPUT', '/tmp/`basename $INPUT`')
             input_var = 'BB_INPUT'
@@ -307,7 +264,7 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
-        job.add_command('$CMD >> $LOG 2>&1', run='srun', env_vars=["NCCL_DEBUG", "NCCL_IB_HCA", "NCCL_SOCKET_IFNAME"])
+        job.add_command('$CMD >> $LOG 2>&1', run='srun')
 
 
     def submit(job, shell, message):
