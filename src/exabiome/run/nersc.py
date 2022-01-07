@@ -51,9 +51,6 @@ class SlurmJob(AbstractJob):
         n_gpus = self.gpus
         self.use_bb = False
 
-        self.set_env_var('NCCL_IB_HCA', 'mlx5_0:1,mlx5_2:1,mlx5_4:1,mlx5_6:1')
-        self.set_env_var('NCCL_SOCKET_IFNAME', 'eth')
-
     def set_use_bb(self, use_bb=True):
         self.use_bb = use_bb
 

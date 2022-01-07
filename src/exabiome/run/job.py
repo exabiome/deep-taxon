@@ -87,6 +87,7 @@ class AbstractJob(metaclass=ABCMeta):
         self.modules = list()
         self.debug = False
         self.env_vars = OrderedDict()
+        self.to_export = dict()
         self.addl_job_flags = OrderedDict()
         self.set_env_var('JOB', f'${self.job_var}')
         self.commands = list()
@@ -98,8 +99,21 @@ class AbstractJob(metaclass=ABCMeta):
         for mod in module:
             self.modules.append(mod)
 
-    def set_env_var(self, var, value):
+    def set_env_var(self, var, value, export=None):
+        '''Add an environment variable to be set in the shell script
+
+        Args:
+            var:        the environment variable to set
+            value:      the value of the environment variable
+            export:     do not export by default. if not specified, use what has
+                        previously been set.
+        '''
         self.env_vars[var] = value
+        if export is None:
+            if var not in self.to_export:
+                self.to_export[var] = False
+        else:
+            self.to_export[var] = export
 
     def add_command(self, cmd, run=None, env_vars=None):
         if run is not None:
@@ -179,13 +193,14 @@ class AbstractJob(metaclass=ABCMeta):
             print(f'module load {mod}', file=f)
         print(file=f)
         if self.conda_env:
-            print(f'conda activate {self.conda_env}', file=f)
+            print(f'source activate {self.conda_env}', file=f)
         print(file=f)
         for k, v in self.env_vars.items():
+            export = "export " if self.to_export[k] else ""
             if isinstance(v, str):
-                print(f'{k}="{v}"', file=f)
+                print(f'{export}{k}="{v}"', file=f)
             else:
-                print(f'{k}={v}', file=f)
+                print(f'{export}{k}={v}', file=f)
         print(file=f)
         for c in self.commands:
             #if isinstance(c, dict):

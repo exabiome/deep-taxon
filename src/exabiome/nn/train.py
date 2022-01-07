@@ -27,6 +27,13 @@ from .lsf_environment import LSFEnvironment
 
 import torch
 
+try:
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    RANK = comm.Get_rank()
+except:
+    RANK = 0
+
 def parse_train_size(string):
     ret = float(string)
     if ret > 1.0:
@@ -233,6 +240,10 @@ def process_args(args=None, return_io=False):
     elif args.slurm:
         env = SLURMEnvironment()
 
+    if env is not None:
+        global RANK
+        RANK = env.global_rank()
+
     if targs['gpus'] is not None:
         if targs['gpus'] == 1:
             targs['accelerator'] = GPUAccelerator(
@@ -286,11 +297,6 @@ def process_args(args=None, return_io=False):
     return tuple(ret)
 
 
-#from mpi4py import MPI
-#
-#comm = MPI.COMM_WORLD
-#RANK = comm.Get_rank()
-RANK = 0
 
 def print0(*msg, **kwargs):
     if RANK == 0:
@@ -306,13 +312,13 @@ def run_lightning(argv=None):
 
     print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
-    if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
-        from mpi4py import MPI
-        comm = MPI.COMM_WORLD
-        RANK = comm.Get_rank()
-    else:
-        RANK = 0
-        print('OMPI_COMM_WORLD_RANK or SLURMD_NODENAME not set in environment -- not using MPI')
+    # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
+    #     from mpi4py import MPI
+    #     comm = MPI.COMM_WORLD
+    #     RANK = comm.Get_rank()
+    # else:
+    #     RANK = 0
+    #     print('OMPI_COMM_WORLD_RANK or SLURMD_NODENAME not set in environment -- not using MPI')
 
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
