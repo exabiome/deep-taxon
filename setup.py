@@ -26,6 +26,7 @@ reqs = [
     'numpy',
     'scipy',
     'scikit-learn',
+    'torch_optimizer',
     #'scikit-bio',
     'hdmf',
 ]
