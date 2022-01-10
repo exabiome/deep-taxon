@@ -294,7 +294,7 @@ def run_train(argv=None):
                 print(f'  - config file:   {jobdir}.yml', file=logout)
                 print(f'  - batch script:  {jobdir}.sh', file=logout)
                 print('-------------------------------------------------------------------------------', file=logout)
-        return job_id, jobdir
+        return job_id, jobdir, message
 
     if args.sh is not None:
         if args.submit:
@@ -302,7 +302,7 @@ def run_train(argv=None):
             for i in range(args.chain):
                 with open(args.sh, 'w') as out:
                     job.write(out)
-                jobid, jobdir = submit(job, args.sh, msg)
+                jobid, jobdir, args.message = submit(job, args.sh, msg)
                 msg = f'{args.message}, continue from {jobid}'
                 job_dep = jobid
                 if args.summit:
