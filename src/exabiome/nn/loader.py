@@ -65,11 +65,13 @@ def dataset_stats(argv=None):
     n_seqs = len(difile.seq_table)
 
     n_samples = len(dataset)
+    n_disc = difile.n_discarded
     wlen = args.window
     step = args.step
     if wlen is not None:
         print((f'Splitting {n_seqs} sequences (from {n_taxa} species) into {wlen} '
-               f'bp windows every {step} bps produces {n_samples} samples'))
+               f'bp windows every {step} bps produces {n_samples} samples '
+               f'(after discarding {n_disc} samples).'))
     else:
         print(f'Found {n_seqs} sequences across {n_taxa} species. {n_samples} total samples')
 

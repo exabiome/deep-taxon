@@ -531,12 +531,16 @@ class AbstractChunkedDIFile(DIFileFilter):
     An abstract class for chunking sequences from a DeepIndexFile
     """
 
-    def __init__(self, difile, seq_idx, start, end, labels):
+    def __init__(self, difile, seq_idx, start, end, labels, frac_good=None):
         super().__init__(difile)
         self.seq_idx = np.asarray(seq_idx)
         self.start = np.asarray(start)
         self.end = np.asarray(end)
         self.labels = np.asarray(labels)
+        if frac_good is not None:
+            self.n_discarded = int(len(seq_idx) / frac_good - len(seq_idx))
+        else:
+            self.n_discarded = -1
 
     def __len__(self):
         return len(self.seq_idx)
@@ -563,11 +567,11 @@ class WindowChunkedDIFile(AbstractChunkedDIFile):
     """
 
     def __init__(self, difile, wlen, step=None, min_seq_len=100):
-        seq_idx, chunk_start, chunk_end, labels = chunk_sequence(difile, wlen, step=step, min_seq_len=min_seq_len)
+        seq_idx, chunk_start, chunk_end, labels, frac_good = chunk_sequence(difile, wlen, step=step, min_seq_len=min_seq_len)
         self.wlen = wlen
         self.step = step
         self.min_seq_len = min_seq_len
-        super().__init__(difile, seq_idx, chunk_start, chunk_end, labels)
+        super().__init__(difile, seq_idx, chunk_start, chunk_end, labels, frac_good)
 
 def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     """
@@ -614,7 +618,7 @@ def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     seq_idx = seq_idx[mask]
     chunk_start = chunk_start[mask]
     chunk_end = chunk_end[mask]
-    return seq_idx, chunk_start, chunk_end, labels
+    return seq_idx, chunk_start, chunk_end, labels, mask.mean()
 
 
 
