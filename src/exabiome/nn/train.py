@@ -273,8 +273,8 @@ def process_args(args=None, return_io=False):
         )
 
     if args.sanity:
-        targs['limit_train_batches'] = 40
-        targs['limit_val_batches'] = 5
+        targs['limit_train_batches'] = 400
+        targs['limit_val_batches'] = 50
 
     if args.lr_find:
         targs['auto_lr_find'] = True
