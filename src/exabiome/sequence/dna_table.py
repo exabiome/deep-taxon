@@ -1,5 +1,6 @@
 from abc import ABCMeta, abstractmethod
 import math
+import warnings
 
 import numpy as np
 import torch
@@ -621,6 +622,90 @@ def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     return seq_idx, chunk_start, chunk_end, labels, mask.mean()
 
 
+def lazy_chunk_sequence(difile, wlen, step=None, min_seq_len=100):
+    if step is None:
+        step = wlen
+    if step < min_seq_len:
+        # This is required because math for computing the number of chunks per sequence
+        # assumes that the minimum chunk length is less than or equal to the step size
+        raise ValueError("step size must be greater than minimum sequence length")
+
+    lengths = np.asarray(difile.seq_table['length'].data)
+    n_chunks_per_seq = (lengths // step) + (lengths % step >= min_seq_len)
+    return np.cumsum(n_chunks_per_seq)
+
+
+class LabelComputer:
+
+    def __init__(self, lut, orig_labels, revcomp=False):
+        self.lut = lut
+        self.orig_labels = orig_labels
+        self.revcomp = revcomp
+        self.__len = lut[-1] * 2 if revcomp else lut[-1]
+
+    def __len__(self):
+        return self.__len
+
+    def __getitem__(self, i):
+        if i < 0:
+            i += self.__len
+            if i < 0:
+                raise IndexError(f'index {i} is out of bounds for LabelComputer of length {self.__len}')
+
+        if i > self.lut[-1]:
+            if self.revcomp:
+                i -= self.lut[-1]
+            else:
+                raise IndexError(f'index {i} is out of bounds for LabelComputer of length {self.__len}')
+
+        seq_i = np.searchsorted(self.lut, i, side="right")
+        return self.orig_labels[i]
+
+
+
+class LazyWindowChunkedDIFile(DIFileFilter):
+    """
+    An abstract class for chunking sequences from a DeepIndexFile
+    """
+
+    def __init__(self, difile, window, step, min_seq_len=100):
+        super().__init__(difile)
+        if min_seq_len < step:
+            min_seq_len = step
+            warnings.warn('setting minimum chunk size to chunk step size to avoid erroring out')
+        lut = lazy_chunk_sequence(difile, wlen, step, min_seq_len)
+        self.lut = lut
+        self.window = window
+        self.step = step
+        self.difile = difile
+        self.lengths = difile.seq_table['length']
+
+    def __len__(self):
+        return self.lut[-1]
+
+    def __getitem__(self, i):
+        if not isinstance(i, (int, np.integer)):
+            raise ValueError("LazyWindowChunkedDIFile only supports indexing with an integer")
+
+        if i < 0:
+            i += self.lut[i]
+            if i < 0:
+                raise IndexError(f'index {i} is out of bounds for LazyWindowChunkedDIFile of length {self.lut[-1]}')
+
+        seq_i = np.searchsorted(self.lut, i, side="right")
+
+        chunk_i = i if seq_i == 0 else i - self.lut[seq_i - 1]
+
+        s = self.step * chunk_i
+        e = s + min(self.window, self.lengths[seq_i])
+
+        item = self.difile[seq_i]
+        item['seq'] = item['seq'][s:e]
+        item['seq_idx'] = seq_i
+        item['id'] = i
+        item['length'] = e - s
+        return item
+
 
 class RevCompFilter(DIFileFilter):
 
@@ -659,7 +744,10 @@ class RevCompFilter(DIFileFilter):
 
     def __init__(self, difile):
         super().__init__(difile)
-        self.labels = np.concatenate([difile.labels, difile.labels])
+        if isinstance(difile, LazyWindowChunkedDIFile):
+            self.labels = LabelComputer(difile.labels.lut, difile.labels.orig_file, revcomp=True)
+        else:
+            self.labels = np.repeat(difile.labels)
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
         self.__len = 2*len(self.difile)
