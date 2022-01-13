@@ -779,7 +779,8 @@ class LazySeqDataset(Dataset):
         kwargs.setdefault('graph', False)
         kwargs.setdefault('load', False)
         kwargs.setdefault('ohe', False)
-        kwargs.setdefault('weighted', False)
+        kwargs.setdefault('tnf', False)
+        kwargs.setdefault('weighted', None)
 
         self.comm = kwargs.pop('comm', None)
 
