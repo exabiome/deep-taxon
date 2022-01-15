@@ -7,10 +7,6 @@ import torch
 import argparse
 from time import time
 
-#from .. import SeqDataset
-#from hdmf.common import get_hdf5io
-from ..loader import process_dataset
-
 from ...sequence import WindowChunkedDIFile
 from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
 

@@ -2,7 +2,6 @@ from argparse import Namespace
 import sys
 import os
 
-from .loader import read_dataset
 from . import models
 
 from ..utils import check_directory
