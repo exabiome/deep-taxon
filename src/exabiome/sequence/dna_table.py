@@ -1,6 +1,5 @@
 from abc import ABCMeta, abstractmethod
 import math
-import warnings
 
 import numpy as np
 import torch
@@ -17,10 +16,12 @@ from hdmf import Container, Data
 __all__ = ['DeepIndexFile',
            'AbstractChunkedDIFile',
            'WindowChunkedDIFile',
+           'LazyWindowChunkedDIFile',
            'RevCompFilter',
            'SequenceTable',
            'GenomeTable',
            'TaxaTable',
+           'lazy_chunk_sequence',
            'chunk_sequence']
 
 NS = 'deep-index'
@@ -623,16 +624,26 @@ def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
 
 
 def lazy_chunk_sequence(difile, wlen, step=None, min_seq_len=100):
-    if step is None:
-        step = wlen
-    if step < min_seq_len:
-        # This is required because math for computing the number of chunks per sequence
-        # assumes that the minimum chunk length is less than or equal to the step size
-        raise ValueError("step size must be greater than minimum sequence length")
+    if wlen < min_seq_len:
+        raise ValueError('window size (wlen) must be greater than or equal to minimum chunk length (min_seq_len)')
 
-    lengths = np.asarray(difile.seq_table['length'].data)
-    n_chunks_per_seq = (lengths // step) + (lengths % step >= min_seq_len)
-    return np.cumsum(n_chunks_per_seq)
+    # the length of each sequence
+    lengths = np.asarray(difile.seq_table['length'].data, dtype=int)
+
+    # C_min is the shortest chunk before filtering (for each sequence)
+    C_min = lengths % step
+    C_min[C_min == 0] = step
+
+    # n_short_C is the number of chunks that are shorter than M (for each sequence)
+    n_short_C = np.maximum(((min_seq_len - C_min - 1) // step) + 1, 0)
+
+    # n_C is the number of chunks in each sequence before filtering
+    n_C = lengths // step + ((lengths % step) > 0)
+
+    # ret is the number of valid chunks (i.e. chunks >= min_seq_len) for each sequence
+    ret = n_C - n_short_C
+    frac_good = ret.sum() / n_C.sum()
+    return ret, frac_good
 
 
 class LabelComputer:
@@ -652,14 +663,11 @@ class LabelComputer:
             if i < 0:
                 raise IndexError(f'index {i} is out of bounds for LabelComputer of length {self.__len}')
 
-        if i > self.lut[-1]:
-            if self.revcomp:
-                i -= self.lut[-1]
-            else:
-                raise IndexError(f'index {i} is out of bounds for LabelComputer of length {self.__len}')
+        if self.revcomp:
+            i = i // 2
 
         seq_i = np.searchsorted(self.lut, i, side="right")
-        return self.orig_labels[i]
+        return self.orig_labels[seq_i]
 
 
 
@@ -670,15 +678,14 @@ class LazyWindowChunkedDIFile(DIFileFilter):
 
     def __init__(self, difile, window, step, min_seq_len=100):
         super().__init__(difile)
-        if min_seq_len < step:
-            min_seq_len = step
-            warnings.warn('setting minimum chunk size to chunk step size to avoid erroring out')
-        lut = lazy_chunk_sequence(difile, wlen, step, min_seq_len)
-        self.lut = lut
+        counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
+        self.lut = np.cumsum(counts)
         self.window = window
         self.step = step
         self.difile = difile
         self.lengths = difile.seq_table['length']
+        self.labels = LabelComputer(self.lut, difile.labels)
+        self.n_discarded = int(self.lut[-1] / frac_good - self.lut[-1])
 
     def __len__(self):
         return self.lut[-1]
@@ -745,9 +752,9 @@ class RevCompFilter(DIFileFilter):
     def __init__(self, difile):
         super().__init__(difile)
         if isinstance(difile, LazyWindowChunkedDIFile):
-            self.labels = LabelComputer(difile.labels.lut, difile.labels.orig_file, revcomp=True)
+            self.labels = LabelComputer(difile.labels.lut, difile.labels, revcomp=True)
         else:
-            self.labels = np.repeat(difile.labels)
+            self.labels = np.repeat(difile.labels, 2)
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
         self.__len = 2*len(self.difile)
