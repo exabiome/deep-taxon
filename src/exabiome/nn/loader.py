@@ -59,7 +59,7 @@ def dataset_stats(argv=None):
     args = parser.parse_args(argv)
     before = time()
     dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True, lazy_chunk=args.lazy)
-    print(f'Took {int(time() - before)} seconds to open {args.input}')
+    print(f'Took {time() - before} seconds to open {args.input}')
     difile = dataset.difile
 
     n_taxa = len(difile.taxa_table)
@@ -832,7 +832,7 @@ class LazySeqDataset(Dataset):
     def load(self, sequence=False, device=None):
         _load = lambda x: x[:]
         self.orig_difile.seq_table['id'].transform(_load)
-        self.orig_difile.seq_table['length'].transform(_load)
+        self.orig_difile.seq_table['length'].transform(lambda x: x[:].astype(int))
         self.orig_difile.seq_table['sequence_index'].transform(_load)
         if sequence:
             self.orig_difile.seq_table['sequence_index'].target.transform(_load)

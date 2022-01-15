@@ -683,7 +683,7 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         self.window = window
         self.step = step
         self.difile = difile
-        self.lengths = difile.seq_table['length']
+        self.lengths = difile.seq_table['length'].data
         self.labels = LabelComputer(self.lut, difile.labels)
         self.n_discarded = int(self.lut[-1] / frac_good - self.lut[-1])
 
