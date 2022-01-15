@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
-from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence
+from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, LazyWindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
 from ..utils import parse_seed, distsplit
 
 
@@ -47,6 +47,7 @@ def dataset_stats(argv=None):
 
     parser =  argparse.ArgumentParser()
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    parser.add_argument('-L', '--lazy', action='store_true', default=False, help='lazy load sequences')
     add_dataset_arguments(parser)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
@@ -57,7 +58,7 @@ def dataset_stats(argv=None):
 
     args = parser.parse_args(argv)
     before = time()
-    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True, lazy_chunk=args.lazy)
     print(f'Took {int(time() - before)} seconds to open {args.input}')
     difile = dataset.difile
 
@@ -101,50 +102,6 @@ def dataset_stats(argv=None):
                 bad = True
         if not bad:
             print(f'taxonomic hierarchy for {tl1} to {tl2} okay')
-
-
-def read_dataset(path):
-    hdmfio = get_hdf5io(path, 'r')
-    difile = hdmfio.read()
-    dataset = SeqDataset(difile)
-    return dataset, hdmfio
-
-
-def process_dataset(args, path=None):
-    """
-    Process *input* argument and return dataset and HDMFIO object
-    Args:
-        args (Namespace):       command-line arguments passed by parser
-    """
-    dataset, io = read_dataset(path or args.input)
-
-    if not hasattr(args, 'classify'):
-        raise ValueError('Parser must check for classify/regression/manifold '
-                         'to determine the number of outputs')
-    if args.classify:
-        dataset.set_classify(True)
-        dataset.difile.set_label_key(args.tgt_tax_lvl)
-        args.n_outputs = dataset.difile.n_outputs
-    elif args.manifold:
-        if args.tgt_tax_lvl != 'species':
-            raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
-        dataset.set_classify(True)
-    else:
-        raise ValueError('classify (-C) or manifold (-M) should be set')
-
-    args.window, args.step = check_window(args.window, args.step)
-
-    # Process any arguments that impact how we set up the dataset
-    dataset.set_ohe(False)
-    if args.window is not None:
-        dataset.set_chunks(args.window, args.step)
-        #dataset.difile = WindowChunkedDIFile(dataset.difile, args.window, args.step)
-    if not getattr(args, 'fwd_only', False):
-        dataset.set_revcomp()
-    if args.load:
-        dataset.load()
-
-    return dataset, io
 
 
 class SplitCollater:
@@ -395,99 +352,6 @@ class TnfCollater:
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
-class SeqDataset(Dataset):
-    """
-    A torch Dataset to handle reading samples read from a DeepIndex file
-    """
-
-    def __init__(self, difile, classify=True):
-        self.difile = difile
-        self.set_classify(classify)
-        self._target_key = 'class_label' if classify else 'embedding'
-        self.vocab_len = len(self.difile.seq_table['sequence'].target.elements)
-        self.__ohe = True
-
-    def set_classify(self, classify):
-        self._classify = classify
-        if classify:
-            self._label_key = 'id'
-            self._label_dtype = torch.int64
-        else:
-            self._label_key = 'embedding'
-            self._label_dtype = torch.float32
-
-        # THIS HAS BEEN A MAJOR SOURCE OF PAIN. DYNAMIC TABLE NEEDS BETTER SLICING
-        # It should be possible to select individual columns without haveing to modify
-        # the state of the underlying DynamicTable
-        self.difile.set_label_key(self._label_key)
-
-    def set_chunks(self, window, step=None):
-        self.difile = WindowChunkedDIFile(self.difile, window, step)
-
-    def set_revcomp(self, revcomp=True):
-        self.difile = RevCompFilter(self.difile)
-
-    def set_ohe(self, ohe=True):
-        self.__ohe = ohe
-
-    def __len__(self):
-        return len(self.difile)
-
-    @staticmethod
-    def _to_numpy(data):
-        return data[:]
-
-    @staticmethod
-    def _to_torch(device=None, dtype=None):
-        def func(data):
-            return torch.tensor(data, device=device, dtype=dtype)
-        return func
-
-    def _check_load(self, data, transforms):
-        if not isinstance(data.data, torch.Tensor):
-            if not isinstance(transforms, (tuple, list)):
-                transforms = [transforms]
-            for tfm in transforms:
-                data.transform(tfm)
-
-    def load(self, device=None):
-        def _load(data):
-            return data[:]
-
-        tfm = self._to_torch(device)
-        def to_sint(data):
-            return data[:].astype(np.int16)
-        self._check_load(self.difile.seq_table['sequence'].target, [to_sint, tfm])
-        self._check_load(self.difile.taxa_table[self._label_key], tfm)
-        self._check_load(self.difile.distances, tfm)
-
-        for col in self.difile.seq_table.children:
-            if col.name == 'sequence':
-                continue
-            col.transform(_load)
-
-        for col in self.difile.taxa_table.children:
-            if col.name == self._label_key:
-                continue
-            col.transform(_load)
-
-
-    def __getitem__(self, i):
-        # get sequence
-        item = self.difile[i]
-        idx = item['id']
-        seq = item['seq']
-        label = item['label']
-        seq_id = item.get('seq_idx', -1)
-        ## one-hot encode sequence
-        seq = torch.as_tensor(seq, dtype=torch.int64)
-        if self.__ohe:
-            seq = F.one_hot(seq, num_classes=self.vocab_len).float()
-        seq = seq.T
-        label = torch.as_tensor(label, dtype=self._label_dtype)
-        return (idx, seq, label, seq_id)
-
-
 def train_test_validate_split(data, stratify=None, random_state=None,
                               test_size=0.1, train_size=0.8, validation_size=0.1):
     """
@@ -570,6 +434,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     index = np.arange(len(dataset))
     #stratify = dataset.difile.labels
     stratify = dataset.sample_labels
+
     if downsample is not None:
         index, _, stratify, _ = train_test_split(index, stratify,
                                                  train_size=downsample,
@@ -768,7 +633,8 @@ class LazySeqDataset(Dataset):
 
 
     """
-    def __init__(self, path=None, keep_open=False, hparams=None, **kwargs):
+    def __init__(self, path=None, keep_open=False, hparams=None, lazy_chunk=True, **kwargs):
+        self.__lazy_chunk = lazy_chunk
         kwargs.setdefault('input', None)
         kwargs.setdefault('window', None)
         kwargs.setdefault('step', None)
@@ -807,8 +673,15 @@ class LazySeqDataset(Dataset):
         # open to get dataset length
         self.open()
         self.__len = len(self.difile)
-        self.sample_labels = self.difile.labels
-        self.taxa_labels, self.taxa_counts = np.unique(self.sample_labels, return_counts=True)
+        self.__sample_labels = None
+        if lazy_chunk:
+            counts = self.difile.lut.copy()
+            counts[1:] = counts[1:] - counts[:-1]
+            self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
+            self.taxa_labels = np.arange(len(self.taxa_counts))
+        else:
+            self.__sample_labels = self.difile.labels
+            self.taxa_labels, self.taxa_counts = np.unique(self.__sample_labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
 
         self.vocab = np.chararray.upper(self.orig_difile.seq_table['sequence'].target.elements[:].astype('U1'))
@@ -860,12 +733,26 @@ class LazySeqDataset(Dataset):
             if hparams.weighted == 'phy':
                 self.distances = self.difile.distances.data[:]
         else:
-            raise ValueError('classify (-C) or manifold (-M) should be set')
+            self.classify = True
+            if hparams.weighted == 'phy':
+                self.distances = self.difile.distances.data[:]
 
         self.__ohe = hparams.ohe
 
         if not keep_open:
             self.close()
+
+    @property
+    def sample_labels(self):
+        if self.__lazy_chunk:
+            counts = self.difile.lut.copy()
+            counts[1:] = counts[1:] - counts[:-1]
+            ret = np.repeat(self.orig_difile.labels, counts)
+            if self.revcomp:
+                ret = np.repeat(ret, 2)
+            return ret
+        else:
+            return self.__sample_labels
 
     def close(self):
         if self.io is not None:
@@ -908,10 +795,13 @@ class LazySeqDataset(Dataset):
         self.open()
 
     def set_chunks(self, window, step=None):
-        chunks = self._chunkings.get((window, step))
-        if chunks is None:
-            self._chunkings[(window, step)] = chunk_sequence(self.difile, window, step)
-        self.difile = AbstractChunkedDIFile(self.difile, *self._chunkings[(window, step)])
+        if self.__lazy_chunk:
+            self.difile = LazyWindowChunkedDIFile(self.difile, window, step)
+        else:
+            chunks = self._chunkings.get((window, step))
+            if chunks is None:
+                self._chunkings[(window, step)] = chunk_sequence(self.difile, window, step)
+            self.difile = AbstractChunkedDIFile(self.difile, *self._chunkings[(window, step)])
 
     def set_revcomp(self, revcomp=True):
         self.difile = RevCompFilter(self.difile)
