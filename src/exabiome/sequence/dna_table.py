@@ -687,6 +687,11 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         self.labels = LabelComputer(self.lut, difile.labels)
         self.n_discarded = int(self.lut[-1] / frac_good - self.lut[-1])
 
+    def get_counts(self):
+        counts = self.lut.copy()
+        counts[1:] = counts[1:] - counts[:-1]
+        return counts
+
     def __len__(self):
         return self.lut[-1]
 
@@ -712,6 +717,56 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         item['id'] = i
         item['length'] = e - s
         return item
+
+
+
+class LazySubset:
+
+    def __init__(self, chunked_difile, subset_counts, starts=None):
+        self.lut = chunked_difile.lut
+        self.window = chunked_difile.window
+        self.step = chunked_difile.step
+        self.difile = chunked_difile.difile
+        self.lengths = chunked_difile.lengths
+
+        self.subset_lut = np.cumsum(subset_counts)
+        self.labels = LabelComputer(self.subset_lut, difile.labels)
+        self.starts = starts
+
+    def __len__(self):
+        return self.subset_lut[-1]
+
+    def __getitem__(self, i):
+        if not isinstance(i, (int, np.integer)):
+            raise ValueError("LazyWindowChunkedDIFile only supports indexing with an integer")
+
+        if i < 0:
+            i += self.lut[i]
+            if i < 0:
+                raise IndexError(f'index {i} is out of bounds for LazyWindowChunkedDIFile of length {self.lut[-1]}')
+
+        seq_i = np.searchsorted(self.subset_lut, i, side="right")
+
+        n_chunks = self.lut[seq_i]
+        if seq_i > 0:
+            n_chunks -= self.lut[seq_i-1]
+
+        chunk_indices = np.random.default_rng(seed=self.seed + seq_i).permutation(n_chunks)
+
+        chunk_i = i if seq_i == 0 else i - self.subset_lut[seq_i - 1]
+        if self.starts is not None:
+            chunk_i += self.starts[seq_i]
+
+        s = self.step * chunk_i
+        e = s + min(self.window, self.lengths[seq_i])
+
+        item = self.difile[seq_i]
+        item['seq'] = item['seq'][s:e]
+        item['seq_idx'] = seq_i
+        item['id'] = i
+        item['length'] = e - s
+        return item
+
 
 
 class RevCompFilter(DIFileFilter):
@@ -751,7 +806,7 @@ class RevCompFilter(DIFileFilter):
 
     def __init__(self, difile):
         super().__init__(difile)
-        if isinstance(difile, LazyWindowChunkedDIFile):
+        if isinstance(difile, (LazyWindowChunkedDIFile, LazySubset)):
             self.labels = LabelComputer(difile.labels.lut, difile.labels, revcomp=True)
         else:
             self.labels = np.repeat(difile.labels, 2)

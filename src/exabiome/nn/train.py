@@ -214,6 +214,7 @@ def process_args(args=None, return_io=False):
 
     if args.num_workers > 0:
         data_mod.dataset.close()
+        #pass
 
     targs = dict(
         max_epochs=args.epochs,
@@ -242,7 +243,11 @@ def process_args(args=None, return_io=False):
 
     if env is not None:
         global RANK
-        RANK = env.global_rank()
+        try:
+            RANK = env.global_rank()
+        except:
+            print(">>> Could not get global rank -- setting RANK to 0", file=sys.stderr)
+            RANK = 0
 
     if targs['gpus'] is not None:
         if targs['gpus'] == 1:
@@ -373,6 +378,7 @@ def run_lightning(argv=None):
         callbacks=callbacks,
         logger = CSVLogger(save_dir=output('logs')),
         profiler = "simple",
+        num_sanity_val_steps = 0,
     )
     targs.update(addl_targs)
 

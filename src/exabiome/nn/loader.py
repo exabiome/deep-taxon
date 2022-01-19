@@ -182,7 +182,7 @@ class SeqCollater:
             X_ret.append(X_)
             y_ret.append(y)
             size_ret.append(X.shape[l_idx])
-            idx_ret.append(i)
+            idx_ret.append(int(i))
             seq_id_ret.append(int(seq_id))
         X_ret = torch.stack(X_ret)
         y_ret = torch.stack(y_ret)
@@ -352,41 +352,39 @@ class TnfCollater:
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
-def train_test_validate_split(data, stratify=None, random_state=None,
-                              test_size=0.1, train_size=0.8, validation_size=0.1):
+import torch.distributed as dist
+
+def train_test_validate_split(indices, stratify=None, random_state=None,
+                              test_size=None, train_size=None, validation_size=None):
     """
-    Return train test validation split of given data
-    test_size, train_size, validation_size will all be normalized before subsequent
-    calls to train_test_split
+    Return train test validation split for the given indices
     Args:
-        data (str): the path to the DeepIndex file
+        indices   : indices for the dataset
         kwargs    : any additional arguments to pass into torch.DataLoader
     """
-    indices = np.arange(len(data))
-
-    tot = train_size + test_size + validation_size
-    train_size /= tot
-    test_size /= tot
-    validation_size /= tot
 
     random_state = check_random_state(random_state)
 
+    before = time()
+    print("Splitting out training data", file=sys.stderr)
     train_idx, tmp_idx = train_test_split(indices,
                                           train_size=train_size,
                                           stratify=stratify,
                                           random_state=random_state)
+    after = time()
+    print(f'Took {after - before} seconds to split out training data', file=sys.stderr)
 
     if stratify is not None:
         stratify = stratify[tmp_idx]
 
-    tot = test_size + validation_size
-    test_size /= tot
-    validation_size /= tot
-
+    before = time()
+    print("Splitting validation and test data", file=sys.stderr)
     test_idx, val_idx = train_test_split(tmp_idx,
                                          train_size=test_size,
                                          stratify=stratify,
                                          random_state=random_state)
+    after = time()
+    print(f'Took {after - before} seconds to split validation and test data', file=sys.stderr)
 
     train_idx = indices[train_idx]
     test_idx = indices[test_idx]
@@ -431,29 +429,70 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
         *shuffle* will be ignored for when creating validation and test
         loaders i.e. no shuffling for validation and testing
     """
-    index = np.arange(len(dataset))
-    #stratify = dataset.difile.labels
-    stratify = dataset.sample_labels
+    random_state = check_random_state(random_state)
+    n_samples = len(dataset)
+    test_size = int(n_samples/10)
+    validation_size = test_size
+    train_size = n_samples - 2 * test_size
 
-    if downsample is not None:
-        index, _, stratify, _ = train_test_split(index, stratify,
-                                                 train_size=downsample,
-                                                 stratify=stratify,
-                                                 random_state=random_state)
+    print(f'Permuting {len(dataset)} integers', file=sys.stderr)
+    before = time()
+    indices = random_state.permutation(np.arange(len(dataset), dtype=np.uint32))
+    after = time()
+    print(f'Took {after - before} to permute indices', file=sys.stderr)
 
-    train_idx, test_idx, validate_idx = train_test_validate_split(index,
-                                                                  stratify=stratify,
-                                                                  random_state=random_state)
+    train_idx = indices[:train_size]
+    validate_idx = indices[train_size:train_size + validation_size]
+    test_idx = indices[train_size + validation_size:]
+
+    #rank = dist.get_rank()
+
+    # from mpi4py import MPI
+    # comm =  MPI.COMM_WORLD
+    # rank = comm.Get_rank()
+    # print(f'My rank is {rank}', file=sys.stderr)
+
+    # if rank == 0:
+    #     dataset.open()  # open the dataset so we can get labels for each sample
+    #     before = time()
+    #     stratify = dataset.sample_labels
+    #     after = time()
+    #     print(f'Took {after - before} seconds to get sample labels for stratifying splits', file=sys.stderr)
+
+    #     before = time()
+    #     train_idx, test_idx, validate_idx = train_test_validate_split(np.arange(len(dataset)),
+    #                                                                   stratify=stratify,
+    #                                                                   random_state=random_state,
+    #                                                                   train_size=train_size,
+    #                                                                   validation_size=validation_size,
+    #                                                                   test_size=test_size,)
+    #     after = time()
+    #     print(f'Took {after - before} seconds to compute splits', file=sys.stderr)
+    #     dataset.close()   # now close it so dataset can be pickled when passing it to DataLoader workers
+    # else:
+    #     train_idx = np.zeros(train_size)
+    #     validate_idx = np.zeros(validation_size)
+    #     test_idx = np.zeros(test_size)
+
+    # if rank == 0:
+    #     print(f'Attempting to broadcast train_idx', file=sys.stderr)
+    # comm.Bcast(train_idx, root=0)
+    # if rank == 0:
+    #     print(f'Attempting to broadcast validate_idx', file=sys.stderr)
+    # comm.Bcast(validate_idx, root=0)
+    # if rank == 0:
+    #     print(f'Attempting to broadcast test_idx', file=sys.stderr)
+    # comm.Bcast(test_idx, root=0)
 
     if dataset.tnf:
         collater = TnfCollater(dataset.vocab)
-    else:
-        collater = SeqCollater(dataset.padval)
-
-    if dataset.manifold:
+    elif dataset.manifold:
         collater = DistanceCollater(dataset.distances, seq_collater=collater)
     elif dataset.graph:
         collater = GraphCollater(dataset.node_ids, seq_collater=collater)
+    else:
+        collater = SeqCollater(dataset.padval)
+
 
     if kwargs.get('num_workers', None) not in (None, 0):
         if dataset.difile is not None:
@@ -552,8 +591,9 @@ class DeepIndexDataModule(pl.LightningDataModule):
         return self.loaders['validate']
 
     def test_dataloader(self):
-        self._check_loaders()
-        return self.loaders['test']
+        #self._check_loaders()
+        #return self.loaders['test']
+        return None
 
 
 class LazySeqDataset(Dataset):
@@ -655,6 +695,9 @@ class LazySeqDataset(Dataset):
                 raise ValueError('hparams must be a Namespace object')
             for k, v in vars(hparams).items():
                 kwargs[k] = v
+
+        self.val_frac = kwargs.pop('val_frac', 0.2)
+
         hparams = argparse.Namespace(**kwargs)
 
         self.path = path or hparams.input
@@ -674,7 +717,7 @@ class LazySeqDataset(Dataset):
         self.open()
         self.__len = len(self.difile)
         self.__sample_labels = None
-        if lazy_chunk:
+        if self.__lazy_chunk:
             counts = self.difile.lut.copy()
             counts[1:] = counts[1:] - counts[:-1]
             self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
@@ -782,8 +825,18 @@ class LazySeqDataset(Dataset):
 
         if self.window is not None:
             self.set_chunks(self.window, self.step)
+
         if self.revcomp:
             self.set_revcomp()
+
+        #TODO    fill this in
+        if self.train_subset:
+            self.set_subset()
+        elif self.val_subset:
+            self.set_subset(validate=True)
+        elif self.test_subset:
+            pass
+
 
     def worker_init(self, worker_id):
         # September 15, 2021, ajtritt
@@ -805,6 +858,17 @@ class LazySeqDataset(Dataset):
 
     def set_revcomp(self, revcomp=True):
         self.difile = RevCompFilter(self.difile)
+
+    def set_subset(self, validate=False, test=False):
+        counts = self.difile.get_counts()
+        val_counts = np.round(self.val_frac * counts).astype(int)
+        train_counts = counts - val_counts
+        if validate:
+            self.difile = LazySubset(self.difile, val_counts, starts=train_counts)
+        elif test:
+            raise ValueError("Cannot do this yet, and I may never do it!")
+        else:
+            self.difile = LazySubset(self.difile, train_counts)
 
     def set_ohe(self, ohe=True):
         self.__ohe = ohe
