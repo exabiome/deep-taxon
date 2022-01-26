@@ -679,7 +679,8 @@ class LazyWindowChunkedDIFile(DIFileFilter):
     def __init__(self, difile, window, step, min_seq_len=100):
         super().__init__(difile)
         counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
-        self.lut = np.cumsum(counts)
+        self.orig_lut = np.cumsum(counts)
+        self.lut = self.orig_lut
         self.window = window
         self.step = step
         self.difile = difile
@@ -687,13 +688,35 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         self.labels = LabelComputer(self.lut, difile.labels)
         self.n_discarded = int(self.lut[-1] / frac_good - self.lut[-1])
 
-    def get_counts(self):
-        counts = self.lut.copy()
+        self.subset_counts = None
+        self.seed = None
+        self.starts = None
+
+    def get_counts(self, orig=False):
+        if orig:
+            counts = self.orig_lut.copy()
+        else:
+            counts = self.lut.copy()
         counts[1:] = counts[1:] - counts[:-1]
         return counts
 
     def __len__(self):
         return self.lut[-1]
+
+    def set_subset(self, subset_counts, seed, starts=None):
+        """
+        To reset, pass None for subset_counts
+        """
+        self.subset_counts = subset_counts
+        if self.subset_counts is None:
+            self.lut = self.orig_lut
+            self.starts = None
+            self.seed = None
+        else:
+            self.lut = np.cumsum(self.subset_counts)
+            self.starts = starts
+            self.seed = seed
+        self.labels = LabelComputer(self.lut, self.difile.labels)
 
     def __getitem__(self, i):
         if not isinstance(i, (int, np.integer)):
@@ -705,8 +728,14 @@ class LazyWindowChunkedDIFile(DIFileFilter):
                 raise IndexError(f'index {i} is out of bounds for LazyWindowChunkedDIFile of length {self.lut[-1]}')
 
         seq_i = np.searchsorted(self.lut, i, side="right")
-
         chunk_i = i if seq_i == 0 else i - self.lut[seq_i - 1]
+
+        if self.subset_counts is not None:
+            if self.starts is not None:
+                chunk_i += self.starts[seq_i]
+            n_chunks = self.orig_lut[seq_i] if seq_i == 0 else self.orig_lut[seq_i] - self.orig_lut[seq_i-1]
+            chunk_indices = np.random.default_rng(seed=self.seed + seq_i).permutation(n_chunks)
+            chunk_i = chunk_indices[chunk_i]
 
         s = self.step * chunk_i
         e = s + min(self.window, self.lengths[seq_i])
@@ -723,6 +752,7 @@ class LazyWindowChunkedDIFile(DIFileFilter):
 class LazySubset:
 
     def __init__(self, chunked_difile, subset_counts, starts=None):
+        self.orig_difile = chunked_difile
         self.lut = chunked_difile.lut
         self.window = chunked_difile.window
         self.step = chunked_difile.step
@@ -806,16 +836,17 @@ class RevCompFilter(DIFileFilter):
 
     def __init__(self, difile):
         super().__init__(difile)
-        if isinstance(difile, (LazyWindowChunkedDIFile, LazySubset)):
-            self.labels = LabelComputer(difile.labels.lut, difile.labels, revcomp=True)
-        else:
-            self.labels = np.repeat(difile.labels, 2)
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
-        self.__len = 2*len(self.difile)
+
+    def labels(self):
+        if isinstance(self.difile, LazyWindowChunkedDIFile):
+            self.labels = LabelComputer(self.difile.labels.lut, self.difile.labels, revcomp=True)
+        else:
+            self.labels = np.repeat(self.difile.labels, 2)
 
     def __len__(self):
-        return self.__len
+        return 2 * len(self.difile)
 
     def __getitem__(self, arg):
         oarg = arg
@@ -826,5 +857,5 @@ class RevCompFilter(DIFileFilter):
                 item['seq'] = self.rcmap[item['seq'].astype(int)]
         except AttributeError as e:
             raise ValueError("Cannot run without loading data. Use -l to load data") from e
-        item['id'] = oarg if oarg >= 0 else self.__len + oarg
+        item['id'] = oarg if oarg >= 0 else len(self) + oarg
         return item

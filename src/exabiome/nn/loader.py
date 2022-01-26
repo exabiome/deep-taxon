@@ -47,19 +47,35 @@ def dataset_stats(argv=None):
 
     parser =  argparse.ArgumentParser()
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
-    parser.add_argument('-L', '--lazy', action='store_true', default=False, help='lazy load sequences')
     add_dataset_arguments(parser)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
-    test_group.add_argument('-s', '--seed', type=parse_seed, default=None, help='seed for an 80/10/10 split before reading an element')
+    test_group.add_argument('-L', '--lightning', default=False, action='store_true', help='test reading with DeepIndexDataModule')
+    test_group.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
+    test_group.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
+    test_group.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
+    test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
     test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
 
 
     args = parser.parse_args(argv)
-    before = time()
-    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True, lazy_chunk=args.lazy)
-    print(f'Took {time() - before} seconds to open {args.input}')
+    if args.lightning:
+        args.batch_size = 1
+        args.downsample = False
+        args.loader_kwargs = dict()
+        before = time()
+        data_mod = DeepIndexDataModule(hparams=args, keep_open=True)
+        after = time()
+        dataset = data_mod.dataset
+    else:
+        before = time()
+        print('hparams', args)
+        dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True, lazy_chunk=True)
+        dataset.load(sequence=False)
+        after = time()
+
+    print(f'Took {after - before} seconds to open {args.input}')
     difile = dataset.difile
 
     n_taxa = len(difile.taxa_table)
@@ -69,6 +85,7 @@ def dataset_stats(argv=None):
     n_disc = difile.n_discarded
     wlen = args.window
     step = args.step
+
     if wlen is not None:
         print((f'Splitting {n_seqs} sequences (from {n_taxa} species) into {wlen} '
                f'bp windows every {step} bps produces {n_samples} samples '
@@ -76,18 +93,32 @@ def dataset_stats(argv=None):
     else:
         print(f'Found {n_seqs} sequences across {n_taxa} species. {n_samples} total samples')
 
+
     if args.test_read:
-        print("Attempting to read training data")
-        tr, va, te = train_test_loaders(dataset, random_state=args.seed, downsample=None)
+        dataset.close()
         from tqdm import tqdm
+        print("Attempting to read training data")
+        if args.lightning:
+            tr = data_mod.train_dataloader()
+        else:
+            dataset.set_subset(train=True)
+            kwargs = {'collate_fn': get_collater(dataset), 'shuffle': True, 'batch_size': 1}
+            tr = DataLoader(dataset, **kwargs)
         for i in tqdm(tr):
             continue
+
         print("Attempting to read validation data")
+        if args.lightning:
+            va = data_mod.val_dataloader()
+        else:
+            dataset.set_subset(validate=True)
+            kwargs.pop('shuffle')
+            va = DataLoader(dataset, **kwargs)
         for i in tqdm(va):
             continue
-        print("Attempting to read testing data")
-        for i in tqdm(te):
-            continue
+        #print("Attempting to read testing data")
+        #for i in tqdm(te):
+        #    continue
     if args.output_map is not None:
         tl1, tl2 = args.output_map
         ret = difile.taxa_table.get_outputs_map(tl1, tl2)
@@ -521,6 +552,18 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
 
     return (tr_dl, va_dl, te_dl)
 
+
+def get_collater(dataset):
+    if dataset.tnf:
+        return TnfCollater(dataset.vocab)
+    elif dataset.manifold:
+        return DistanceCollater(dataset.distances, seq_collater=collater)
+    elif dataset.graph:
+        return GraphCollater(dataset.node_ids, seq_collater=collater)
+    else:
+        return SeqCollater(dataset.padval)
+
+
 def get_loader(dataset, distances=False, graph=False, **kwargs):
     """
     Return a DataLoader that loads data from the given Dataset
@@ -553,15 +596,15 @@ class DeepIndexDataModule(pl.LightningDataModule):
     def __init__(self, hparams, inference=False, keep_open=False):
         super().__init__()
 
-        kwargs = dict(random_state=hparams.seed,
-                      batch_size=hparams.batch_size,
-                      downsample=hparams.downsample)
+        kwargs = dict(batch_size=hparams.batch_size)
+
         if inference:
             hparams.manifold = False
             hparams.graph = False
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             kwargs['shuffle'] = False
         else:
+            print('hparams', hparams)
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = False
@@ -574,25 +617,30 @@ class DeepIndexDataModule(pl.LightningDataModule):
             kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
-        self._loader_kwargs = kwargs
-        self.loaders = None
+        kwargs['collate_fn'] = get_collater(self.dataset)
 
-    def _check_loaders(self):
-        if self.loaders is None:
-            tr, te, va = train_test_loaders(self.dataset, **self._loader_kwargs)
-            self.loaders = {'train': tr, 'test': te, 'validate': va}
+        self._loader_kwargs = kwargs
+        print(self._loader_kwargs)
+
+    def _check_close(self):
+        if self._loader_kwargs.get('num_workers', None) not in (None, 0):
+            self.dataset.close()
 
     def train_dataloader(self):
-        self._check_loaders()
-        return self.loaders['train']
+        self.dataset.open()
+        self.dataset.set_subset(train=True)
+        self._check_close()
+        return DataLoader(self.dataset, **self._loader_kwargs)
 
     def val_dataloader(self):
-        self._check_loaders()
-        return self.loaders['validate']
+        self.dataset.open()
+        self.dataset.set_subset(validate=True)
+        self._check_close()
+        kwargs = self._loader_kwargs.copy()
+        kwargs.pop('shuffle', False)
+        return DataLoader(self.dataset, **kwargs)
 
     def test_dataloader(self):
-        #self._check_loaders()
-        #return self.loaders['test']
         return None
 
 
@@ -713,18 +761,19 @@ class LazySeqDataset(Dataset):
 
         self._label_dtype = torch.int64
 
+        self._train_subset = False
+        self._validate_subset = False
+        self._test_subset = False
+
         # open to get dataset length
         self.open()
-        self.__len = len(self.difile)
-        self.__sample_labels = None
         if self.__lazy_chunk:
             counts = self.difile.lut.copy()
             counts[1:] = counts[1:] - counts[:-1]
             self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
             self.taxa_labels = np.arange(len(self.taxa_counts))
         else:
-            self.__sample_labels = self.difile.labels
-            self.taxa_labels, self.taxa_counts = np.unique(self.__sample_labels, return_counts=True)
+            self.taxa_labels, self.taxa_counts = np.unique(self.difile.labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
 
         self.vocab = np.chararray.upper(self.orig_difile.seq_table['sequence'].target.elements[:].astype('U1'))
@@ -785,18 +834,6 @@ class LazySeqDataset(Dataset):
         if not keep_open:
             self.close()
 
-    @property
-    def sample_labels(self):
-        if self.__lazy_chunk:
-            counts = self.difile.lut.copy()
-            counts[1:] = counts[1:] - counts[:-1]
-            ret = np.repeat(self.orig_difile.labels, counts)
-            if self.revcomp:
-                ret = np.repeat(ret, 2)
-            return ret
-        else:
-            return self.__sample_labels
-
     def close(self):
         if self.io is not None:
             self.io.close()
@@ -829,14 +866,7 @@ class LazySeqDataset(Dataset):
         if self.revcomp:
             self.set_revcomp()
 
-        #TODO    fill this in
-        if self.train_subset:
-            self.set_subset()
-        elif self.val_subset:
-            self.set_subset(validate=True)
-        elif self.test_subset:
-            pass
-
+        self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
     def worker_init(self, worker_id):
         # September 15, 2021, ajtritt
@@ -859,22 +889,33 @@ class LazySeqDataset(Dataset):
     def set_revcomp(self, revcomp=True):
         self.difile = RevCompFilter(self.difile)
 
-    def set_subset(self, validate=False, test=False):
-        counts = self.difile.get_counts()
-        val_counts = np.round(self.val_frac * counts).astype(int)
-        train_counts = counts - val_counts
-        if validate:
-            self.difile = LazySubset(self.difile, val_counts, starts=train_counts)
-        elif test:
-            raise ValueError("Cannot do this yet, and I may never do it!")
+    def set_subset(self, train=False, validate=False, test=False):
+        self._train_subset = train
+        self._validate_subset = validate
+        self._test_subset = test
+        if self.difile is not None:
+            self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
+
+    def _set_subset(self, train=False, validate=False, test=False):
+        if all((not train, not validate, not test)):
+            self.difile.set_subset(None, None)
         else:
-            self.difile = LazySubset(self.difile, train_counts)
+            counts = self.difile.get_counts(orig=True)
+            val_counts = np.round(self.val_frac * counts).astype(int)
+            train_counts = counts - val_counts
+            if validate:
+                self.difile.set_subset(val_counts, self.hparams.seed, starts=train_counts)
+            elif test:
+                raise ValueError("Cannot do this yet, and I may never do it, since we use held-out genomes for testing")
+            else:
+                self.difile.set_subset(train_counts, self.hparams.seed)
+        self.__len = len(self.difile)
 
     def set_ohe(self, ohe=True):
         self.__ohe = ohe
 
     def __len__(self):
-        return self.__len # len(self.difile)
+        return len(self.difile) if self.difile is not None else self.__len
 
     @staticmethod
     def _to_numpy(data):
