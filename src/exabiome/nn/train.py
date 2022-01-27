@@ -214,6 +214,7 @@ def process_args(args=None, return_io=False):
 
     if args.num_workers > 0:
         data_mod.dataset.close()
+        #pass
 
     targs = dict(
         max_epochs=args.epochs,
@@ -242,7 +243,11 @@ def process_args(args=None, return_io=False):
 
     if env is not None:
         global RANK
-        RANK = env.global_rank()
+        try:
+            RANK = env.global_rank()
+        except:
+            print(">>> Could not get global rank -- setting RANK to 0", file=sys.stderr)
+            RANK = 0
 
     if targs['gpus'] is not None:
         if targs['gpus'] == 1:
@@ -257,24 +262,25 @@ def process_args(args=None, return_io=False):
             targs['accelerator'] = GPUAccelerator(
                 precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda'),
                 training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
-                                                 cluster_environment=env, num_nodes=args.num_nodes,
+                                                 cluster_environment=env,
                                                  find_unused_parameters=False)
             )
             torch.cuda.set_device(env.local_rank())
             print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
+            #targs['strategy'] = 'ddp_sharded'
     else:
         if env is None:
             ttp = SingleDevicePlugin(torch.device('cpu'))
         else:
-            ttp = DDPPlugin(cluster_environment=env, num_nodes=args.num_nodes)
+            ttp = DDPPlugin(cluster_environment=env)
         targs['accelerator'] = CPUAccelerator(
             precision_plugin = PrecisionPlugin(),
             training_type_plugin = ttp
         )
 
     if args.sanity:
-        targs['limit_train_batches'] = 40
-        targs['limit_val_batches'] = 5
+        targs['limit_train_batches'] = 4000
+        targs['limit_val_batches'] = 500
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -287,6 +293,9 @@ def process_args(args=None, return_io=False):
 
     if args.checkpoint is not None:
         targs['resume_from_checkpoint'] = args.checkpoint
+
+    if args.profile:
+        targs['profiler'] = 'advanced'
 
     ret = [model, args, targs]
     if return_io:
@@ -310,7 +319,6 @@ def run_lightning(argv=None):
     import traceback
     import os
 
-    print0(argv)
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
     # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
     #     from mpi4py import MPI
@@ -323,7 +331,8 @@ def run_lightning(argv=None):
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
     check_directory(outdir)
-    print0("Processed Args:", args)
+    print0(' '.join(sys.argv), file=sys.stderr)
+    print0("Processed Args:", args, file=sys.stderr)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -369,10 +378,11 @@ def run_lightning(argv=None):
         callbacks.append(StochasticWeightAveraging(swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
 
     targs = dict(
-        checkpoint_callback=True,
+        enable_checkpointing=True,
         callbacks=callbacks,
         logger = CSVLogger(save_dir=output('logs')),
         profiler = "simple",
+        num_sanity_val_steps = 0,
     )
     targs.update(addl_targs)
 
@@ -381,12 +391,13 @@ def run_lightning(argv=None):
         targs['fast_dev_run'] = 10
 
     print0('Trainer args:', targs, file=sys.stderr)
+    print0('DataLoader args:', data_mod._loader_kwargs, file=sys.stderr)
     print0('Model:\n', model, file=sys.stderr)
 
     trainer = Trainer(**targs)
 
     if args.debug:
-        print_dataloader(data_mod.test_dataloader())
+        #print_dataloader(data_mod.test_dataloader())
         print_dataloader(data_mod.train_dataloader())
         print_dataloader(data_mod.val_dataloader())
 
