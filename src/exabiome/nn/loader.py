@@ -15,6 +15,21 @@ from hdmf.common import get_hdf5io
 from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, LazyWindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
 from ..utils import parse_seed, distsplit
 
+import psutil
+import os
+
+def print_mem(msg=None):
+    pid = os.getpid()
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info()
+    mem.rss/(1024**3)
+    if msg is not None:
+        msg = f'{msg} - '
+    else:
+        msg = ''
+    print(f'{msg}{pid} - {mem.rss/1024**3:10.2f} - {mem.vms/1024**3:10.2f} - {mem.shared/1024**3:10.2f}', file=sys.stderr)
+
+
 
 def check_window(window, step):
     if window is None:
@@ -54,6 +69,7 @@ def dataset_stats(argv=None):
     test_group.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
     test_group.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     test_group.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
+    test_group.add_argument('-b', '--batch_size', type=int, help='the number of workers to load data with', default=1)
     test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
     test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
@@ -61,12 +77,13 @@ def dataset_stats(argv=None):
 
     args = parser.parse_args(argv)
     if args.lightning:
-        args.batch_size = 1
         args.downsample = False
         args.loader_kwargs = dict()
+        print_mem('before DeepIndexDataModule')
         before = time()
         data_mod = DeepIndexDataModule(hparams=args, keep_open=True)
         after = time()
+        print_mem('after DeepIndexDataModule ')
         dataset = data_mod.dataset
     else:
         before = time()
@@ -99,7 +116,9 @@ def dataset_stats(argv=None):
         from tqdm import tqdm
         print("Attempting to read training data")
         if args.lightning:
+            print_mem('before train_dataloader   ')
             tr = data_mod.train_dataloader()
+            print_mem('after train_dataloader    ')
         else:
             dataset.set_subset(train=True)
             kwargs = {'collate_fn': get_collater(dataset), 'shuffle': True, 'batch_size': 1}
@@ -604,10 +623,9 @@ class DeepIndexDataModule(pl.LightningDataModule):
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             kwargs['shuffle'] = False
         else:
-            print('hparams', hparams)
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             self.dataset.load(sequence=hparams.load)
-            kwargs['pin_memory'] = False
+            kwargs['pin_memory'] = hparams.pin_memory
             kwargs['shuffle'] = hparams.shuffle
 
         kwargs.update(hparams.loader_kwargs)
@@ -620,7 +638,6 @@ class DeepIndexDataModule(pl.LightningDataModule):
         kwargs['collate_fn'] = get_collater(self.dataset)
 
         self._loader_kwargs = kwargs
-        print(self._loader_kwargs)
 
     def _check_close(self):
         if self._loader_kwargs.get('num_workers', None) not in (None, 0):
