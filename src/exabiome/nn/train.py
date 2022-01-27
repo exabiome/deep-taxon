@@ -391,13 +391,13 @@ def run_lightning(argv=None):
         targs['fast_dev_run'] = 10
 
     print0('Trainer args:', targs, file=sys.stderr)
-    print0('DataLoader args:', data_model._loader_kwargs, file=sys.stderr)
+    print0('DataLoader args:', data_mod._loader_kwargs, file=sys.stderr)
     print0('Model:\n', model, file=sys.stderr)
 
     trainer = Trainer(**targs)
 
     if args.debug:
-        print_dataloader(data_mod.test_dataloader())
+        #print_dataloader(data_mod.test_dataloader())
         print_dataloader(data_mod.train_dataloader())
         print_dataloader(data_mod.val_dataloader())
 
