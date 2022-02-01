@@ -185,6 +185,8 @@ def run_train(argv=None):
             job_dep = jobdir[jobdir.rfind('.')+1:].strip("/")
             if args.summit:
                 job_dep = f'ended({job_dep})'
+            elif (args.cori or args.perlmutter):
+                job_dep = f'afterok:{job_dep}'
             job.add_addl_jobflag(job.wait_flag, job_dep)
         job.set_env_var('CKPT', args.checkpoint)
         options += f' -c $CKPT'
