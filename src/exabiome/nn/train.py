@@ -20,6 +20,8 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor
 
+from pytorch_lightning.profiler import PyTorchProfiler
+
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
 from pytorch_lightning.plugins.environments import SLURMEnvironment
@@ -31,8 +33,10 @@ try:
     from mpi4py import MPI
     comm = MPI.COMM_WORLD
     RANK = comm.Get_rank()
+    SIZE = comm.Get_size()
 except:
     RANK = 0
+    SIZE = 1
 
 def parse_train_size(string):
     ret = float(string)
@@ -146,7 +150,9 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
-    parser.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
+    prof_grp = parser.add_mutually_exclusive_group()
+    prof_grp.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
+    prof_grp.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
     parser.add_argument('--sanity', action='store_true', default=False,
                         help='run five epochs with 40 batches for training and 5 batches for validation ')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
@@ -243,11 +249,14 @@ def process_args(args=None, return_io=False):
 
     if env is not None:
         global RANK
+        global SIZE
         try:
             RANK = env.global_rank()
+            SIZE = env.world_size()
         except:
-            print(">>> Could not get global rank -- setting RANK to 0", file=sys.stderr)
+            print(">>> Could not get global rank -- setting RANK to 0 and SIZE to 1", file=sys.stderr)
             RANK = 0
+            SIZE = 1
 
     if targs['gpus'] is not None:
         if targs['gpus'] == 1:
@@ -296,6 +305,9 @@ def process_args(args=None, return_io=False):
 
     if args.profile:
         targs['profiler'] = 'advanced'
+    elif args.cuda_profile:
+        targs['profiler'] = PyTorchProfiler(filename=f'pytorch_prof.{RANK:0{len(str(SIZE))}}',
+                                            emit_nvtx=True)
 
     ret = [model, args, targs]
     if return_io:
@@ -318,6 +330,9 @@ def run_lightning(argv=None):
     import numpy as np
     import traceback
     import os
+    import pprint
+
+    pformat = pprint.PrettyPrinter(sort_dicts=False, width=100).pformat
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
     # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
@@ -332,7 +347,7 @@ def run_lightning(argv=None):
     outdir, output = process_output(args)
     check_directory(outdir)
     print0(' '.join(sys.argv), file=sys.stderr)
-    print0("Processed Args:", args, file=sys.stderr)
+    print0("Processed Args:", pformat(vars(args)), file=sys.stderr)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -390,8 +405,8 @@ def run_lightning(argv=None):
         targs['log_every_n_steps'] = 1
         targs['fast_dev_run'] = 10
 
-    print0('Trainer args:', targs, file=sys.stderr)
-    print0('DataLoader args:', data_mod._loader_kwargs, file=sys.stderr)
+    print0('Trainer args:', pformat(targs), file=sys.stderr)
+    print0('DataLoader args:', pformat(data_mod._loader_kwargs), file=sys.stderr)
     print0('Model:\n', model, file=sys.stderr)
 
     trainer = Trainer(**targs)
@@ -629,6 +644,16 @@ def filter_metrics(argv=None):
             lrdf['epoch'] = np.unique(epdf['epoch'])
 
         df['epoch'] = df['epoch'].values.astype(int)
+
+        time_df = None
+        if 'time' in df:
+            time_df = df[df.validation_acc.isna()]
+            begin = time_df.groupby('epoch').min()[['time']]
+            end = time_df.groupby('epoch').max()[['time']]
+            v_df = df[df.training_acc.isna()]
+            time_df = (end - begin).filter(v_df.groupby('epoch').max().index, axis=0)
+            time_df['time'] /= 3600
+
         #mask = np.logical_not(np.isnan(df[mask_col].values))
         mask = np.logical_not(df[mask_col].isna())
         df = df.filter(columns, axis=1)[mask]
@@ -636,6 +661,8 @@ def filter_metrics(argv=None):
         df = df.drop('step', axis=1)
         if lrdf is not None:
             df = df.set_index('epoch').merge(lrdf.set_index('epoch'), left_index=True, right_index=True)
+        if time_df is not None:
+            df = df.merge(time_df, left_index=True, right_index=True)
         dfs.append(df)
 
     df = pd.concat(dfs)
