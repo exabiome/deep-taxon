@@ -58,7 +58,9 @@ def run_train(argv=None):
     parser.add_argument('-m', '--message',     help="message to write to log file", default=None)
     parser.add_argument('-L', '--log',         help="the log file to store run information in", default='jobs.log')
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
-    parser.add_argument('--profile',           help="use PTL profiling", action='store_true', default=False)
+    prof_grp = parser.add_mutually_exclusive_group()
+    prof_grp.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
+    prof_grp.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
     parser.add_argument('-a', '--chain',       help="chain jobs in submission", type=int, default=1)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
@@ -140,6 +142,8 @@ def run_train(argv=None):
 
     if args.profile:
         options += f' --profile'
+    elif args.cuda_profile:
+        options += f' --cuda_profile'
 
     chunks = f'chunks_W{conf["window"]}_S{conf["step"]}'
 
@@ -185,6 +189,8 @@ def run_train(argv=None):
             job_dep = jobdir[jobdir.rfind('.')+1:].strip("/")
             if args.summit:
                 job_dep = f'ended({job_dep})'
+            elif (args.cori or args.perlmutter):
+                job_dep = f'afterok:{job_dep}'
             job.add_addl_jobflag(job.wait_flag, job_dep)
         job.set_env_var('CKPT', args.checkpoint)
         options += f' -c $CKPT'
@@ -264,7 +270,10 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
-        job.add_command('$CMD >> $LOG 2>&1', run='srun')
+        srun = 'srun'
+        if args.cuda_profile:
+            srun += ' nsys profile -t nvtx,cuda --output=$OUTDIR/nsys_report.%h.%p.h5 --export=hdf --stats=true'
+        job.add_command('$CMD >> $LOG 2>&1', run=srun)
 
 
     def submit(job, shell, message):
@@ -309,7 +318,8 @@ def run_train(argv=None):
                     job_dep = f'ended({job_dep})'
                 job.add_addl_jobflag(job.wait_flag, job_dep)
                 job.set_env_var('CKPT', os.path.join(jobdir, 'last.ckpt'))
-                job.set_env_var('OPTIONS', options + ' -c $CKPT')
+                if '-c' not in options:
+                    job.set_env_var('OPTIONS', options + ' -c $CKPT')
                 job.set_env_var('CMD', train_cmd)
                 args.message = args.message[:args.message.find("resume")].strip().strip(',')
         else:

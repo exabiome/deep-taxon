@@ -5,7 +5,7 @@ class SlurmJob(AbstractJob):
 
     directive = 'SBATCH'
     queue_flag = 'q'
-    wait_flag = 'W'
+    wait_flag = 'd'
     project_flag = 'A'
     time_flag = 't'
     output_flag = 'o'
