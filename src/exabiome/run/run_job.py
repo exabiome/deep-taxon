@@ -318,7 +318,8 @@ def run_train(argv=None):
                     job_dep = f'ended({job_dep})'
                 job.add_addl_jobflag(job.wait_flag, job_dep)
                 job.set_env_var('CKPT', os.path.join(jobdir, 'last.ckpt'))
-                job.set_env_var('OPTIONS', options + ' -c $CKPT')
+                if '-c' not in options:
+                    job.set_env_var('OPTIONS', options + ' -c $CKPT')
                 job.set_env_var('CMD', train_cmd)
                 args.message = args.message[:args.message.find("resume")].strip().strip(',')
         else:
