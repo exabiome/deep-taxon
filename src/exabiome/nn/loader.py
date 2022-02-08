@@ -666,7 +666,7 @@ def get_loader(dataset, distances=False, graph=False, **kwargs):
 class WORSampler(Sampler):
     """Without Replacement Sampler"""
 
-    def __init__(self, length, rng=None):
+    def __init__(self, length, rng=None, rank=0, size=1):
         super().__init__(None)
         if rng is None:
             rng = np.random.default_rng()
@@ -676,8 +676,22 @@ class WORSampler(Sampler):
         dtype = np.uint32
         if length > (2**32 - 1):
             dtype = np.uint64
-        self.indices = np.arange(length, dtype=dtype)
-        self.curr_len = length
+
+        self.rank = rank
+        self.size = size
+
+        # trim will clip extra samples (i.e. length % size) so that each
+        # rank has the same number of samples.
+        # Use this later if we decide we don't want to trim tail.
+        trim = True
+        if size > 1:
+            self.indices = np.arange(rank, length, size, dtype=dtype)
+            if trim:
+                self.indices = self.indices[:length // size]
+        else:
+            self.indices = np.arange(length, dtype=dtype)
+        self.curr_len = len(self.indices)
+
 
     def __iter__(self):
         self.curr_len = len(self.indices)
@@ -698,7 +712,7 @@ class WORSampler(Sampler):
 
 class DeepIndexDataModule(pl.LightningDataModule):
 
-    def __init__(self, hparams, inference=False, keep_open=False):
+    def __init__(self, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1):
         super().__init__()
 
         kwargs = dict(batch_size=hparams.batch_size)
@@ -714,11 +728,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
             kwargs['pin_memory'] = hparams.pin_memory
             #kwargs['shuffle'] = hparams.shuffle
             kwargs['shuffle'] = False
-            if hparams.shuffle:
+            if hparams.shuffle and False:
                 self.dataset.set_subset(train=True)
                 train_len = len(self.dataset)
                 self.dataset.set_subset()
-                kwargs['sampler'] = WORSampler(train_len)
+                kwargs['sampler'] = WORSampler(train_len, rng=seed, rank=rank, size=size)
 
         kwargs.update(hparams.loader_kwargs)
         kwargs['num_workers'] = hparams.num_workers

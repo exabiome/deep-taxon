@@ -187,43 +187,6 @@ def process_args(args=None, return_io=False):
     if not isinstance(args, argparse.Namespace):
         args = parse_args(args)
 
-    args.loader_kwargs = dict()
-
-    # make sure we are classifying if we are using adding classifier layers
-    # to a resnet features model
-    if args.features_checkpoint is not None:
-        if args.manifold:
-            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
-        args.classify = True
-
-    data_mod = DeepIndexDataModule(args, keep_open=True)
-
-    # if classification problem, use the number of taxa as the number of outputs
-    if args.classify:
-        args.n_outputs = len(data_mod.dataset.taxa_labels)
-
-    args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
-
-    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
-
-    if args.weighted is not None:
-        if args.weighted == 'ens':
-            weights = (1 - args.ens_beta)/(1 - args.ens_beta**data_mod.dataset.taxa_counts)
-        elif args.weighted == 'isns':
-            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
-        elif args.weighted == 'ins':
-            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
-        elif args.weighted == 'phy':
-            k = args.phylo_neighbors
-            weights = np.partition(data_mod.dataset.distances, k, axis=1)[:, :k].sum(axis=1)
-        else:
-            raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
-        model.set_class_weights(weights)
-
-    if args.num_workers > 0:
-        data_mod.dataset.close()
-        #pass
-
     targs = dict(
         max_epochs=args.epochs,
         num_nodes=args.num_nodes,
@@ -310,6 +273,45 @@ def process_args(args=None, return_io=False):
     elif args.cuda_profile:
         targs['profiler'] = PyTorchProfiler(filename=f'pytorch_prof.{RANK:0{len(str(SIZE))}}',
                                             emit_nvtx=True)
+
+    targs['replace_sampler_ddp'] = False
+
+    args.loader_kwargs = dict()
+
+    # make sure we are classifying if we are using adding classifier layers
+    # to a resnet features model
+    if args.features_checkpoint is not None:
+        if args.manifold:
+            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
+        args.classify = True
+
+    data_mod = DeepIndexDataModule(args, keep_open=True, seed=args.seed+RANK, rank=RANK, size=SIZE)
+
+    # if classification problem, use the number of taxa as the number of outputs
+    if args.classify:
+        args.n_outputs = len(data_mod.dataset.taxa_labels)
+
+    args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
+
+    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+
+    if args.weighted is not None:
+        if args.weighted == 'ens':
+            weights = (1 - args.ens_beta)/(1 - args.ens_beta**data_mod.dataset.taxa_counts)
+        elif args.weighted == 'isns':
+            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
+        elif args.weighted == 'ins':
+            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
+        elif args.weighted == 'phy':
+            k = args.phylo_neighbors
+            weights = np.partition(data_mod.dataset.distances, k, axis=1)[:, :k].sum(axis=1)
+        else:
+            raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
+        model.set_class_weights(weights)
+
+    if args.num_workers > 0:
+        data_mod.dataset.close()
+        #pass
 
     ret = [model, args, targs]
     if return_io:
