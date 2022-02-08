@@ -280,7 +280,6 @@ class TrainingSeqCollater:
                 maxlen = X.shape[l_idx]
         X_ret = list()
         y_ret = list()
-        idx_ret = list()
         for i, X, y, seq_id in samples:
             dif = maxlen - X.shape[l_idx]
             X_ = X
@@ -288,11 +287,9 @@ class TrainingSeqCollater:
                 X_ = F.pad(X, (0, dif), value=self.padval)
             X_ret.append(X_)
             y_ret.append(y)
-            idx_ret.append(int(i))
         X_ret = torch.stack(X_ret)
         y_ret = torch.stack(y_ret)
-        idx_ret = torch.tensor(idx_ret)
-        return (X_ret, y_ret, idx_ret)
+        return (X_ret, y_ret)
 
 
 def _check_collater(padval, seq_collater):

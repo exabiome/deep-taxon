@@ -133,7 +133,7 @@ class AbstractLit(LightningModule):
 
     # TRAIN
     def training_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        seqs, target = batch
         output = self.forward(seqs)
         loss = self._loss(output, target)
         if self.hparams.classify:
@@ -147,7 +147,7 @@ class AbstractLit(LightningModule):
 
     # VALIDATION
     def validation_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        seqs, target = batch
         output = self(seqs)
         loss = self._loss(output, target)
         if self.hparams.classify:
@@ -161,7 +161,7 @@ class AbstractLit(LightningModule):
 
     # TEST
     def test_step(self, batch, batch_idx):
-        idx, seqs, target, olen, seq_id = batch
+        seqs, target = batch
         output = self(seqs)
         loss = self._loss(output, target)
         self.log(self.test_loss, loss)
