@@ -726,13 +726,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = hparams.pin_memory
-            #kwargs['shuffle'] = hparams.shuffle
             kwargs['shuffle'] = False
-            if hparams.shuffle and False:
-                self.dataset.set_subset(train=True)
-                train_len = len(self.dataset)
-                self.dataset.set_subset()
-                kwargs['sampler'] = WORSampler(train_len, rng=seed, rank=rank, size=size)
+            self.dataset.set_subset(train=True)
+            train_len = len(self.dataset)
+            self.dataset.set_subset()
+            kwargs['sampler'] = WORSampler(train_len, rng=seed, rank=rank, size=size)
 
         kwargs.update(hparams.loader_kwargs)
         kwargs['num_workers'] = hparams.num_workers
