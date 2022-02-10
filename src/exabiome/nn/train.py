@@ -311,7 +311,6 @@ def process_args(args=None, return_io=False):
 
     if args.num_workers > 0:
         data_mod.dataset.close()
-        #pass
 
     ret = [model, args, targs]
     if return_io:
@@ -387,6 +386,8 @@ def benchmark_pass(argv=None):
 
 
     tr = data_mod.train_dataloader()
+    # Get validation dataloader to make sure that doesn't screw up the train dataloader
+    va = data_mod.val_dataloader()
     tot = len(tr)
     if args.num_batches != None:
         stop = args.num_batches - 1
