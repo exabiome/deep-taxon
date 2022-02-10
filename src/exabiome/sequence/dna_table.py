@@ -722,13 +722,16 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         if not isinstance(i, (int, np.integer)):
             raise ValueError("LazyWindowChunkedDIFile only supports indexing with an integer")
 
-        if i < 0:
-            i += self.lut[i]
-            if i < 0:
+        idx = i
+        if idx < 0:
+            idx += self.lut[-1]
+            if idx < 0:
                 raise IndexError(f'index {i} is out of bounds for LazyWindowChunkedDIFile of length {self.lut[-1]}')
 
-        seq_i = np.searchsorted(self.lut, i, side="right")
-        chunk_i = i if seq_i == 0 else i - self.lut[seq_i - 1]
+        seq_i = np.searchsorted(self.lut, idx, side="right")
+        if seq_i == len(self.lut):
+            raise IndexError(f'index {i} out of bounds for LazyWindowChunkedDIFile of length {self.lut[-1]}')
+        chunk_i = idx if seq_i == 0 else idx - self.lut[seq_i - 1]
 
         if self.subset_counts is not None:
             if self.starts is not None:
