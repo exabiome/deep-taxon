@@ -692,7 +692,6 @@ class WORSampler(Sampler):
             self.indices = np.arange(length, dtype=dtype)
         self.curr_len = len(self.indices)
 
-
     def __iter__(self):
         self.curr_len = len(self.indices)
         return self
@@ -710,6 +709,20 @@ class WORSampler(Sampler):
         return ret
 
 
+class SubsetDataLoader(DataLoader):
+
+    def __init__(self, dataset, train=False, validate=False, test=False, **kwargs):
+        super().__init__(dataset, **kwargs)
+        self.train = train
+        self.validate = validate
+        self.test = test
+
+
+    def __iter__(self):
+        self.dataset.set_subset(train=self.train, validate=self.validate, test=self.test)
+        return super().__iter__()
+
+
 class DeepIndexDataModule(pl.LightningDataModule):
 
     def __init__(self, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1):
@@ -721,46 +734,46 @@ class DeepIndexDataModule(pl.LightningDataModule):
             hparams.manifold = False
             hparams.graph = False
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
-            kwargs['shuffle'] = False
         else:
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = hparams.pin_memory
-            kwargs['shuffle'] = False
+            kwargs['sampler'] = None
             self.dataset.set_subset(train=True)
             train_len = len(self.dataset)
             self.dataset.set_subset()
             kwargs['sampler'] = WORSampler(train_len, rng=seed, rank=rank, size=size)
 
+        self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
+
         kwargs.update(hparams.loader_kwargs)
         kwargs['num_workers'] = hparams.num_workers
-        if hparams.num_workers > 0:
+        if self._parallel_load:
             kwargs['multiprocessing_context'] = 'spawn'
             kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
         kwargs['collate_fn'] = get_collater(self.dataset, inference=inference)
+        kwargs['shuffle'] = False
 
         self._loader_kwargs = kwargs
 
-    def _check_close(self):
+    def _check_close(self, train=False, validate=False, test=False):
         if self._loader_kwargs.get('num_workers', None) not in (None, 0):
             self.dataset.close()
 
     def train_dataloader(self):
-        self.dataset.open()
-        self.dataset.set_subset(train=True)
-        self._check_close()
-        return DataLoader(self.dataset, **self._loader_kwargs)
+        kwargs = self._loader_kwargs.copy()
+        if self._parallel_load:
+            self.dataset.close()
+        return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
     def val_dataloader(self):
-        self.dataset.open()
-        self.dataset.set_subset(validate=True)
-        self._check_close()
         kwargs = self._loader_kwargs.copy()
-        kwargs.pop('shuffle', False)
-        kwargs.pop('sampler', False)
-        return DataLoader(self.dataset, **kwargs)
+        if self._parallel_load:
+            self.dataset.close()
+        kwargs.pop('sampler', None)
+        return SubsetDataLoader(self.dataset, validate=True, **kwargs)
 
     def test_dataloader(self):
         return None
@@ -1067,7 +1080,11 @@ class LazySeqDataset(Dataset):
 
     def __getitem__(self, i):
         # get sequence
-        item = self.difile[i]
+        try:
+            item = self.difile[i]
+        except ValueError as e:
+            print(self._train_subset, self._validate_subset, self._test_subset, file=sys.stderr)
+            raise e
         idx = item['id']
         seq = item['seq']
         label = item['label']
