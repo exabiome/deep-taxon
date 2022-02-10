@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler, Subset
+from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
@@ -65,11 +65,13 @@ def dataset_stats(argv=None):
     add_dataset_arguments(parser)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
+    test_group.add_argument('--mem', default=False, action='store_true', help='print memory usage before and after loading')
     test_group.add_argument('-L', '--lightning', default=False, action='store_true', help='test reading with DeepIndexDataModule')
     test_group.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
     test_group.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     test_group.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     test_group.add_argument('-b', '--batch_size', type=int, help='the number of workers to load data with', default=1)
+    test_group.add_argument('-N', '--num_batches', type=int, help='the number of batches to load when testing read', default=None)
     test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
     test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
@@ -79,11 +81,13 @@ def dataset_stats(argv=None):
     if args.lightning:
         args.downsample = False
         args.loader_kwargs = dict()
-        print_mem('before DeepIndexDataModule')
+        if args.mem:
+            print_mem('before DeepIndexDataModule')
         before = time()
         data_mod = DeepIndexDataModule(hparams=args, keep_open=True)
         after = time()
-        print_mem('after DeepIndexDataModule ')
+        if args.mem:
+            print_mem('after DeepIndexDataModule ')
         dataset = data_mod.dataset
     else:
         before = time()
@@ -116,15 +120,25 @@ def dataset_stats(argv=None):
         from tqdm import tqdm
         print("Attempting to read training data")
         if args.lightning:
-            print_mem('before train_dataloader   ')
+            if args.mem:
+                print_mem('before train_dataloader   ')
             tr = data_mod.train_dataloader()
-            print_mem('after train_dataloader    ')
+            if args.mem:
+                print_mem('after train_dataloader    ')
         else:
             dataset.set_subset(train=True)
             kwargs = {'collate_fn': get_collater(dataset), 'shuffle': True, 'batch_size': 1}
             tr = DataLoader(dataset, **kwargs)
-        for i in tqdm(tr):
-            continue
+
+        tot = len(tr)
+        if args.num_batches != None:
+            stop = args.num_batches - 1
+            tot = args.num_batches
+        else:
+            stop = tot - 1
+        for idx, i in tqdm(enumerate(tr), total=tot):
+            if idx == stop:
+                break
 
         print("Attempting to read validation data")
         if args.lightning:
@@ -133,8 +147,17 @@ def dataset_stats(argv=None):
             dataset.set_subset(validate=True)
             kwargs.pop('shuffle')
             va = DataLoader(dataset, **kwargs)
-        for i in tqdm(va):
-            continue
+
+        tot = len(va)
+        if args.num_batches != None:
+            stop = args.num_batches - 1
+            tot = args.num_batches
+        else:
+            stop = tot - 1
+        for idx, i in tqdm(enumerate(va), total=tot):
+            if idx == stop:
+                break
+
         #print("Attempting to read testing data")
         #for i in tqdm(te):
         #    continue
@@ -240,6 +263,33 @@ class SeqCollater:
         idx_ret = torch.tensor(idx_ret)
         seq_id_ret = torch.tensor(seq_id_ret)
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+
+
+class TrainingSeqCollater:
+
+    def __init__(self, padval):
+        self.padval = padval
+
+    def __call__(self, samples):
+        maxlen = 0
+        l_idx = -1
+        if isinstance(samples, tuple):
+            samples = [samples]
+        for i, X, y, seq_id in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+        X_ret = list()
+        y_ret = list()
+        for i, X, y, seq_id in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif), value=self.padval)
+            X_ret.append(X_)
+            y_ret.append(y)
+        X_ret = torch.stack(X_ret)
+        y_ret = torch.stack(y_ret)
+        return (X_ret, y_ret)
 
 
 def _check_collater(padval, seq_collater):
@@ -572,7 +622,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     return (tr_dl, va_dl, te_dl)
 
 
-def get_collater(dataset):
+def get_collater(dataset, inference=False):
     if dataset.tnf:
         return TnfCollater(dataset.vocab)
     elif dataset.manifold:
@@ -580,7 +630,10 @@ def get_collater(dataset):
     elif dataset.graph:
         return GraphCollater(dataset.node_ids, seq_collater=collater)
     else:
-        return SeqCollater(dataset.padval)
+        if inference:
+            return SeqCollater(dataset.padval)
+        else:
+            return TrainingSeqCollater(dataset.padval)
 
 
 def get_loader(dataset, distances=False, graph=False, **kwargs):
@@ -610,9 +663,69 @@ def get_loader(dataset, distances=False, graph=False, **kwargs):
     return DataLoader(orig_dataset, collate_fn=collater, **kwargs)
 
 
+class WORSampler(Sampler):
+    """Without Replacement Sampler"""
+
+    def __init__(self, length, rng=None, rank=0, size=1):
+        super().__init__(None)
+        if rng is None:
+            rng = np.random.default_rng()
+        elif isinstance(rng, (int, np.integer)):
+            rng = np.random.default_rng(rng)
+        self.rng = rng
+        dtype = np.uint32
+        if length > (2**32 - 1):
+            dtype = np.uint64
+
+        self.rank = rank
+        self.size = size
+
+        # trim will clip extra samples (i.e. length % size) so that each
+        # rank has the same number of samples.
+        # Use this later if we decide we don't want to trim tail.
+        trim = True
+        if size > 1:
+            self.indices = np.arange(rank, length, size, dtype=dtype)
+            if trim:
+                self.indices = self.indices[:length // size]
+        else:
+            self.indices = np.arange(length, dtype=dtype)
+        self.curr_len = len(self.indices)
+
+    def __iter__(self):
+        self.curr_len = len(self.indices)
+        return self
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __next__(self):
+        if self.curr_len == 0:
+            raise StopIteration
+        idx = self.rng.integers(self.curr_len)
+        ret = self.indices[idx]
+        self.indices[self.curr_len - 1], self.indices[idx] = self.indices[idx], self.indices[self.curr_len - 1]
+        self.curr_len -= 1
+        return ret
+
+
+class SubsetDataLoader(DataLoader):
+
+    def __init__(self, dataset, train=False, validate=False, test=False, **kwargs):
+        super().__init__(dataset, **kwargs)
+        self.train = train
+        self.validate = validate
+        self.test = test
+
+
+    def __iter__(self):
+        self.dataset.set_subset(train=self.train, validate=self.validate, test=self.test)
+        return super().__iter__()
+
+
 class DeepIndexDataModule(pl.LightningDataModule):
 
-    def __init__(self, hparams, inference=False, keep_open=False):
+    def __init__(self, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1):
         super().__init__()
 
         kwargs = dict(batch_size=hparams.batch_size)
@@ -621,41 +734,46 @@ class DeepIndexDataModule(pl.LightningDataModule):
             hparams.manifold = False
             hparams.graph = False
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
-            kwargs['shuffle'] = False
         else:
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = hparams.pin_memory
-            kwargs['shuffle'] = hparams.shuffle
+            kwargs['sampler'] = None
+            self.dataset.set_subset(train=True)
+            train_len = len(self.dataset)
+            self.dataset.set_subset()
+            kwargs['sampler'] = WORSampler(train_len, rng=seed, rank=rank, size=size)
+
+        self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
 
         kwargs.update(hparams.loader_kwargs)
         kwargs['num_workers'] = hparams.num_workers
-        if hparams.num_workers > 0:
+        if self._parallel_load:
             kwargs['multiprocessing_context'] = 'spawn'
             kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
-        kwargs['collate_fn'] = get_collater(self.dataset)
+        kwargs['collate_fn'] = get_collater(self.dataset, inference=inference)
+        kwargs['shuffle'] = False
 
         self._loader_kwargs = kwargs
 
-    def _check_close(self):
+    def _check_close(self, train=False, validate=False, test=False):
         if self._loader_kwargs.get('num_workers', None) not in (None, 0):
             self.dataset.close()
 
     def train_dataloader(self):
-        self.dataset.open()
-        self.dataset.set_subset(train=True)
-        self._check_close()
-        return DataLoader(self.dataset, **self._loader_kwargs)
+        kwargs = self._loader_kwargs.copy()
+        if self._parallel_load:
+            self.dataset.close()
+        return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
     def val_dataloader(self):
-        self.dataset.open()
-        self.dataset.set_subset(validate=True)
-        self._check_close()
         kwargs = self._loader_kwargs.copy()
-        kwargs.pop('shuffle', False)
-        return DataLoader(self.dataset, **kwargs)
+        if self._parallel_load:
+            self.dataset.close()
+        kwargs.pop('sampler', None)
+        return SubsetDataLoader(self.dataset, validate=True, **kwargs)
 
     def test_dataloader(self):
         return None
@@ -962,7 +1080,11 @@ class LazySeqDataset(Dataset):
 
     def __getitem__(self, i):
         # get sequence
-        item = self.difile[i]
+        try:
+            item = self.difile[i]
+        except ValueError as e:
+            print(self._train_subset, self._validate_subset, self._test_subset, file=sys.stderr)
+            raise e
         idx = item['id']
         seq = item['seq']
         label = item['label']
