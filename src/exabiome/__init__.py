@@ -46,6 +46,7 @@ def main():
             'probe': Command('nn.probe.probe', 'Probe the environment of the system'),
             'model-info': Command('nn.train.get_model_info', 'Construct and print info about model'),
             'to-onnx': Command('nn.deploy.to_onnx', 'Convert checkpoint to ONNX format'),
+            'bm-dset': Command('nn.train.benchmark_pass', 'Read dataset and run a few batches for bencharking'),
         },
         'Inference and model assessment': {
             'infer': Command('nn.infer.run_inference', 'Run inference using PyTorch'),

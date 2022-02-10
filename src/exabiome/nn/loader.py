@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler, Subset
+from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
@@ -65,11 +65,13 @@ def dataset_stats(argv=None):
     add_dataset_arguments(parser)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
+    test_group.add_argument('--mem', default=False, action='store_true', help='print memory usage before and after loading')
     test_group.add_argument('-L', '--lightning', default=False, action='store_true', help='test reading with DeepIndexDataModule')
     test_group.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
     test_group.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     test_group.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     test_group.add_argument('-b', '--batch_size', type=int, help='the number of workers to load data with', default=1)
+    test_group.add_argument('-N', '--num_batches', type=int, help='the number of batches to load when testing read', default=None)
     test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
     test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
@@ -79,11 +81,13 @@ def dataset_stats(argv=None):
     if args.lightning:
         args.downsample = False
         args.loader_kwargs = dict()
-        print_mem('before DeepIndexDataModule')
+        if args.mem:
+            print_mem('before DeepIndexDataModule')
         before = time()
         data_mod = DeepIndexDataModule(hparams=args, keep_open=True)
         after = time()
-        print_mem('after DeepIndexDataModule ')
+        if args.mem:
+            print_mem('after DeepIndexDataModule ')
         dataset = data_mod.dataset
     else:
         before = time()
@@ -116,15 +120,25 @@ def dataset_stats(argv=None):
         from tqdm import tqdm
         print("Attempting to read training data")
         if args.lightning:
-            print_mem('before train_dataloader   ')
+            if args.mem:
+                print_mem('before train_dataloader   ')
             tr = data_mod.train_dataloader()
-            print_mem('after train_dataloader    ')
+            if args.mem:
+                print_mem('after train_dataloader    ')
         else:
             dataset.set_subset(train=True)
             kwargs = {'collate_fn': get_collater(dataset), 'shuffle': True, 'batch_size': 1}
             tr = DataLoader(dataset, **kwargs)
-        for i in tqdm(tr):
-            continue
+
+        tot = len(tr)
+        if args.num_batches != None:
+            stop = args.num_batches - 1
+            tot = args.num_batches
+        else:
+            stop = tot - 1
+        for idx, i in tqdm(enumerate(tr), total=tot):
+            if idx == stop:
+                break
 
         print("Attempting to read validation data")
         if args.lightning:
@@ -133,8 +147,17 @@ def dataset_stats(argv=None):
             dataset.set_subset(validate=True)
             kwargs.pop('shuffle')
             va = DataLoader(dataset, **kwargs)
-        for i in tqdm(va):
-            continue
+
+        tot = len(va)
+        if args.num_batches != None:
+            stop = args.num_batches - 1
+            tot = args.num_batches
+        else:
+            stop = tot - 1
+        for idx, i in tqdm(enumerate(va), total=tot):
+            if idx == stop:
+                break
+
         #print("Attempting to read testing data")
         #for i in tqdm(te):
         #    continue
@@ -240,6 +263,33 @@ class SeqCollater:
         idx_ret = torch.tensor(idx_ret)
         seq_id_ret = torch.tensor(seq_id_ret)
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+
+
+class TrainingSeqCollater:
+
+    def __init__(self, padval):
+        self.padval = padval
+
+    def __call__(self, samples):
+        maxlen = 0
+        l_idx = -1
+        if isinstance(samples, tuple):
+            samples = [samples]
+        for i, X, y, seq_id in samples:
+            if maxlen < X.shape[l_idx]:
+                maxlen = X.shape[l_idx]
+        X_ret = list()
+        y_ret = list()
+        for i, X, y, seq_id in samples:
+            dif = maxlen - X.shape[l_idx]
+            X_ = X
+            if dif > 0:
+                X_ = F.pad(X, (0, dif), value=self.padval)
+            X_ret.append(X_)
+            y_ret.append(y)
+        X_ret = torch.stack(X_ret)
+        y_ret = torch.stack(y_ret)
+        return (X_ret, y_ret)
 
 
 def _check_collater(padval, seq_collater):
@@ -572,7 +622,7 @@ def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
     return (tr_dl, va_dl, te_dl)
 
 
-def get_collater(dataset):
+def get_collater(dataset, inference=False):
     if dataset.tnf:
         return TnfCollater(dataset.vocab)
     elif dataset.manifold:
@@ -580,7 +630,10 @@ def get_collater(dataset):
     elif dataset.graph:
         return GraphCollater(dataset.node_ids, seq_collater=collater)
     else:
-        return SeqCollater(dataset.padval)
+        if inference:
+            return SeqCollater(dataset.padval)
+        else:
+            return TrainingSeqCollater(dataset.padval)
 
 
 def get_loader(dataset, distances=False, graph=False, **kwargs):
@@ -672,7 +725,7 @@ class SubsetDataLoader(DataLoader):
 
 class DeepIndexDataModule(pl.LightningDataModule):
 
-    def __init__(self, hparams, inference=False, keep_open=False):
+    def __init__(self, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1):
         super().__init__()
 
         kwargs = dict(batch_size=hparams.batch_size)
