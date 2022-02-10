@@ -4,8 +4,6 @@ import os.path
 import pickle
 import json
 import ruamel.yaml as yaml
-from time import time
-from tqdm import tqdm
 from datetime import datetime
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
@@ -186,6 +184,43 @@ def process_args(args=None, return_io=False):
     """
     if not isinstance(args, argparse.Namespace):
         args = parse_args(args)
+
+    args.loader_kwargs = dict()
+
+    # make sure we are classifying if we are using adding classifier layers
+    # to a resnet features model
+    if args.features_checkpoint is not None:
+        if args.manifold:
+            raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
+        args.classify = True
+
+    data_mod = DeepIndexDataModule(args, keep_open=True)
+
+    # if classification problem, use the number of taxa as the number of outputs
+    if args.classify:
+        args.n_outputs = len(data_mod.dataset.taxa_labels)
+
+    args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
+
+    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+
+    if args.weighted is not None:
+        if args.weighted == 'ens':
+            weights = (1 - args.ens_beta)/(1 - args.ens_beta**data_mod.dataset.taxa_counts)
+        elif args.weighted == 'isns':
+            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
+        elif args.weighted == 'ins':
+            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
+        elif args.weighted == 'phy':
+            k = args.phylo_neighbors
+            weights = np.partition(data_mod.dataset.distances, k, axis=1)[:, :k].sum(axis=1)
+        else:
+            raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
+        model.set_class_weights(weights)
+
+    if args.num_workers > 0:
+        data_mod.dataset.close()
+        #pass
 
     targs = dict(
         max_epochs=args.epochs,
@@ -418,7 +453,7 @@ def run_lightning(argv=None):
     import os
     import pprint
 
-    pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
+    pformat = pprint.PrettyPrinter(sort_dicts=False, width=100).pformat
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
     # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
@@ -433,7 +468,7 @@ def run_lightning(argv=None):
     outdir, output = process_output(args)
     check_directory(outdir)
     print0(' '.join(sys.argv), file=sys.stderr)
-    print0("Processed Args:\n", pformat(vars(args)), file=sys.stderr)
+    print0("Processed Args:", pformat(vars(args)), file=sys.stderr)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -491,8 +526,8 @@ def run_lightning(argv=None):
         targs['log_every_n_steps'] = 1
         targs['fast_dev_run'] = 10
 
-    print0('Trainer args:\n', pformat(targs), file=sys.stderr)
-    print0('DataLoader args:\n', pformat(data_mod._loader_kwargs), file=sys.stderr)
+    print0('Trainer args:', pformat(targs), file=sys.stderr)
+    print0('DataLoader args:', pformat(data_mod._loader_kwargs), file=sys.stderr)
     print0('Model:\n', model, file=sys.stderr)
 
     trainer = Trainer(**targs)
