@@ -27,7 +27,7 @@ def main():
         },
         'Training and models': {
             'train': Command('nn.train.run_lightning', 'Run training with PyTorch Lightning'),
-            'train-job': Command('run.run_job.run_train', 'Run a training job'),
+            'train-job': Command('run.run_job.run_train', 'Run an inference job'),
             'train-conf': Command('nn.train.print_config_options', 'Print the available options for a config file'),
             'conf-tmpl': Command('nn.train.print_config_templ', 'Print an empty config file'),
             'show-args': Command('nn.train.print_args', 'display input arguments for training run'),
