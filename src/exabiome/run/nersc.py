@@ -11,7 +11,7 @@ class SlurmJob(AbstractJob):
     output_flag = 'o'
     error_flag = 'e'
     jobname_flag = 'J'
-    nodes_flag = 'n'
+    nodes_flag = '-ntasks'
     submit_cmd = 'sbatch'
     job_var = 'SLURM_JOB_ID'
     job_fmt_var = 'j'
