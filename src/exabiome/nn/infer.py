@@ -15,7 +15,6 @@ import glob
 import h5py
 import argparse
 import torch
-from torch.utils.data import Subset
 from torch.cuda.amp import autocast
 import torch.nn as nn
 import logging
@@ -37,22 +36,12 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
     parser.add_argument('-f', '--resnet_features', action='store_true', help='drop classifier from ResNet model before inference', default=False)
     parser.add_argument('-F', '--features', action='store_true', help='outputs are features i.e. do not softmax and compute predictions', default=False)
-    parser.add_argument('-E', '--experiment', type=str, default='default',
-                        help='the experiment name to get the checkpoint from')
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
-    parser.add_argument('-L', '--load', action='store_true', default=False,
-                        help='load data into memory before running inference')
-    parser.add_argument('-U', '--umap', action='store_true', default=False,
-                        help='compute a 2D UMAP embedding for vizualization')
     parser.add_argument('-d', '--debug', action='store_true', default=False,
                         help='run in debug mode i.e. only run two batches')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
-    parser.add_argument('-R', '--train', action='append_const', const='train', dest='loaders',
-                        help='do inference on training data')
-    parser.add_argument('-V', '--validate', action='append_const', const='validate', dest='loaders',
-                        help='do inference on validation data')
-    parser.add_argument('-S', '--test', action='append_const', const='test', dest='loaders', help='do inference on test data')
+
     parser.add_argument('-N', '--nonrep', action='append_const', const='nonrep', dest='loaders', help='the dataset is nonrepresentative species')
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
@@ -95,22 +84,15 @@ def process_args(args, size=1, rank=0, comm=None):
     args.logger = logger
 
 
-    targs = dict()
-
-    # this does not get used in this command,
-    # but leave it here in case we figure out how to
-    # do infernce with Lightning someday
-    targs['gpus'] = process_gpus(args.gpus)
-    if targs['gpus'] != 1:
-        targs['distributed_backend'] = 'ddp'
+    addl_args = dict()
 
     if args.slurm:
-        targs['environment'] = SLURMEnvironment()
+        addl_args['environment'] = SLURMEnvironment()
     elif args.lsf:
-        targs['environment'] = LSFEnvironment()
+        addl_args['environment'] = LSFEnvironment()
 
     if args.debug:
-        targs['fast_dev_run'] = True
+        addl_args['fast_dev_run'] = True
 
     # Figure out the checkpoint file to read from
     # and where to save outputs to
@@ -157,31 +139,35 @@ def process_args(args, size=1, rank=0, comm=None):
         args.features = True
 
     if args.loaders is None or len(args.loaders) == 0:
-        args.loaders = ['train', 'validate', 'test']
+        args.loaders = ['train', 'validate']
 
+    close_file = False
     if 'nonrep' in args.loaders:
         if size > 1:
-            dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm)
+            dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
+            args.logger.info(f'rank {rank} - processing {len(dataset)} samples subset')
         else:
             dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
         tmp_dset = dataset
         if args.start > 0:
-            tmp_dset = Subset(tmp_dset, np.arange(args.start, len(dataset)))
+            warnings.warn('Ignoring --start. Updated code does not support this')
 
-        if size > 1:
-            subset = distsplit(len(tmp_dset), size, rank)
-            tmp_dset = Subset(tmp_dset, subset)
-            args.logger.info(f'rank {rank} - processing {len(subset)} samples subset')
+        kwargs = dict(batch_size=args.batch_size, shuffle=False)
+        if args.num_workers > 0:
+            kwargs['num_workers'] = args.num_workers
+            kwargs['multiprocessing_context'] = 'spawn'
+            kwargs['worker_init_fn'] = dataset.worker_init
+            kwargs['persistent_workers'] = True
+            dataset.close()
+        ldr = get_loader(tmp_dset, inference=True, **kwargs)
 
-        ldr = get_loader(tmp_dset, batch_size=args.batch_size, distances=False)
         args.loaders = {'nonrep': ldr}
         args.difile = dataset.difile
     else:
         args.loader_kwargs = {'rank': rank, 'size': size}
         data_mod = DeepIndexDataModule(args, inference=True, keep_open=True)
         args.loaders = {'train': data_mod.train_dataloader(),
-                        'validate': data_mod.val_dataloader(),
-                        'test': data_mod.test_dataloader()}
+                        'validate': data_mod.val_dataloader()}
         args.difile = data_mod.dataset.difile
         if args.num_workers > 0:
             data_mod.dataset.close()
@@ -193,15 +179,15 @@ def process_args(args, size=1, rank=0, comm=None):
 
     model.eval()
 
-    ret = [model, dataset, args, targs]
+    ret = [model, dataset, args, addl_args]
 
     if size > 1:
-        if 'environment' not in targs:
+        if 'environment' not in addl_args:
             print(f'rank {rank} - Please specify --lsf or --slurm if running distributed', file=sys.stderr)
             sys.exit(1)
-        args.device = torch.device('cuda:%d' % targs['environment'].local_rank())
+        args.device = torch.device('cuda:%d' % addl_args['environment'].local_rank())
     else:
-        args.device = torch.device('cuda:0')
+        args.device = torch.device('cuda')
 
     return tuple(ret)
 
