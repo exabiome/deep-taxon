@@ -50,6 +50,7 @@ def main():
         },
         'Inference and model assessment': {
             'infer': Command('nn.infer.run_inference', 'Run inference using PyTorch'),
+            'infer-job': Command('run.run_infer.run_inference', 'Run a training job'),
             'agg-chunks': Command('nn.summarize.aggregate_chunks', 'aggregate sequence chunks to get NN outputs for individual sequences'),
             'agg-seqs': Command('nn.summarize.aggregate_seqs', 'aggregate sequence chunks to get NN outputs for individual taxons (i.e. labels)'),
             'tax-acc': Command('nn.summarize.taxonomic_accuracy', 'calculate classificaiton accuracy across all possible taxonomic levels'),
