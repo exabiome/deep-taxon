@@ -155,8 +155,8 @@ def parse_args(*addl_args, argv=None):
     prof_grp = parser.add_mutually_exclusive_group()
     prof_grp.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     prof_grp.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
-    parser.add_argument('--sanity', action='store_true', default=False,
-                        help='run five epochs with 40 batches for training and 5 batches for validation ')
+    parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
+                        help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
     grp.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
@@ -255,8 +255,12 @@ def process_args(args=None, return_io=False):
         )
 
     if args.sanity:
-        targs['limit_train_batches'] = 4000
-        targs['limit_val_batches'] = 500
+        if isinstance(args.sanity, str):
+            args.sanity = int(args.sanity)
+        else:
+            args.sanity = 4000
+        targs['limit_train_batches'] = args.sanity
+        targs['limit_val_batches'] = args.sanity // 4
 
     if args.lr_find:
         targs['auto_lr_find'] = True
