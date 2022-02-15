@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
-from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, LazyWindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
+from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, LazyWindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence, lazy_chunk_sequence, DIFileFilter
 from ..utils import parse_seed, distsplit
 
 import psutil
@@ -63,6 +63,8 @@ def dataset_stats(argv=None):
     parser =  argparse.ArgumentParser()
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     add_dataset_arguments(parser)
+    parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=None)
+    parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
     test_group.add_argument('--mem', default=False, action='store_true', help='print memory usage before and after loading')
@@ -78,6 +80,10 @@ def dataset_stats(argv=None):
 
 
     args = parser.parse_args(argv)
+
+
+    tr_len = None
+    va_len = None
     if args.lightning:
         args.downsample = False
         args.loader_kwargs = dict()
@@ -88,29 +94,47 @@ def dataset_stats(argv=None):
         after = time()
         if args.mem:
             print_mem('after DeepIndexDataModule ')
+
         dataset = data_mod.dataset
+        dataset.set_subset(train=True)
+        tr_len = len(dataset)
+        dataset.set_subset(validate=True)
+        va_len = len(dataset)
+        dataset.set_subset()
     else:
+        if (args.rank != None and args.size == None) or (args.rank != None and args.size == None):
+            print("You must specify both --rank and --size", file=sys.stderr)
+            exit(1)
+
+        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True)
+        if args.rank != None:
+            kwargs['rank'] = args.rank
+            kwargs['size'] = args.size
         before = time()
-        print('hparams', args)
-        dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True, lazy_chunk=True)
+        dataset = LazySeqDataset(**kwargs)
         dataset.load(sequence=False)
         after = time()
 
     print(f'Took {after - before} seconds to open {args.input}')
     difile = dataset.difile
+    orig_difile = difile
+    while not isinstance(orig_difile, DeepIndexFile):
+        orig_difile = orig_difile.difile
 
-    n_taxa = len(difile.taxa_table)
-    n_seqs = len(difile.seq_table)
+    n_taxa = len(orig_difile.taxa_table)
+    n_seqs = len(orig_difile.seq_table)
 
     n_samples = len(dataset)
-    n_disc = difile.n_discarded
-    wlen = args.window
-    step = args.step
 
-    if wlen is not None:
+    if args.window:
+        n_disc = difile.n_discarded
+        wlen = args.window
+        step = args.step
         print((f'Splitting {n_seqs} sequences (from {n_taxa} species) into {wlen} '
                f'bp windows every {step} bps produces {n_samples} samples '
                f'(after discarding {n_disc} samples).'))
+        if tr_len is not None:
+            print(f'There are {tr_len} training samples and {va_len} validation samples')
     else:
         print(f'Found {n_seqs} sequences across {n_taxa} species. {n_samples} total samples')
 
@@ -636,13 +660,13 @@ def get_collater(dataset, inference=False):
             return TrainingSeqCollater(dataset.padval)
 
 
-def get_loader(dataset, distances=False, graph=False, **kwargs):
+def get_loader(dataset, inference=False, **kwargs):
     """
     Return a DataLoader that loads data from the given Dataset
 
     Args:
         dataset (Dataset): the dataset to return a DataLoader for
-        distances  (bool): whether or not to return distances for a batch
+        inference  (bool): whether or not we are running inference
     """
     # Find the LazySeqDataset so we can pull necessary information from it
     orig_dataset = dataset
@@ -653,13 +677,9 @@ def get_loader(dataset, distances=False, graph=False, **kwargs):
                "Expected torch.utils.data.Subset or exabione.nn.loader.LazySeqDataset. "
                "Got %s" % type(dataset).__name__)
         raise ValueError(msg)
-    collater = SeqCollater(dataset.padval)
-    if distances:
-        if dataset.difile.distances is None:
-            raise ValueError('DeepIndexFile {dataset.difile} does not contain distances')
-        collater = DistanceCollater(dataset.difile.distances.data[:], dataset.padval)
-    elif graph:
-        collater = GraphCollater(dataset.node_ids, dataset.padval)
+
+    collater = get_collater(dataset, inference=inference)
+
     return DataLoader(orig_dataset, collate_fn=collater, **kwargs)
 
 
@@ -856,7 +876,7 @@ class LazySeqDataset(Dataset):
 
 
     """
-    def __init__(self, path=None, keep_open=False, hparams=None, lazy_chunk=True, **kwargs):
+    def __init__(self, path=None, keep_open=False, hparams=None, lazy_chunk=True, rank=0, size=1, **kwargs):
         self.__lazy_chunk = lazy_chunk
         kwargs.setdefault('input', None)
         kwargs.setdefault('window', None)
@@ -893,6 +913,8 @@ class LazySeqDataset(Dataset):
         self.window, self.step = check_window(hparams.window, hparams.step)
         self.revcomp = not hparams.fwd_only
 
+        self._world_size = size
+        self._global_rank = rank
 
         self._label_dtype = torch.int64
 
@@ -902,16 +924,21 @@ class LazySeqDataset(Dataset):
 
         # open to get dataset length
         self.open()
+        self.__len = len(self.difile)
         if self.__lazy_chunk:
-            counts = self.difile.lut.copy()
-            counts[1:] = counts[1:] - counts[:-1]
-            self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
-            self.taxa_labels = np.arange(len(self.taxa_counts))
+            if isinstance(self.difile, DIFileFilter):
+                counts = self.difile.lut.copy()
+                counts[1:] = counts[1:] - counts[:-1]
+                self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
+                self.taxa_labels = np.arange(len(self.taxa_counts))
+            else:
+                self.taxa_counts = np.bincount(self.orig_difile.labels).astype(int)
+                self.taxa_labels = np.arange(len(self.taxa_counts))
         else:
             self.taxa_labels, self.taxa_counts = np.unique(self.difile.labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
 
-        self.vocab = np.chararray.upper(self.orig_difile.seq_table['sequence'].target.elements[:].astype('U1'))
+        self.vocab = self.orig_difile.get_vocab()
         if len(self.vocab) > 18:
             self.protein = True
             idx = np.where(self.vocab == '-')[0]
@@ -989,6 +1016,10 @@ class LazySeqDataset(Dataset):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.orig_difile = self.io.read()
+
+        if self._world_size > 1:
+            self.orig_difile.set_sequence_subset(distsplit(len(self.orig_difile), self._world_size, self._global_rank))
+
         self.difile = self.orig_difile
 
         self.load(sequence=self.load_data)

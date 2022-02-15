@@ -27,7 +27,7 @@ def main():
         },
         'Training and models': {
             'train': Command('nn.train.run_lightning', 'Run training with PyTorch Lightning'),
-            'train-job': Command('run.run_job.run_train', 'Run a training job'),
+            'train-job': Command('run.run_job.run_train', 'Run an inference job'),
             'train-conf': Command('nn.train.print_config_options', 'Print the available options for a config file'),
             'conf-tmpl': Command('nn.train.print_config_templ', 'Print an empty config file'),
             'show-args': Command('nn.train.print_args', 'display input arguments for training run'),
@@ -50,6 +50,7 @@ def main():
         },
         'Inference and model assessment': {
             'infer': Command('nn.infer.run_inference', 'Run inference using PyTorch'),
+            'infer-job': Command('run.run_infer.run_inference', 'Run a training job'),
             'agg-chunks': Command('nn.summarize.aggregate_chunks', 'aggregate sequence chunks to get NN outputs for individual sequences'),
             'agg-seqs': Command('nn.summarize.aggregate_seqs', 'aggregate sequence chunks to get NN outputs for individual taxons (i.e. labels)'),
             'tax-acc': Command('nn.summarize.taxonomic_accuracy', 'calculate classificaiton accuracy across all possible taxonomic levels'),

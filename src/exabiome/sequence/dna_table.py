@@ -1,5 +1,6 @@
 from abc import ABCMeta, abstractmethod
 import math
+import warnings
 
 import numpy as np
 import torch
@@ -15,6 +16,7 @@ from hdmf import Container, Data
 
 __all__ = ['DeepIndexFile',
            'AbstractChunkedDIFile',
+           'DIFileFilter',
            'WindowChunkedDIFile',
            'LazyWindowChunkedDIFile',
            'RevCompFilter',
@@ -104,6 +106,7 @@ class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
             columns.append(DynamicTableRegion('genome', genome, 'the genome of each sequence', genome_table))
         kwargs['columns'] = columns
         call_docval_func(super().__init__, kwargs)
+
 
 
 @register_class('SequenceTable', NS)
@@ -421,6 +424,7 @@ class DeepIndexFile(Container):
         self._sanity = False
         self._sanity_features = 5
         self.labels = None
+        self.__indices = None
         self.__n_outputs = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
         self.set_label_key('id')
@@ -447,7 +451,10 @@ class DeepIndexFile(Container):
             genome_labels = np.column_stack(cols)
         else:
             raise ValueError("Unrecognized label key: '%s'" % val)
-        genome_idx = self.seq_table['genome'].data[:]
+        if self.__indices is None:
+            genome_idx = self.seq_table['genome'].data[:]
+        else:
+            genome_idx = self.seq_table['genome'].data[self.__indices]
         self.labels = genome_labels[genome_idx]
 
     def get_label_classes(self, label_key=None):
@@ -481,20 +488,37 @@ class DeepIndexFile(Container):
         return self.get(i)
 
     def get(self, arg):
+        arg = self.__translate_arg(arg)
         idx = self.seq_table.id[arg]
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
         label = self.labels[arg]
-
-        #old code I'm not sure if I should get rid of or not
-        #label = self.seq_table['genome'].get(arg, index=True)    # index to genome table
-        #label = self.genome_table['rep_idx'].get(label, index=True) # index to taxa table
-        #label = self.taxa_table[self.label_key].get(label, **self.__get_kwargs)
-
         length = self.seq_table['length'].get(arg)
         return {'id': idx, 'seq': seq, 'label': label, 'length': length}
 
+    def set_sequence_subset(self, indices=None):
+        self.__indices = indices
+        self.set_label_key(self.label_key)
+
+    def __translate_arg(self, arg):
+        if self.__indices is None:
+            return arg
+        else:
+            return self.__indices[arg]
+
     def __len__(self):
-        return len(self.seq_table) * (2 if self.__rev else 1)
+        if self.__indices is None:
+            return len(self.seq_table) * (2 if self.__rev else 1)
+        else:
+            return len(self.__indices)
+
+    def get_seq_lengths(self):
+        if self.__indices is None:
+            if isinstance(self.seq_table['length'].data, np.ndarray):
+                return self.seq_table['length'].data.copy()
+            else: # h5py.Dataset
+                return self.seq_table['length'].data[:]
+        else:
+            return self.seq_table['length'].data[self.__indices]
 
     def set_raw(self):
         self.seq_table.set_raw()
@@ -519,6 +543,12 @@ class DeepIndexFile(Container):
         ret.fit(emb, np.arange(emb.shape[0]))
         return ret
 
+    def set_subset(self, subset_counts, seed, starts=None):
+        warnings.warn("Cannot subset DeepIndexFile -- ignoring")
+
+    def get_vocab(self):
+        return np.chararray.upper(self.seq_table['sequence'].target.elements[:].astype('U1'))
+
 class DIFileFilter(object):
 
     def __init__(self, difile):
@@ -527,6 +557,7 @@ class DIFileFilter(object):
     def __getattr__(self, attr):
         """Delegate retrival of attributes to the data in self.data"""
         return getattr(self.difile, attr)
+
 
 class AbstractChunkedDIFile(DIFileFilter):
     """
@@ -600,7 +631,7 @@ def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
 
     dtype = np.uint32
 
-    lengths = difile.seq_table['length'][:].astype(dtype)
+    lengths = difile.get_seq_lengths() # difile.seq_table['length'][:].astype(dtype)
     # compute the number of chunks proced by each sequecne by adding
     # the number of full chunks in each sequence to the number of incomplete chunks
     n_chunks = ((lengths // step) +
@@ -628,7 +659,7 @@ def lazy_chunk_sequence(difile, wlen, step=None, min_seq_len=100):
         raise ValueError('window size (wlen) must be greater than or equal to minimum chunk length (min_seq_len)')
 
     # the length of each sequence
-    lengths = np.asarray(difile.seq_table['length'].data, dtype=int)
+    lengths = np.asarray(difile.get_seq_lengths(), dtype=int)
 
     # C_min is the shortest chunk before filtering (for each sequence)
     C_min = lengths % step
@@ -638,7 +669,7 @@ def lazy_chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     n_short_C = np.maximum(((min_seq_len - C_min - 1) // step) + 1, 0)
 
     # n_C is the number of chunks in each sequence before filtering
-    n_C = lengths // step + ((lengths % step) > 0)
+    n_C = (lengths - 1) // step + 1
 
     # ret is the number of valid chunks (i.e. chunks >= min_seq_len) for each sequence
     ret = n_C - n_short_C
@@ -739,56 +770,6 @@ class LazyWindowChunkedDIFile(DIFileFilter):
             n_chunks = self.orig_lut[seq_i] if seq_i == 0 else self.orig_lut[seq_i] - self.orig_lut[seq_i-1]
             chunk_indices = np.random.default_rng(seed=self.seed + seq_i).permutation(n_chunks)
             chunk_i = chunk_indices[chunk_i]
-
-        s = self.step * chunk_i
-        e = s + min(self.window, self.lengths[seq_i])
-
-        item = self.difile[seq_i]
-        item['seq'] = item['seq'][s:e]
-        item['seq_idx'] = seq_i
-        item['id'] = i
-        item['length'] = e - s
-        return item
-
-
-
-class LazySubset:
-
-    def __init__(self, chunked_difile, subset_counts, starts=None):
-        self.orig_difile = chunked_difile
-        self.lut = chunked_difile.lut
-        self.window = chunked_difile.window
-        self.step = chunked_difile.step
-        self.difile = chunked_difile.difile
-        self.lengths = chunked_difile.lengths
-
-        self.subset_lut = np.cumsum(subset_counts)
-        self.labels = LabelComputer(self.subset_lut, difile.labels)
-        self.starts = starts
-
-    def __len__(self):
-        return self.subset_lut[-1]
-
-    def __getitem__(self, i):
-        if not isinstance(i, (int, np.integer)):
-            raise ValueError("LazyWindowChunkedDIFile only supports indexing with an integer")
-
-        if i < 0:
-            i += self.lut[i]
-            if i < 0:
-                raise IndexError(f'index {i} is out of bounds for LazyWindowChunkedDIFile of length {self.lut[-1]}')
-
-        seq_i = np.searchsorted(self.subset_lut, i, side="right")
-
-        n_chunks = self.lut[seq_i]
-        if seq_i > 0:
-            n_chunks -= self.lut[seq_i-1]
-
-        chunk_indices = np.random.default_rng(seed=self.seed + seq_i).permutation(n_chunks)
-
-        chunk_i = i if seq_i == 0 else i - self.subset_lut[seq_i - 1]
-        if self.starts is not None:
-            chunk_i += self.starts[seq_i]
 
         s = self.step * chunk_i
         e = s + min(self.window, self.lengths[seq_i])
