@@ -1034,6 +1034,10 @@ class LazySeqDataset(Dataset):
 
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
+    @property
+    def rank(self):
+        return self._global_rank
+
     def worker_init(self, worker_id):
         # September 15, 2021, ajtritt
         # This print statement is necessary to avoid processings from hanging when they are started

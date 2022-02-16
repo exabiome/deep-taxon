@@ -1,4 +1,5 @@
 from abc import ABCMeta, abstractmethod
+import copy
 import math
 import warnings
 
@@ -498,6 +499,9 @@ class DeepIndexFile(Container):
     def set_sequence_subset(self, indices=None):
         self.__indices = indices
         self.set_label_key(self.label_key)
+
+    def get_sequence_subset(self):
+        return copy.copy(self.__indices)
 
     def __translate_arg(self, arg):
         if self.__indices is None:
