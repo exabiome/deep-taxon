@@ -52,6 +52,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-S', '--n_seqs', type=int, default=2500, help='the number of sequences to aggregate chunks for between each write to disk')
     parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
                         help='store the top TOPN probablities of each output. By default, TOPN=1')
+    parser.add_argument('-O', '--no_outputs', action='store_true', help='do not store network outputs', default=False)
 
     env_grp = parser.add_argument_group("Resource Manager").add_mutually_exclusive_group()
     env_grp.add_argument("--lsf", default=False, action='store_true', help='running in an LSF environment')
@@ -306,7 +307,9 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
     seq_lengths  = dataset.orig_difile.get_seq_lengths()
 
     f = h5py.File(args.output, 'w', **fkwargs)
-    outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+    outputs_dset = None
+    if not args.no_outputs:
+        outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
     labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int)
 
     maxprob_dset = None
@@ -364,7 +367,8 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
             for i in range(len(seqs_q) - 1):
                 outputs_q[i] /= counts_q[i]
 
-            outputs_dset[idx] = outputs_q[:-1]
+            if outputs_dset is not None:
+                outputs_dset[idx] = outputs_q[:-1]
             labels_dset[idx] = labels_q[:-1]
 
             if maxprob_dset is not None:
@@ -384,10 +388,11 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
             labels_q = labels_q[-1:]
 
     # clean up what's left in the to-write queue
-    for i in range(seqs_q):
+    for i in seqs_q:
         outputs_q[i] /= counts_q[i]
 
-    outputs_dset[seqs_q] = outputs_q
+    if outputs_dset is not None:
+        outputs_dset[seqs_q] = outputs_q
     labels_dset[seqs_q] = labels_q
 
     if maxprob_dset is not None:
