@@ -345,8 +345,8 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
         # Add the first sum of this iteration to the last sum of the
         # previous iteration if they belong to the same sequence
         if len(seqs_q) > 0 and seqs_q[-1] == seqs[0]:
-            outputs_q[-1] += output_sum[0]
-            n_samples_q[-1] += counts[0]
+            outputs_q[-1] += outputs_sum[0]
+            counts_q[-1] += counts[0]
             # drop the first sum so we don't end up with duplicates
             seqs = seqs[1:]
             counts = counts[1:]
@@ -359,20 +359,20 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
         labels_q.extend(counts)
 
         if len(outputs_q) > args.n_seqs:
+            idx = seqs_q[:-1]
             # compute mean from sums
             for i in range(len(seqs_q) - 1):
                 outputs_q[i] /= counts_q[i]
 
-            idx = seqs_q[:-1]
             outputs_dset[idx] = outputs_q[:-1]
             labels_dset[idx] = labels_q[:-1]
 
-            if maxprobs_dset is not None:
+            if maxprob_dset is not None:
                 k = outputs_q[0].shape[0] - args.maxprob
                 maxprobs = list()
                 for i in range(len(idx)):
                     maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:]))
-                maxprobs_dset[idx] = maxprobs
+                maxprob_dset[idx] = maxprobs
 
             if preds_dset is not None:
                 preds = [np.argmax(outputs_q[i]) for i in range(len(idx))]
@@ -390,12 +390,12 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
     outputs_dset[seqs_q] = outputs_q
     labels_dset[seqs_q] = labels_q
 
-    if maxprobs_dset is not None:
+    if maxprob_dset is not None:
         k = outputs_q[0].shape[0] - args.maxprob
         maxprobs = list()
         for i in range(len(seqs_q)):
             maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:]))
-        maxprobs_dset[seqs_q] = maxprobs
+        maxprob_dset[seqs_q] = maxprobs
 
     if preds_dset is not None:
         preds = [np.argmax(outputs_q[i]) for i in range(len(seqs_q))]
