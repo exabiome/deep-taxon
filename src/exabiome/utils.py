@@ -146,13 +146,15 @@ def float_list(string):
     return _num_list(string, float)
 
 
-def distsplit(dset_len, size, rank):
+def distsplit(dset_len, size, rank, arange=True):
     q, r = divmod(dset_len, size)
     if rank < r:
         q += 1
         b = rank*q
-        return np.arange(b, b+q)
     else:
         offset = (q+1)*r
         b = (rank - r)*q + offset
+    if arange:
         return np.arange(b, b+q)
+    else:
+        return b, b+q
