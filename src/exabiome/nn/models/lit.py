@@ -1,4 +1,3 @@
-from .. import train_test_loaders
 from pytorch_lightning import LightningModule
 import torch_optimizer as ptoptim
 import torch.optim as optim
@@ -63,16 +62,6 @@ class AbstractLit(LightningModule):
 
     def set_inference(self, inference=True):
         self._inference = inference
-
-    def set_dataset(self, dataset, load=True, inference=False):
-        kwargs = dict(random_state=self.hparams.seed,
-                      batch_size=self.hparams.batch_size,
-                      distances=self.hparams.manifold)
-
-        if inference:
-            kwargs['distances'] = False
-        tr, te, va = train_test_loaders(dataset, **kwargs)
-        self.loaders = {'train': tr, 'test': te, 'validate': va}
 
     def configure_optimizers(self):
         optimizer = None
