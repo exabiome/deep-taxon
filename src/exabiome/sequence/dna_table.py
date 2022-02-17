@@ -728,6 +728,13 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         self.starts = None
 
     def get_counts(self, orig=False):
+        """
+        Return the chunk counts for each sequence
+
+        Args:
+            orig (bool)     : return counts for sequence regardless of whether not
+                              this LazyWindowChunkedDIFile has been subsetting (with set_subset)
+        """
         if orig:
             counts = self.orig_lut.copy()
         else:
