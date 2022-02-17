@@ -167,6 +167,7 @@ def parse_args(*addl_args, argv=None):
     dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
     dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
+    parser.add_argument('-q', '--quiet', action='store_true', default=False, help='do not print arguments, model, etc.')
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -436,8 +437,9 @@ def run_lightning(argv=None):
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
     check_directory(outdir)
-    print0(' '.join(sys.argv), file=sys.stderr)
-    print0("Processed Args:\n", pformat(vars(args)), file=sys.stderr)
+    if not args.quiet:
+        print0(' '.join(sys.argv), file=sys.stderr)
+        print0("Processed Args:\n", pformat(vars(args)), file=sys.stderr)
 
     # save arguments
     with open(output('args.pkl'), 'wb') as f:
@@ -495,9 +497,10 @@ def run_lightning(argv=None):
         targs['log_every_n_steps'] = 1
         targs['fast_dev_run'] = 10
 
-    print0('Trainer args:\n', pformat(targs), file=sys.stderr)
-    print0('DataLoader args\n:', pformat(data_mod._loader_kwargs), file=sys.stderr)
-    print0('Model:\n', model, file=sys.stderr)
+    if not args.quiet:
+        print0('Trainer args:\n', pformat(targs), file=sys.stderr)
+        print0('DataLoader args\n:', pformat(data_mod._loader_kwargs), file=sys.stderr)
+        print0('Model:\n', model, file=sys.stderr)
 
     trainer = Trainer(**targs)
 
