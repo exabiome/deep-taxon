@@ -62,7 +62,7 @@ def to_onnx(argv=None):
             setattr(args, k, v)
 
     if args.output is None:
-        args.output = f'{args.checkpoint.rstrip(".ckpt")}.onnx'
+        args.output = f'{os.path.splitext(args.checkpoint)[0]}.onnx'
 
     if os.path.exists(args.output) and not args.force:
         print(f'ONNX file {args.output} already exists. Use -f to overwrite', file=sys.stderr)

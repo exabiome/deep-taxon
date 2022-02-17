@@ -121,7 +121,7 @@ def dataset_stats(argv=None):
     while not isinstance(orig_difile, DeepIndexFile):
         orig_difile = orig_difile.difile
 
-    n_taxa = len(orig_difile.taxa_table)
+    n_taxa = len(orig_difile.genome_table)
     n_seqs = len(orig_difile.seq_table)
 
     n_samples = len(dataset)
@@ -476,176 +476,6 @@ class TnfCollater:
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
-import torch.distributed as dist
-
-def train_test_validate_split(indices, stratify=None, random_state=None,
-                              test_size=None, train_size=None, validation_size=None):
-    """
-    Return train test validation split for the given indices
-    Args:
-        indices   : indices for the dataset
-        kwargs    : any additional arguments to pass into torch.DataLoader
-    """
-
-    random_state = check_random_state(random_state)
-
-    before = time()
-    print("Splitting out training data", file=sys.stderr)
-    train_idx, tmp_idx = train_test_split(indices,
-                                          train_size=train_size,
-                                          stratify=stratify,
-                                          random_state=random_state)
-    after = time()
-    print(f'Took {after - before} seconds to split out training data', file=sys.stderr)
-
-    if stratify is not None:
-        stratify = stratify[tmp_idx]
-
-    before = time()
-    print("Splitting validation and test data", file=sys.stderr)
-    test_idx, val_idx = train_test_split(tmp_idx,
-                                         train_size=test_size,
-                                         stratify=stratify,
-                                         random_state=random_state)
-    after = time()
-    print(f'Took {after - before} seconds to split validation and test data', file=sys.stderr)
-
-    train_idx = indices[train_idx]
-    test_idx = indices[test_idx]
-    val_idx = indices[val_idx]
-
-    return train_idx, test_idx, val_idx
-
-
-class DatasetSubset(Dataset):
-
-    def __init__(self, dataset, index):
-        self.index = index
-        self.dataset = dataset
-
-    def __getitem__(self, i):
-        return self.dataset[self.index[i]]
-
-    def __len__(self):
-        return len(self.index)
-
-    # def __getattr__(self, attr):
-    #     return getattr(self.dataset, attr)
-
-
-def train_test_loaders(dataset, random_state=None, downsample=None, **kwargs):
-    """
-    Return DataLoaders for training, validation, and test datasets.
-
-    Parameters
-    ----------
-    dataset: LazySeqDataset
-        the path to the DeepIndex file
-
-    random_state: int or RandomState, default=None
-        The seed to use for randomly splitting data
-
-    downsample: float, default=None
-        Fraction to downsample data to before setting up DataLoaders
-
-    kwargs:
-        any additional arguments to pass into torch.DataLoader. Note
-        *shuffle* will be ignored for when creating validation and test
-        loaders i.e. no shuffling for validation and testing
-    """
-    random_state = check_random_state(random_state)
-    n_samples = len(dataset)
-    test_size = int(n_samples/10)
-    validation_size = test_size
-    train_size = n_samples - 2 * test_size
-
-    print(f'Permuting {len(dataset)} integers', file=sys.stderr)
-    before = time()
-    indices = random_state.permutation(np.arange(len(dataset), dtype=np.uint32))
-    after = time()
-    print(f'Took {after - before} to permute indices', file=sys.stderr)
-
-    train_idx = indices[:train_size]
-    validate_idx = indices[train_size:train_size + validation_size]
-    test_idx = indices[train_size + validation_size:]
-
-    #rank = dist.get_rank()
-
-    # from mpi4py import MPI
-    # comm =  MPI.COMM_WORLD
-    # rank = comm.Get_rank()
-    # print(f'My rank is {rank}', file=sys.stderr)
-
-    # if rank == 0:
-    #     dataset.open()  # open the dataset so we can get labels for each sample
-    #     before = time()
-    #     stratify = dataset.sample_labels
-    #     after = time()
-    #     print(f'Took {after - before} seconds to get sample labels for stratifying splits', file=sys.stderr)
-
-    #     before = time()
-    #     train_idx, test_idx, validate_idx = train_test_validate_split(np.arange(len(dataset)),
-    #                                                                   stratify=stratify,
-    #                                                                   random_state=random_state,
-    #                                                                   train_size=train_size,
-    #                                                                   validation_size=validation_size,
-    #                                                                   test_size=test_size,)
-    #     after = time()
-    #     print(f'Took {after - before} seconds to compute splits', file=sys.stderr)
-    #     dataset.close()   # now close it so dataset can be pickled when passing it to DataLoader workers
-    # else:
-    #     train_idx = np.zeros(train_size)
-    #     validate_idx = np.zeros(validation_size)
-    #     test_idx = np.zeros(test_size)
-
-    # if rank == 0:
-    #     print(f'Attempting to broadcast train_idx', file=sys.stderr)
-    # comm.Bcast(train_idx, root=0)
-    # if rank == 0:
-    #     print(f'Attempting to broadcast validate_idx', file=sys.stderr)
-    # comm.Bcast(validate_idx, root=0)
-    # if rank == 0:
-    #     print(f'Attempting to broadcast test_idx', file=sys.stderr)
-    # comm.Bcast(test_idx, root=0)
-
-    if dataset.tnf:
-        collater = TnfCollater(dataset.vocab)
-    elif dataset.manifold:
-        collater = DistanceCollater(dataset.distances, seq_collater=collater)
-    elif dataset.graph:
-        collater = GraphCollater(dataset.node_ids, seq_collater=collater)
-    else:
-        collater = SeqCollater(dataset.padval)
-
-
-    if kwargs.get('num_workers', None) not in (None, 0):
-        if dataset.difile is not None:
-            msg = (f'Requesting {kwargs["num_workers"]} workers for loading data -- '
-                   'closing dataset to avoid pickling error. '
-                   'To suppress this warning, Set keep_open=False when constructing LazySeqDataset '
-                   'or call dataset.close before passing to train_test_loaders')
-            warnings.warn(msg)
-            dataset.close()
-
-    train_dataset = DatasetSubset(dataset, train_idx)
-    test_dataset = DatasetSubset(dataset, test_idx)
-    validate_dataset = DatasetSubset(dataset, validate_idx)
-
-    s = kwargs.pop('size', 1)
-    r = kwargs.pop('rank', -1)
-    if s > 1 and r >= 0:
-        train_dataset = Subset(train_dataset, distsplit(len(train_dataset), s, r))
-        test_dataset = Subset(test_dataset, distsplit(len(test_dataset), s, r))
-        validate_dataset = Subset(validate_dataset, distsplit(len(validate_dataset), s, r))
-
-    tr_dl = DataLoader(train_dataset, collate_fn=collater, **kwargs)
-    kwargs.pop('shuffle', None)
-    va_dl = DataLoader(test_dataset, collate_fn=collater, **kwargs)
-    te_dl = DataLoader(validate_dataset, collate_fn=collater, **kwargs)
-
-    return (tr_dl, va_dl, te_dl)
-
-
 def get_collater(dataset, inference=False):
     if dataset.tnf:
         return TnfCollater(dataset.vocab)
@@ -729,14 +559,36 @@ class WORSampler(Sampler):
         return ret
 
 
+class DSSampler(Sampler):
+    """Distributed Sequential Sampler"""
+
+    def __init__(self, length, rank=0, size=1):
+        super().__init__(None)
+        if size > 1:
+            self.start, self.end = distsplit(length, size, rank, arange=False)
+        else:
+            self.start = 0
+            self.end = length
+
+    def __iter__(self):
+        return range(self.start, self.end)
+
+    def __len__(self):
+        return self.end - self.start
+
+
 class SubsetDataLoader(DataLoader):
 
     def __init__(self, dataset, train=False, validate=False, test=False, **kwargs):
+        if 'sampler' not in kwargs:
+            kwargs['sampler'] = DSSampler(dataset.get_subset_len(train=train, vaidate=validate, test=test))
         super().__init__(dataset, **kwargs)
         self.train = train
         self.validate = validate
         self.test = test
 
+    def __len__(self):
+        return (len(self.sampler) - 1) // self.batch_size + 1
 
     def __iter__(self):
         self.dataset.set_subset(train=self.train, validate=self.validate, test=self.test)
@@ -758,11 +610,14 @@ class DeepIndexDataModule(pl.LightningDataModule):
             self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
             self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = hparams.pin_memory
-            kwargs['sampler'] = None
-            self.dataset.set_subset(train=True)
-            train_len = len(self.dataset)
-            self.dataset.set_subset()
-            kwargs['sampler'] = WORSampler(train_len, rng=seed, rank=rank, size=size)
+
+            # set up the training sampler - shuffle for training
+            train_len = self.dataset.get_subset_len(train=True)
+            self._tr_sampler = WORSampler(train_len, rng=seed, rank=rank, size=size)
+
+            # set up the validation sampler - DO NOT shuffle for training
+            val_len = self.dataset.get_subset_len(validate=True)
+            self._val_sampler = DSSampler(val_len, rank=rank, size=size)
 
         self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
 
@@ -786,13 +641,15 @@ class DeepIndexDataModule(pl.LightningDataModule):
         kwargs = self._loader_kwargs.copy()
         if self._parallel_load:
             self.dataset.close()
+        kwargs['sampler'] = self._tr_sampler
         return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
     def val_dataloader(self):
         kwargs = self._loader_kwargs.copy()
         if self._parallel_load:
             self.dataset.close()
-        kwargs.pop('sampler', None)
+        #kwargs.pop('sampler', None)
+        kwargs['sampler'] = self._val_sampler
         return SubsetDataLoader(self.dataset, validate=True, **kwargs)
 
     def test_dataloader(self):
@@ -907,9 +764,6 @@ class LazySeqDataset(Dataset):
         self.hparams = hparams
         self.load_data = hparams.load
 
-        # memoize any chunking we've done so we only need to do it once
-        self._chunkings = dict()
-
         self.window, self.step = check_window(hparams.window, hparams.step)
         self.revcomp = not hparams.fwd_only
 
@@ -922,18 +776,23 @@ class LazySeqDataset(Dataset):
         self._validate_subset = False
         self._test_subset = False
 
+        self._val_counts = None
+        self._train_counts = None
+
         # open to get dataset length
         self.open()
         self.__len = len(self.difile)
+        self._orig_len = self.__len
         if self.__lazy_chunk:
             if isinstance(self.difile, DIFileFilter):
-                counts = self.difile.lut.copy()
+                counts = self.difile.get_counts(orig=True)
+                self._val_counts = np.round(self.val_frac * counts).astype(int)
+                self._train_counts = counts - self._val_counts
                 counts[1:] = counts[1:] - counts[:-1]
                 self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
-                self.taxa_labels = np.arange(len(self.taxa_counts))
             else:
                 self.taxa_counts = np.bincount(self.orig_difile.labels).astype(int)
-                self.taxa_labels = np.arange(len(self.taxa_counts))
+            self.taxa_labels = np.arange(len(self.taxa_counts))
         else:
             self.taxa_labels, self.taxa_counts = np.unique(self.difile.labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
@@ -1034,6 +893,10 @@ class LazySeqDataset(Dataset):
 
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
+    @property
+    def rank(self):
+        return self._global_rank
+
     def worker_init(self, worker_id):
         # September 15, 2021, ajtritt
         # This print statement is necessary to avoid processings from hanging when they are started
@@ -1047,13 +910,20 @@ class LazySeqDataset(Dataset):
         if self.__lazy_chunk:
             self.difile = LazyWindowChunkedDIFile(self.difile, window, step)
         else:
-            chunks = self._chunkings.get((window, step))
-            if chunks is None:
-                self._chunkings[(window, step)] = chunk_sequence(self.difile, window, step)
-            self.difile = AbstractChunkedDIFile(self.difile, *self._chunkings[(window, step)])
+            raise ValueError("We only support lazy chunking now")
 
     def set_revcomp(self, revcomp=True):
         self.difile = RevCompFilter(self.difile)
+
+    def get_subset_len(self, train=False, validate=False, test=False):
+        rc = 2 if self.revcomp else 1
+        if train:
+            return self._train_counts.sum() * rc
+        elif validate:
+            return self._val_counts.sum() * rc
+        elif test:
+            raise ValueError("We don't support a test subset")
+        return self._orig_len
 
     def set_subset(self, train=False, validate=False, test=False):
         self._train_subset = train
@@ -1066,15 +936,12 @@ class LazySeqDataset(Dataset):
         if all((not train, not validate, not test)):
             self.difile.set_subset(None, None)
         else:
-            counts = self.difile.get_counts(orig=True)
-            val_counts = np.round(self.val_frac * counts).astype(int)
-            train_counts = counts - val_counts
             if validate:
-                self.difile.set_subset(val_counts, self.hparams.seed, starts=train_counts)
+                self.difile.set_subset(self._val_counts, self.hparams.seed, starts=self._train_counts)
             elif test:
                 raise ValueError("Cannot do this yet, and I may never do it, since we use held-out genomes for testing")
             else:
-                self.difile.set_subset(train_counts, self.hparams.seed)
+                self.difile.set_subset(self._train_counts, self.hparams.seed)
         self.__len = len(self.difile)
 
     def set_ohe(self, ohe=True):

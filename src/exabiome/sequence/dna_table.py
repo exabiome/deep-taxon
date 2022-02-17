@@ -1,4 +1,5 @@
 from abc import ABCMeta, abstractmethod
+import copy
 import math
 import warnings
 
@@ -499,6 +500,9 @@ class DeepIndexFile(Container):
         self.__indices = indices
         self.set_label_key(self.label_key)
 
+    def get_sequence_subset(self):
+        return copy.copy(self.__indices)
+
     def __translate_arg(self, arg):
         if self.__indices is None:
             return arg
@@ -724,6 +728,13 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         self.starts = None
 
     def get_counts(self, orig=False):
+        """
+        Return the chunk counts for each sequence
+
+        Args:
+            orig (bool)     : return counts for sequence regardless of whether not
+                              this LazyWindowChunkedDIFile has been subsetting (with set_subset)
+        """
         if orig:
             counts = self.orig_lut.copy()
         else:

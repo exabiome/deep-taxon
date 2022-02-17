@@ -1,6 +1,7 @@
 import sys
 import numpy as np
 import os
+from time import time
 from functools import partial
 from ..utils import check_argv, parse_logger, ccm, distsplit
 from .utils import process_gpus, process_model, process_output
@@ -45,8 +46,14 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-N', '--nonrep', action='append_const', const='nonrep', dest='loaders', help='the dataset is nonrepresentative species')
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
-    parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk')
+    parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk or aggregation')
     parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=0)
+    parser.add_argument('-a', '--aggregate', action='store_true', help='aggregate chunks within sequences', default=False)
+    parser.add_argument('-S', '--n_seqs', type=int, default=2500, help='the number of sequences to aggregate chunks for between each write to disk')
+    parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
+                        help='store the top TOPN probablities of each output. By default, TOPN=1')
+    parser.add_argument('-O', '--no_outputs', action='store_true', help='do not store network outputs', default=False)
+
     env_grp = parser.add_argument_group("Resource Manager").add_mutually_exclusive_group()
     env_grp.add_argument("--lsf", default=False, action='store_true', help='running in an LSF environment')
     env_grp.add_argument("--slurm", default=False, action='store_true', help='running in a SLURM environment')
@@ -138,44 +145,32 @@ def process_args(args, size=1, rank=0, comm=None):
         model = ResNetFeatures(model)
         args.features = True
 
-    if args.loaders is None or len(args.loaders) == 0:
-        args.loaders = ['train', 'validate']
-
-    close_file = False
-    if 'nonrep' in args.loaders:
-        if size > 1:
-            dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
-            args.logger.info(f'rank {rank} - processing {len(dataset)} samples subset')
-        else:
-            dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
-        tmp_dset = dataset
-        if args.start > 0:
-            warnings.warn('Ignoring --start. Updated code does not support this')
-
-        kwargs = dict(batch_size=args.batch_size, shuffle=False)
-        if args.num_workers > 0:
-            kwargs['num_workers'] = args.num_workers
-            kwargs['multiprocessing_context'] = 'spawn'
-            kwargs['worker_init_fn'] = dataset.worker_init
-            kwargs['persistent_workers'] = True
-            dataset.close()
-        ldr = get_loader(tmp_dset, inference=True, **kwargs)
-
-        args.loaders = {'nonrep': ldr}
-        args.difile = dataset.difile
+    if size > 1:
+        dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
+        args.logger.info(f'rank {rank} - processing {len(dataset)} samples subset')
     else:
-        args.loader_kwargs = {'rank': rank, 'size': size}
-        data_mod = DeepIndexDataModule(args, inference=True, keep_open=True)
-        args.loaders = {'train': data_mod.train_dataloader(),
-                        'validate': data_mod.val_dataloader()}
-        args.difile = data_mod.dataset.difile
-        if args.num_workers > 0:
-            data_mod.dataset.close()
-        dataset = data_mod.dataset
+        dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+    tmp_dset = dataset
+    if args.start > 0:
+        warnings.warn('Ignoring --start. Updated code does not support this')
+
+    kwargs = dict(batch_size=args.batch_size, shuffle=False)
+    if args.num_workers > 0:
+        kwargs['num_workers'] = args.num_workers
+        kwargs['multiprocessing_context'] = 'spawn'
+        kwargs['worker_init_fn'] = dataset.worker_init
+        kwargs['persistent_workers'] = True
+    ldr = get_loader(tmp_dset, inference=True, **kwargs)
+
+    args.loader = ldr
+    args.difile = dataset.difile
 
     # return the model, any arguments, and Lighting Trainer args just in case
     # we want to use them down the line when we figure out how to use Lightning for
     # inference
+
+    if not args.features:
+        model = nn.Sequential(model, nn.Softmax(dim=1))
 
     model.eval()
 
@@ -231,10 +226,15 @@ def run_inference(argv=None):
         in_memory_inference(model, dataset, args, addl_targs)
     else:
         if SIZE > 1:
+            fkwargs['comm'] = COMM
             args.logger.info(f'running parallel chunked inference')
         else:
             args.logger.info(f'running serial chunked inference')
-        parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK, f_kwargs, probs=not args.features)
+        if args.aggregate:
+            parallel_chunked_inf_summ(model, dataset, args, addl_targs, f_kwargs)
+        else:
+            args.logger.info('not doing antying -- you kept around old, dead code that you should probably remove')
+            #parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK, f_kwargs, probs=not args.features)
 
 
 def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, rank, fkwargs, probs=True):
@@ -298,6 +298,119 @@ def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, ran
 
     f.close()
     if rank == 0: args.logger.info(f'closing {args.output}')
+
+
+def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
+
+    n_samples = len(dataset.orig_difile.seq_table)
+    all_seq_ids = dataset.orig_difile.get_sequence_subset()
+    seq_lengths  = dataset.orig_difile.get_seq_lengths()
+
+    f = h5py.File(args.output, 'w', **fkwargs)
+    outputs_dset = None
+    if not args.no_outputs:
+        outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int)
+
+    maxprob_dset = None
+    if args.maxprob > 0 :
+        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=int)
+
+    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int)
+    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int)
+
+    # to-write queues - we use those so we're not doing I/O at every iteration
+    outputs_q = list()
+    labels_q = list()
+    counts_q = list()
+    seqs_q = list()
+
+    # write what's in the to-write queues
+    if not hasattr(args, 'n_seqs'):
+        args.n_seqs = 2500
+
+    # ensure that dataset is closed before we start up the DataLoader
+    dataset.close()
+
+    # send model to GPU
+    model.to(args.device)
+
+    for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, args.loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0):
+
+        seqs, counts = np.unique(_seq_ids, return_counts=True)
+        outputs_sum = list()
+        labels = list()
+        for i in seqs:
+            mask = _seq_ids == i
+            outputs_sum.append(_outputs[mask].sum(axis=0))
+            labels.append(_labels[mask][0])
+
+        # Add the first sum of this iteration to the last sum of the
+        # previous iteration if they belong to the same sequence
+        if len(seqs_q) > 0 and seqs_q[-1] == seqs[0]:
+            outputs_q[-1] += outputs_sum[0]
+            counts_q[-1] += counts[0]
+            # drop the first sum so we don't end up with duplicates
+            seqs = seqs[1:]
+            counts = counts[1:]
+            outputs_sum = outputs_sum[1:]
+            labels = labels[1:]
+
+        outputs_q.extend(outputs_sum)
+        seqs_q.extend(seqs)
+        counts_q.extend(counts)
+        labels_q.extend(counts)
+
+        if len(outputs_q) > args.n_seqs:
+            idx = seqs_q[:-1]
+            # compute mean from sums
+            for i in range(len(seqs_q) - 1):
+                outputs_q[i] /= counts_q[i]
+
+            if outputs_dset is not None:
+                outputs_dset[idx] = outputs_q[:-1]
+            labels_dset[idx] = labels_q[:-1]
+
+            if maxprob_dset is not None:
+                k = outputs_q[0].shape[0] - args.maxprob
+                maxprobs = list()
+                for i in range(len(idx)):
+                    maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:]))
+                maxprob_dset[idx] = maxprobs
+
+            if preds_dset is not None:
+                preds = [np.argmax(outputs_q[i]) for i in range(len(idx))]
+                preds_dset[idx] = preds
+
+            outputs_q = outputs_q[-1:]
+            seqs_q = seqs_q[-1:]
+            counts_q = counts_q[-1:]
+            labels_q = labels_q[-1:]
+
+    # clean up what's left in the to-write queue
+    for i in seqs_q:
+        outputs_q[i] /= counts_q[i]
+
+    if outputs_dset is not None:
+        outputs_dset[seqs_q] = outputs_q
+    labels_dset[seqs_q] = labels_q
+
+    if maxprob_dset is not None:
+        k = outputs_q[0].shape[0] - args.maxprob
+        maxprobs = list()
+        for i in range(len(seqs_q)):
+            maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:]))
+        maxprob_dset[seqs_q] = maxprobs
+
+    if preds_dset is not None:
+        preds = [np.argmax(outputs_q[i]) for i in range(len(seqs_q))]
+        preds_dset[seqs_q] = preds
+
+
+    # copy sequences lengths for convenience
+    if dataset.rank == 0: args.logger.info(f'closing {args.output}')
+
+    f.close()
 
 
 def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
