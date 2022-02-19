@@ -571,7 +571,7 @@ class DSSampler(Sampler):
             self.end = length
 
     def __iter__(self):
-        return range(self.start, self.end)
+        return iter(range(self.start, self.end))
 
     def __len__(self):
         return self.end - self.start
