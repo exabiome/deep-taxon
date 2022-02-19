@@ -273,7 +273,11 @@ def process_args(args=None, return_io=False):
     del args.fp16
 
     if args.checkpoint is not None:
-        targs['resume_from_checkpoint'] = args.checkpoint
+        if os.path.exists(args.checkpoint):
+            targs['resume_from_checkpoint'] = args.checkpoint
+        else:
+            warnings.warn("Ignoring -c/--checkpoint argument because {args.checkpoint} does not exist.")
+            args.checkpoint = None
 
     if args.profile:
         targs['profiler'] = 'advanced'
