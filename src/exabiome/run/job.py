@@ -193,7 +193,7 @@ class AbstractJob(metaclass=ABCMeta):
             print(f'module load {mod}', file=f)
         print(file=f)
         if self.conda_env:
-            print(f'source activate {self.conda_env}', file=f)
+            print(f'conda activate {self.conda_env}', file=f)
         print(file=f)
         for k, v in self.env_vars.items():
             export = "export " if self.to_export[k] else ""
