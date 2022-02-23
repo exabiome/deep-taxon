@@ -1,3 +1,5 @@
+import os
+
 from hdmf.utils import docval, getargs
 from .job import AbstractJob
 
@@ -47,6 +49,10 @@ class SlurmJob(AbstractJob):
         self.add_addl_jobflag('c', 10)
         self.add_addl_jobflag('-ntasks-per-node', self.gpus)
         self.add_addl_jobflag('-gpus-per-task', 1)
+
+        for k, v in os.environ.items():
+            if 'CONDA' in k:
+                self.unset_var(k)
 
         n_gpus = self.gpus
         self.use_bb = False

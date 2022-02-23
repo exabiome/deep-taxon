@@ -119,6 +119,7 @@ def run_train(argv=None):
         check_nersc(args)
         jobargs = get_jobargs(args)
         job = SlurmJob(**jobargs)
+        job.add_modules('python')
 
     if args.conda_env is None:
         args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)

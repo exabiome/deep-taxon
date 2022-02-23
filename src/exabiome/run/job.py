@@ -86,6 +86,7 @@ class AbstractJob(metaclass=ABCMeta):
         self.conda_env = None
         self.modules = list()
         self.debug = False
+        self.clear_var = set()
         self.env_vars = OrderedDict()
         self.to_export = dict()
         self.addl_job_flags = OrderedDict()
@@ -98,6 +99,9 @@ class AbstractJob(metaclass=ABCMeta):
     def add_modules(self, *module):
         for mod in module:
             self.modules.append(mod)
+
+    def unset_var(self, var):
+        self.clear_var.add(var)
 
     def set_env_var(self, var, value, export=None):
         '''Add an environment variable to be set in the shell script
@@ -189,11 +193,14 @@ class AbstractJob(metaclass=ABCMeta):
     def write(self, f, options=None):
         self.write_header(f, options)
         print(file=f)
+        for var in self.clear_var:
+            print(f"unset {var}", file=f)
+        print(file=f)
         for mod in self.modules:
             print(f'module load {mod}', file=f)
         print(file=f)
         if self.conda_env:
-            print(f'source activate {self.conda_env}', file=f)
+            print(f'conda activate {self.conda_env}', file=f)
         print(file=f)
         for k, v in self.env_vars.items():
             export = "export " if self.to_export[k] else ""
