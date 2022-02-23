@@ -513,16 +513,42 @@ def get_loader(dataset, inference=False, **kwargs):
     return DataLoader(orig_dataset, collate_fn=collater, **kwargs)
 
 
+def check_rng(rng):
+    if rng is None:
+        return np.random.default_rng()
+    elif isinstance(rng, (int, np.integer)):
+        return np.random.default_rng(rng)
+    return rng
+
+
+class WORHelper:
+
+    def __init__(self, length, rng=None):
+        self.period = length
+        self.rng = check_rng(rng)
+        self.indices = np.arange(length)
+        self.curr_max = length - 1
+
+    def sample(self):
+        idx = self.rng.integers(self.curr_max + 1)
+        ret = self.indices[idx]
+        end = self.curr_max
+        self.indices[end], self.indices[idx] = self.indices[idx], self.indices[end]
+        self.curr_max = (self.curr_max - 1) % self.period
+        return ret
+
+
 class WORSampler(Sampler):
     """Without Replacement Sampler"""
 
-    def __init__(self, length, rng=None, rank=0, size=1):
+    def __init__(self, length, rng=None, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
+        """
+        Args:
+            n_partitions :          number of deterministic partitions to break up dataset into
+            part_smplr_rng :        Partition Sampler RNG
+        """
         super().__init__(None)
-        if rng is None:
-            rng = np.random.default_rng()
-        elif isinstance(rng, (int, np.integer)):
-            rng = np.random.default_rng(rng)
-        self.rng = rng
+        self.rng = check_rng(rng)
         dtype = np.uint32
         if length > (2**32 - 1):
             dtype = np.uint64
@@ -537,24 +563,32 @@ class WORSampler(Sampler):
         if size > 1:
             self.indices = np.arange(rank, length, size, dtype=dtype)
             if trim:
+                # This systematically throws out up to (size - 1) samples
                 self.indices = self.indices[:length // size]
         else:
             self.indices = np.arange(length, dtype=dtype)
-        self.curr_len = len(self.indices)
+        self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
+
+        # set an initial value for curr_part (i.e. current partition)
+        # so we can calculate lenght in __len__
+        self.curr_part = self.part_sampler.sample()
+        self.curr_len = len(self)
 
     def __iter__(self):
-        self.curr_len = len(self.indices)
+        self.curr_len = len(self)
         return self
 
     def __len__(self):
-        return len(self.indices)
+        return (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1
 
     def __next__(self):
         if self.curr_len == 0:
+            self.curr_part = self.part_sampler.sample()
             raise StopIteration
-        idx = self.rng.integers(self.curr_len)
+        idx = self.rng.integers(self.curr_len) * self.part_sampler.period + self.curr_part
+        end = (self.curr_len - 1) * self.part_sampler.period + self.curr_part
         ret = self.indices[idx]
-        self.indices[self.curr_len - 1], self.indices[idx] = self.indices[idx], self.indices[self.curr_len - 1]
+        self.indices[end], self.indices[idx] = self.indices[idx], self.indices[end]
         self.curr_len -= 1
         return ret
 
@@ -562,8 +596,18 @@ class WORSampler(Sampler):
 class DSSampler(Sampler):
     """Distributed Sequential Sampler"""
 
-    def __init__(self, length, rank=0, size=1):
+    def __init__(self, length, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
+        """
+        Args:
+            n_partitions :          number of deterministic partitions to break up dataset into
+            part_smplr_rng :        Partition Sampler RNG
+        """
         super().__init__(None)
+        self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
+
+        # set an initial value for curr_part (i.e. current partition)
+        # so we can calculate lenght in __len__
+        self.curr_part = self.part_sampler.sample()
         if size > 1:
             self.start, self.end = distsplit(length, size, rank, arange=False)
         else:
@@ -571,10 +615,18 @@ class DSSampler(Sampler):
             self.end = length
 
     def __iter__(self):
-        return iter(range(self.start, self.end))
+        self.__it = iter(range(self.start + self.curr_part, self.end, self.part_sampler.period))
+        return self
 
     def __len__(self):
-        return self.end - self.start
+        return (self.end - self.start - self.curr_part - 1) // self.part_sampler.period + 1
+
+    def __next__(self):
+        try:
+            return next(self.__it)
+        except StopIteration:
+            self.curr_part = self.part_sampler.sample()
+            raise StopIteration
 
 
 class SubsetDataLoader(DataLoader):
@@ -613,11 +665,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
 
             # set up the training sampler - shuffle for training
             train_len = self.dataset.get_subset_len(train=True)
-            self._tr_sampler = WORSampler(train_len, rng=seed, rank=rank, size=size)
+            self._tr_sampler = WORSampler(train_len, rng=seed, rank=rank, size=size, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
             # set up the validation sampler - DO NOT shuffle for training
             val_len = self.dataset.get_subset_len(validate=True)
-            self._val_sampler = DSSampler(val_len, rank=rank, size=size)
+            self._val_sampler = DSSampler(val_len, rank=rank, size=size, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
         self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
 
