@@ -115,17 +115,18 @@ def run_train(argv=None):
         job.add_modules('open-ce')
         if not args.load:
             job.set_use_bb(True)
+        if args.conda_env is None:
+            args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
+
+        if args.conda_env != 'none':
+            job.set_conda_env(args.conda_env)
+        # set to none
+        args.conda_env = None
     else:
         check_nersc(args)
         jobargs = get_jobargs(args)
         job = SlurmJob(**jobargs)
-        job.add_modules('python')
 
-    if args.conda_env is None:
-        args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
-
-    if args.conda_env != 'none':
-        job.set_conda_env(args.conda_env)
 
     args.input = os.path.abspath(args.input)
 
@@ -281,7 +282,7 @@ def run_train(argv=None):
 
 
     def submit(job, shell, message):
-        job_id = job.submit_job(shell)
+        job_id = job.submit_job(shell, conda_env=args.conda_env)
         if job_id is None:
             print("unable to submit job")
         else:
