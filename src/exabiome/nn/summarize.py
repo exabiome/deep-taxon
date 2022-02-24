@@ -982,6 +982,69 @@ def aggregate_seqs(argv=None):
     outf.close()
     f.close()
 
+def train_confidence_model(argv=None):
+    import pickle
+
+    from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+    from sklearn.preprocessing import MaxAbsScaler
+    from ..utils import get_logger
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("output", type=str, help="the path to save the model to")
+    parser.add_argument("-s", "--summary", type=str, help='the summarized sequence NN outputs')
+    parser.add_argument('-O', '--onnx', metavar='PATH', nargs='?', const=True, default=False, type=str,
+                        help='Save data in ONNX format. If an argument is passed, it is assumed to be the path to a pickled model to convert to ONNX format')
+    parser.add_argument("-k", "--topk", metavar="TOPK", type=int, help="use the TOPK probabilities for building confidence model", default=None)
+
+    args = parser.parse_args(argv)
+
+    logger = get_logger()
+
+    if isinstance(args.onnx, str):
+        with open(args.onnx, 'rb') as f:
+            lr = pickle.load(f)
+    else:
+        logger.info(f"reading outputs summary data from {args.summary}")
+        f = h5py.File(args.summary, 'r')
+
+        true = f['labels'][:]
+        pred = f['preds'][:]
+
+        # the top-k probabilities, in descending order
+        maxprobs = f['maxprob'][:, :args.topk]
+        lengths = f['lengths'][:]
+
+        f.close()
+
+        X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1)
+        y = (true == pred).astype(int)
+
+        scaler = MaxAbsScaler()
+        scaler.fit(X)
+
+        lrcv = LogisticRegressionCV(penalty='elasticnet', solver='saga', l1_ratios=[.1, .5, .7, .9, .95, .99, 1])
+        logger.info(f"building confidence model with \n{lrcv}")
+
+        lrcv.fit(scaler.transform(X), y)
+
+        lr = LogisticRegression()
+        lr.coef_ = scaler.transform(lrcv.coef_)
+        lr.intercept_ = lrcv.intercept_
+        lr.classes_ = lrcv.classes_
+
+    if args.onnx:
+        from skl2onnx import convert_sklearn
+        from skl2onnx.common.data_types import FloatTensorType
+
+        logger.info(f"saving {lr} to ONNX file {args.output}")
+        initial_type = [('float_input', FloatTensorType([None, lr.coef_.shape[1]]))]
+        onx = convert_sklearn(lr, initial_types=initial_type)
+        with open(args.output, "wb") as f:
+            f.write(onx.SerializeToString())
+    else:
+        logger.info(f"pickling {lr} to {args.output}")
+        with open(args.onnx, 'wb') as f:
+            pickle.load(lr, f)
 
 
 if __name__ == '__main__':
