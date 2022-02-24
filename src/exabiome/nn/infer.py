@@ -375,7 +375,7 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
                 k = outputs_q[0].shape[0] - args.maxprob
                 maxprobs = list()
                 for i in range(len(idx)):
-                    maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:]))
+                    maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
                 maxprob_dset[idx] = maxprobs
 
             if preds_dset is not None:
@@ -399,7 +399,7 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
         k = outputs_q[0].shape[0] - args.maxprob
         maxprobs = list()
         for i in range(len(seqs_q)):
-            maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:]))
+            maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
         maxprob_dset[seqs_q] = maxprobs
 
     if preds_dset is not None:
