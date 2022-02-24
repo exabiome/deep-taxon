@@ -59,6 +59,8 @@ def main():
             'test-input': Command('testing.dataset.check_sequences', 'Test input file against original fasta files'),
             'dset-info': Command('nn.loader.dataset_stats', 'Read a dataset and print the number of samples to stdout'),
             'extract-profile': Command('nn.summarize.get_profile_data', 'Extract profile data from log files'),
+            'conf-model': Command('nn.summarize.train_confidence_model', 'Train or convert a prediction confidence model'),
+            'deploy-pkg': Command('nn.deploy.build_deployment_pkg', 'Build Zip package for deploying model'),
         }
     }
     import sys
