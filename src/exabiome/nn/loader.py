@@ -2,6 +2,7 @@ import argparse
 import sys
 from time import time
 import warnings
+from tqdm import tqdm
 
 import pytorch_lightning as pl
 import torch.nn.functional as F
@@ -13,7 +14,7 @@ from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
 from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, LazyWindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence, lazy_chunk_sequence, DIFileFilter
-from ..utils import parse_seed, distsplit
+from ..utils import parse_seed, distsplit, get_logger
 
 import psutil
 import os
@@ -65,6 +66,7 @@ def dataset_stats(argv=None):
     add_dataset_arguments(parser)
     parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=None)
     parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
+    parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
     test_group.add_argument('--mem', default=False, action='store_true', help='print memory usage before and after loading')
@@ -140,8 +142,8 @@ def dataset_stats(argv=None):
 
 
     if args.test_read:
-        dataset.close()
-        from tqdm import tqdm
+        if args.num_workers > 0:
+            dataset.close()
         print("Attempting to read training data")
         if args.lightning:
             if args.mem:
@@ -199,6 +201,82 @@ def dataset_stats(argv=None):
                 bad = True
         if not bad:
             print(f'taxonomic hierarchy for {tl1} to {tl2} okay')
+
+
+def read_all_seqs(fa_path):
+
+    import skbio
+    from skbio.sequence import DNA, Protein
+    kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
+    seqs = list()
+    for seq in skbio.io.read(fa_path, **kwargs):
+        seqs.append(seq.values.astype('U'))
+    return "".join(np.concatenate(seqs))
+
+def check_loaded_sequences(argv=None):
+    """Read a dataset and print the number of samples to stdout"""
+    from ..utils import get_genomic_path
+
+    parser =  argparse.ArgumentParser()
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
+    add_dataset_arguments(parser)
+    parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=None)
+    parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
+    parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
+    test_group = parser.add_argument_group('Test reading')
+    test_group.add_argument('-N', '--num_batches', type=int, help='the number of batches to load when testing read', default=None)
+    test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
+
+
+    args = parser.parse_args(argv)
+    logger = get_logger()
+
+    args.batch_size = 1
+    tr_len = None
+    va_len = None
+    args.downsample = False
+    args.loader_kwargs = dict()
+    args.load = False
+    args.pin_memory = False
+    args.num_workers = 0
+    args.shuffle = False
+    logger.info(f"loading data from {args.input}")
+    data_mod = DeepIndexDataModule(hparams=args, keep_open=True)
+    dataset = data_mod.dataset
+
+
+    logger.info(f"getting training data loader")
+    tr = data_mod.train_dataloader()
+
+    tot = len(tr)
+    if args.num_batches != None:
+        stop = args.num_batches - 1
+        tot = args.num_batches
+    else:
+        stop = tot - 1
+
+
+    logger.info(f"Checking {tot} samples")
+    correct = 0
+    rc = 0
+    for idx, i in tqdm(enumerate(tr), total=tot):
+        func = get_genomic_path
+        tid = dataset.difile.taxa_table.taxon_id.data[i[1]]
+        path = get_genomic_path(tid, args.fadir)
+        seq = read_all_seqs(path)
+        sample = "".join(dataset.vocab[i[0][0]])
+        if sample in seq:
+            correct += 1
+        else:
+            sample = "".join(dataset.vocab[dataset.difile.rcmap[i[0][0]]])[::-1]
+            if sample in seq:
+                correct += 1
+                rc += 1
+        if idx == stop:
+            break
+
+    logger.info(f"{correct} ({rc} revcomped) samples of {tot} existed in the respective genomes returned by the loader")
 
 
 class SplitCollater:
@@ -653,6 +731,8 @@ class DeepIndexDataModule(pl.LightningDataModule):
         super().__init__()
 
         kwargs = dict(batch_size=hparams.batch_size)
+        if seed is None:
+            seed = parse_seed('')
 
         if inference:
             hparams.manifold = False
