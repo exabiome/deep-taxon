@@ -79,8 +79,11 @@ def make_fof(argv=None):
             with h5py.File(args.accessions, 'r') as f:
                 accessions = f['genome_table']['taxon_id'][:]
         else:
-            with open(args.accessions, 'r') as f:
-                accessions = f.readlines()
+            if os.path.exists(args.accessions):
+                with open(args.accessions, 'r') as f:
+                    accessions = f.readlines()
+            else:
+                accessions = [args.accessions]
 
         func = get_genomic_path
         if args.cds:
