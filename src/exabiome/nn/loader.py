@@ -224,15 +224,15 @@ def check_loaded_sequences(argv=None):
     parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=None)
     parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
     parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
+    parser.add_argument('-b', '--batch_size', type=int, help='the number of workers to load data with', default=1)
     test_group = parser.add_argument_group('Test reading')
-    test_group.add_argument('-N', '--num_batches', type=int, help='the number of batches to load when testing read', default=None)
+    test_group.add_argument('-N', '--num_batches', type=int, help='the number of batches to load when testing read', default=1)
     test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
 
 
     args = parser.parse_args(argv)
     logger = get_logger()
 
-    args.batch_size = 1
     tr_len = None
     va_len = None
     args.downsample = False
@@ -249,34 +249,32 @@ def check_loaded_sequences(argv=None):
     logger.info(f"getting training data loader")
     tr = data_mod.train_dataloader()
 
-    tot = len(tr)
-    if args.num_batches != None:
-        stop = args.num_batches - 1
-        tot = args.num_batches
-    else:
-        stop = tot - 1
+    stop = args.num_batches - 1
 
 
-    logger.info(f"Checking {tot} samples")
+    logger.info(f"Checking {args.num_batches} batches with a batch size of {args.batch_size}")
     correct = 0
     rc = 0
-    for idx, i in tqdm(enumerate(tr), total=tot):
-        func = get_genomic_path
-        tid = dataset.difile.taxa_table.taxon_id.data[i[1]]
-        path = get_genomic_path(tid, args.fadir)
-        seq = read_all_seqs(path)
-        sample = "".join(dataset.vocab[i[0][0]])
-        if sample in seq:
-            correct += 1
-        else:
-            sample = "".join(dataset.vocab[dataset.difile.rcmap[i[0][0]]])[::-1]
+    n_samples = 0
+    for idx, (seqs, labels) in tqdm(enumerate(tr), total=args.num_batches):
+        for i in range(len(seqs)):
+            n_samples += 1
+            func = get_genomic_path
+            tid = dataset.difile.taxa_table.taxon_id.data[labels[i]]
+            path = get_genomic_path(tid, args.fadir)
+            seq = read_all_seqs(path)
+            sample = "".join(dataset.vocab[seqs[i]])
             if sample in seq:
                 correct += 1
-                rc += 1
+            else:
+                sample = "".join(dataset.vocab[dataset.difile.rcmap[seqs[i]]])[::-1]
+                if sample in seq:
+                    correct += 1
+                    rc += 1
         if idx == stop:
             break
 
-    logger.info(f"{correct} ({rc} revcomped) samples of {tot} existed in the respective genomes returned by the loader")
+    logger.info(f"{correct} ({rc} revcomped) samples of {n_samples} existed in the respective genomes returned by the loader")
 
 
 class SplitCollater:
