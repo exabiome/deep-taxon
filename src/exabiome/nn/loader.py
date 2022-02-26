@@ -221,8 +221,11 @@ def check_loaded_sequences(argv=None):
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
     add_dataset_arguments(parser)
-    parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=None)
-    parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
+    type_group = parser.add_mutually_exclusive_group()
+    type_group.add_argument('--train', action='store_true', help='use training data loader', default=False)
+    type_group.add_argument('--validate', action='store_true', help='use validation data loader', default=False)
+    parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=0)
+    parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=1)
     parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
     parser.add_argument('-b', '--batch_size', type=int, help='the number of workers to load data with', default=1)
     test_group = parser.add_argument_group('Test reading')
@@ -242,12 +245,18 @@ def check_loaded_sequences(argv=None):
     args.num_workers = 0
     args.shuffle = False
     logger.info(f"loading data from {args.input}")
-    data_mod = DeepIndexDataModule(hparams=args, keep_open=True)
+    data_mod = DeepIndexDataModule(hparams=args, keep_open=True, rank=args.rank, size=args.size)
     dataset = data_mod.dataset
 
+    if not (args.train or args.validate):
+        args.train = True
 
-    logger.info(f"getting training data loader")
-    tr = data_mod.train_dataloader()
+    if args.train:
+        logger.info(f"getting training data loader")
+        tr = data_mod.train_dataloader()
+    else:
+        logger.info(f"getting validation data loader")
+        tr = data_mod.val_dataloader()
 
     stop = args.num_batches - 1
 
@@ -257,17 +266,18 @@ def check_loaded_sequences(argv=None):
     rc = 0
     n_samples = 0
     for idx, (seqs, labels) in tqdm(enumerate(tr), total=args.num_batches):
+        print(seqs, labels)
         for i in range(len(seqs)):
             n_samples += 1
             func = get_genomic_path
             tid = dataset.difile.taxa_table.taxon_id.data[labels[i]]
             path = get_genomic_path(tid, args.fadir)
             seq = read_all_seqs(path)
-            sample = "".join(dataset.vocab[seqs[i]])
+            sample = "".join(dataset.vocab[seqs[i]]).rstrip('N')
             if sample in seq:
                 correct += 1
             else:
-                sample = "".join(dataset.vocab[dataset.difile.rcmap[seqs[i]]])[::-1]
+                sample = "".join(dataset.vocab[dataset.difile.rcmap[seqs[i]]])[::-1].rstrip('N')
                 if sample in seq:
                     correct += 1
                     rc += 1
