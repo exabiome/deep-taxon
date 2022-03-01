@@ -408,11 +408,14 @@ def benchmark_pass(argv=None):
     model.to(device)
     loss = nn.CrossEntropyLoss()
     print(f'Running {tot} batches of size {args.batch_size} through model')
+    before = time()
     for idx, i in tqdm(enumerate(tr), total=tot):
         result = model(i[0].to(device))
         loss(result, i[1].to(device))
         if idx == stop:
             break
+    after = time()
+    print(f'Took {after - before:.2f} seconds')
 
 
 def print0(*msg, **kwargs):
@@ -604,6 +607,7 @@ def get_model_info(argv=None):
     import json
     from .loader import LazySeqDataset
     from torchinfo import summary
+    import torch.nn as nn
 
     argv = check_argv(argv)
 
@@ -616,7 +620,11 @@ def get_model_info(argv=None):
     parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
     args = parser.parse_args(argv)
     process_config(args.config, args)
+
     dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+    args.input_nc = 136 if args.tnf else len(dataset.vocab)
+    if args.classify:
+        args.n_outputs = len(dataset.taxa_labels)
 
     model = process_model(args, taxa_table=dataset.difile.taxa_table)
 
