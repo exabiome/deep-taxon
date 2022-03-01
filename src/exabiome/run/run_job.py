@@ -180,8 +180,6 @@ def run_train(argv=None):
         exp += f'_{conf["lr_scheduler"]}'
 
     if args.checkpoint:
-        if not args.checkpoint.endswith('.ckpt'):
-            args.checkpoint = os.path.join(args.checkpoint, 'last.ckpt')
         if not os.path.exists(args.checkpoint) or os.path.isdir(args.checkpoint):
             # assume we are supposed ot wait for the job to finish
             # to get the checkpoint from
