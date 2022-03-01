@@ -8,7 +8,7 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, Sampler, Subset
+from torch.utils.data import DataLoader, Dataset, Sampler, Subset, SequentialSampler
 from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
@@ -679,7 +679,7 @@ class WORSampler(Sampler):
         return ret
 
 
-class DSSampler(Sampler):
+class DSSampler(SequentialSampler):
     """Distributed Sequential Sampler"""
 
     def __init__(self, length, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
