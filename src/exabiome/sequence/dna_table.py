@@ -858,7 +858,7 @@ class RevCompFilter(DIFileFilter):
 
 class DIFileManager:
 
-    def __init__(self, path, comm=None, load_data=False, tgt_tax_lvl, rank=0, size=1):
+    def __init__(self, path, tgt_tax_lvl, comm=None, load_data=False, rank=0, size=1):
         self.path = path
         self.comm = comm
         self.load_data = load_data
