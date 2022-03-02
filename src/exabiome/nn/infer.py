@@ -93,6 +93,7 @@ def process_args(args, comm=None):
 
     rank = 0
     size = 1
+    local_rank = 0
     env = None
 
     if args.slurm:
@@ -101,6 +102,7 @@ def process_args(args, comm=None):
         env = LSFEnvironment()
 
     if env is not None:
+        local_rank = env.local_rank()
         rank = env.global_rank()
         size = env.world_size()
 
@@ -179,7 +181,7 @@ def process_args(args, comm=None):
     ret = [model, dataset, loader, args, env]
 
     if size > 1:
-        args.device = torch.device('cuda:%d' % rank)
+        args.device = torch.device('cuda:%d' % local_rank)
     else:
         args.device = torch.device('cuda')
 
