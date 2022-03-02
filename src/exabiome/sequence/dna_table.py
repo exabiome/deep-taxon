@@ -489,10 +489,12 @@ class DeepIndexFile(Container):
         return self.get(i)
 
     def get(self, arg):
+        # we don't need to translate the argument for labels, since
+        # labels is already dereferenced (see set_label_key)
+        label = self.labels[arg]
         arg = self.__translate_arg(arg)
         idx = self.seq_table.id[arg]
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
-        label = self.labels[arg]
         length = self.seq_table['length'].get(arg)
         return {'id': idx, 'seq': seq, 'label': label, 'length': length}
 
