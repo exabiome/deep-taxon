@@ -489,11 +489,9 @@ class DeepIndexFile(Container):
         return self.get(i)
 
     def get(self, arg):
-        # we don't need to translate the argument for labels, since
-        # labels is already dereferenced (see set_label_key)
-        label = self.labels[arg]
         arg = self.__translate_arg(arg)
         idx = self.seq_table.id[arg]
+        label = self.genome_table['rep_idx'].get(self.seq_table['genome'].get(arg, index=True), index=True)
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
         length = self.seq_table['length'].get(arg)
         return {'id': idx, 'seq': seq, 'label': label, 'length': length}
@@ -789,7 +787,7 @@ class LazyWindowChunkedDIFile(DIFileFilter):
 
         item = self.difile[seq_i]
         item['seq'] = item['seq'][s:e]
-        item['seq_idx'] = seq_i
+        item['seq_idx'] = item['id']
         item['id'] = i
         item['length'] = e - s
         return item
