@@ -848,30 +848,21 @@ def taxonomic_accuracy(argv=None):
     f = h5py.File(args.summary, 'r')
 
     logger.info(f'loading summary results from {args.summary}')
-    seq_preds = f['preds'][:].astype(int)
-    seq_labels = f['labels'][:].astype(int)
-    seq_lens = f['lengths'][:].astype(int)
 
-    n_classes = f['outputs'].shape[1]
-    f.close()
-
-    ## I used this code to double check that genus elements were correct
-    # seq_ids = f['seq_ids'][:]
-    # genome_ids = difile.seq_table['genome'].data[:][seq_ids]
-    # taxon_ids = difile.genome_table['taxon_id'].data[:][genome_ids]
-    # classes = difile.taxa_table['genus'].elements.data[:]
-
-    logger.info('loading taxonomy table')
-    # do this because h5py.Datasets cannot point-index with non-unique indices
-    for col in difile.taxa_table.columns:
-        col.transform(lambda x: x[:])
+    n_classes = None
+    if 'outputs' in f:
+        n_classes = f['outputs'].shape[1]
+    elif 'n_classes' in f['labels'].attrs:
+        n_classes = f['labels'].attrs['n_classes']
 
     level = None
     classes = None
     if args.level is None:
+        if n_classes is None:
+            print(f"Could not find number of classes in {args.summary}. Without this, I cannot guess what the taxonomic level is")
+            exit(1)
         for lvl in levels[:-1]:
             n_classes_lvl = difile.taxa_table[lvl].elements.data.shape[0]
-            print(lvl, n_classes, n_classes_lvl)
             if n_classes == n_classes_lvl:
                 classes = difile.taxa_table[lvl].elements.data
                 level = lvl
@@ -885,6 +876,28 @@ def taxonomic_accuracy(argv=None):
                 exit(1)
     else:
         level = args.level
+
+    logger.info(f'computing accuracy for {level}{" and higher" if level else ""}')
+
+
+
+    seq_preds = f['preds'][:].astype(int)
+    seq_labels = f['labels'][:].astype(int)
+    seq_lens = f['lengths'][:].astype(int)
+
+
+    f.close()
+
+    ## I used this code to double check that genus elements were correct
+    # seq_ids = f['seq_ids'][:]
+    # genome_ids = difile.seq_table['genome'].data[:][seq_ids]
+    # taxon_ids = difile.genome_table['taxon_id'].data[:][genome_ids]
+    # classes = difile.taxa_table['genus'].elements.data[:]
+
+    logger.info('loading taxonomy table')
+    # do this because h5py.Datasets cannot point-index with non-unique indices
+    for col in difile.taxa_table.columns:
+        col.transform(lambda x: x[:])
 
     to_drop = ['taxon_id']
     for lvl in levels[::-1]:
