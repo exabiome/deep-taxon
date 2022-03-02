@@ -49,7 +49,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk or aggregation')
     parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=0)
     # parser.add_argument('-a', '--aggregate', action='store_true', help='aggregate chunks within sequences', default=False)
-    parser.add_argument('-S', '--n_seqs', type=int, default=2500, help='the number of sequences to aggregate chunks for between each write to disk')
+    parser.add_argument('-S', '--n_seqs', type=int, default=500, help='the number of sequences to aggregate chunks for between each write to disk')
     parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
                         help='store the top TOPN probablities of each output. By default, TOPN=1')
     parser.add_argument('-c', '--save_chunks', action='store_true', help='do store network outputs for each chunk', default=False)
@@ -205,7 +205,7 @@ def run_inference(argv=None):
         size = env.world_size()
 
         from mpi4py import MPI
-        args.logger.info(f' rank {rank} - Using MPI-IO')
+        args.logger.info(f'rank {rank} - Using MPI-IO')
         f_kwargs['driver'] = 'mpio'
         f_kwargs['comm'] = MPI.COMM_WORLD
 
@@ -244,7 +244,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
     # write what's in the to-write queues
     if not hasattr(args, 'n_seqs'):
-        args.n_seqs = 2500
+        args.n_seqs = 500
 
     # ensure that dataset is closed before we start up the DataLoader
     dataset.close()
