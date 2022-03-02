@@ -43,6 +43,9 @@ def run_inference(argv=None):
     parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
     parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk')
     parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=None)
+    parser.add_argument('-S', '--n_seqs', type=int, default=2500, help='the number of sequences to aggregate chunks for between each write to disk')
+    parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
+                        help='store the top TOPN probablities of each output. By default, TOPN=1')
     parser.add_argument('-c', '--save_chunks', action='store_true', help='save network outputs for all chunks', default=False)
 
     parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
@@ -64,10 +67,13 @@ def run_inference(argv=None):
 
     options = ''
 
-    options = f'{options} -b {args.batch_size} -B {args.n_batches} -k {args.num_workers} '
+    options = f'{options} -b {args.batch_size} -B {args.n_batches} -k {args.num_workers} -S {args.n_seqs} '
+
+    if args.maxprob > 0:
+        options += f'-p {args.maxprob} '
 
     if args.start != None:
-        options += f'{args.start} '
+        options += f'-s {args.start} '
 
     if args.save_chunks:
         options += f'-c '
