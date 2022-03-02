@@ -231,7 +231,10 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
     preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int)
     seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int)
-    seqlen_dset[all_seq_ids] = seq_lengths
+    if all_seq_ids is None:
+        seqlen_dset[:] = seq_lengths
+    else:
+        seqlen_dset[all_seq_ids] = seq_lengths
 
     # to-write queues - we use those so we're not doing I/O at every iteration
     outputs_q = list()
@@ -275,6 +278,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
         counts_q.extend(counts)
         labels_q.extend(labels)
 
+        # write when we get above a certain number of sequences
         if len(outputs_q) > args.n_seqs:
             idx = seqs_q[:-1]
             # compute mean from sums
@@ -302,7 +306,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
             labels_q = labels_q[-1:]
 
     # clean up what's left in the to-write queue
-    for i in seqs_q:
+    for i in range(len(seqs_q)):
         outputs_q[i] /= counts_q[i]
 
     if outputs_dset is not None:
