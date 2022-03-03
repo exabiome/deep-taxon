@@ -47,7 +47,6 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
     parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk or aggregation')
-    parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=0)
     # parser.add_argument('-a', '--aggregate', action='store_true', help='aggregate chunks within sequences', default=False)
     parser.add_argument('-S', '--n_seqs', type=int, default=500, help='the number of sequences to aggregate chunks for between each write to disk')
     parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
@@ -152,12 +151,13 @@ def process_args(args, comm=None):
 
     if size > 1:
         dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
-        args.logger.info(f'rank {rank} - processing {len(dataset)} samples subset')
     else:
         dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+
+    tot_bases = dataset.orig_difile.get_seq_lengths().sum()
+    args.logger.info(f'rank {rank} - processing {tot_bases} bases across {len(dataset)} samples')
+
     tmp_dset = dataset
-    if args.start > 0:
-        warnings.warn('Ignoring --start. Updated code does not support this')
 
     kwargs = dict(batch_size=args.batch_size, shuffle=False)
     if args.num_workers > 0:
@@ -222,15 +222,15 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
     outputs_dset = None
     if args.save_chunks:
         outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
-    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int)
+    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
     labels_dset.attrs['n_classes'] = args.n_outputs
 
     maxprob_dset = None
     if args.maxprob > 0 :
-        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=int)
+        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
 
-    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int)
-    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int)
+    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
+    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
     if all_seq_ids is None:
         seqlen_dset[:] = seq_lengths
     else:
@@ -252,6 +252,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
     # send model to GPU
     model.to(args.device)
 
+    uniq_labels = set()
     for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0):
 
         seqs, counts = np.unique(_seq_ids, return_counts=True)
@@ -261,6 +262,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
             mask = _seq_ids == i
             outputs_sum.append(_outputs[mask].sum(axis=0))
             labels.append(_labels[mask][0])
+        uniq_labels.update(_labels)
 
         # Add the first sum of this iteration to the last sum of the
         # previous iteration if they belong to the same sequence
@@ -281,8 +283,9 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
         # write when we get above a certain number of sequences
         if len(outputs_q) > args.n_seqs:
             idx = seqs_q[:-1]
+            args.logger.debug(f"rank {dataset.rank} - saving these sequences {idx}")
             # compute mean from sums
-            for i in range(len(seqs_q) - 1):
+            for i in range(len(idx)):
                 outputs_q[i] /= counts_q[i]
 
             if outputs_dset is not None:
@@ -305,6 +308,8 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
             counts_q = counts_q[-1:]
             labels_q = labels_q[-1:]
 
+    args.logger.debug(f"rank {dataset.rank} - saving these sequences {seqs_q}")
+    args.logger.debug(f"rank {dataset.rank} - came across these labels {list(sorted(uniq_labels))}")
     # clean up what's left in the to-write queue
     for i in range(len(seqs_q)):
         outputs_q[i] /= counts_q[i]
@@ -324,10 +329,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
         preds = [np.argmax(outputs_q[i]) for i in range(len(seqs_q))]
         preds_dset[seqs_q] = preds
 
-
-    # copy sequences lengths for convenience
-    if dataset.rank == 0: args.logger.info(f'closing {args.output}')
-
+    args.logger.info(f'rank {dataset.rank} - closing {args.output}')
     f.close()
 
 
