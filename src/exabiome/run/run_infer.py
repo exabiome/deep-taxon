@@ -138,6 +138,8 @@ def run_inference(argv=None):
         srun = 'srun'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
 
+    job.add_command('echo "==== Computing taxonomic accuracy ====" >> $LOG')
+    job.add_command('deep-taxon tax-acc $OUTPUT $INPUT $OUTDIR/tax_acc.csv >> $LOG 2>&1')
 
     def submit(job, shell, message):
         job_id = job.submit_job(shell, conda_env=args.conda_env)
