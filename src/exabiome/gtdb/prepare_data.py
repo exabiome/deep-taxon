@@ -320,7 +320,8 @@ def prepare_data(argv=None):
         tmpdir = tempfile.mkdtemp()
 
     comp = 'gzip' if args.gzip else None
-    tmp_h5_file = h5py.File(os.path.join(tmpdir, 'sequences.h5'), 'w')
+    tmp_h5_filename = os.path.join(tmpdir, 'sequences.h5')
+    tmp_h5_file = h5py.File(tmp_h5_filename, 'w')
     sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression=comp)
     seqindex = tmp_h5_file.create_dataset('sequences_index', shape=(n_seqs,), dtype=np.uint64, compression=comp)
     genomes = tmp_h5_file.create_dataset('genomes', shape=(n_seqs,), dtype=np.uint64, compression=comp)
@@ -347,6 +348,17 @@ def prepare_data(argv=None):
             b = e
             seq_i += 1
     ids = tmp_h5_file.create_dataset('ids', data=np.arange(n_seqs), dtype=int)
+    tmp_h5_file.close()
+
+    tmp_h5_file = h5py.File(tmp_h5_filename, 'r')
+    sequence = tmp_h5_file['sequences']
+    seqindex = tmp_h5_file['sequences_index']
+    genomes = tmp_h5_file['genomes']
+    seqlens = tmp_h5_file['seqlens']
+    names = tmp_h5_file['seqnames']
+    ids = tmp_h5_file['ids']
+
+
 
     io = get_hdf5io(h5path, 'w')
 
