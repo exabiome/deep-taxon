@@ -845,48 +845,50 @@ def taxonomic_accuracy(argv=None):
     io = get_hdf5io(args.input, 'r')
     difile = io.read()
 
-    f = h5py.File(args.summary, 'r')
+    with h5py.File(args.summary, 'r') as f:
 
-    logger.info(f'loading summary results from {args.summary}')
+        logger.info(f'loading summary results from {args.summary}')
 
-    n_classes = None
-    if 'outputs' in f:
-        n_classes = f['outputs'].shape[1]
-    elif 'n_classes' in f['labels'].attrs:
-        n_classes = f['labels'].attrs['n_classes']
+        n_classes = None
+        if 'outputs' in f:
+            n_classes = f['outputs'].shape[1]
+        elif 'n_classes' in f['labels'].attrs:
+            n_classes = f['labels'].attrs['n_classes']
 
-    level = None
-    classes = None
-    if args.level is None:
-        if n_classes is None:
-            print(f"Could not find number of classes in {args.summary}. Without this, I cannot guess what the taxonomic level is")
-            exit(1)
-        for lvl in levels[:-1]:
-            n_classes_lvl = difile.taxa_table[lvl].elements.data.shape[0]
-            if n_classes == n_classes_lvl:
-                classes = difile.taxa_table[lvl].elements.data
-                level = lvl
-        if level is None:
-            n_classes_lvl = difile.taxa_table['species'].data.shape[0]
-            if n_classes == n_classes_lvl:
-                level = 'species'
-                classes = difile.taxa_table['species'].data[:]
-            else:
-                print("Cannot determine which level to use. Please specify with --level option", file=sys.stderr)
+        level = None
+        classes = None
+        if args.level is None:
+            if n_classes is None:
+                print(f"Could not find number of classes in {args.summary}. Without this, I cannot guess what the taxonomic level is")
                 exit(1)
-    else:
-        level = args.level
+            for lvl in levels[:-1]:
+                n_classes_lvl = difile.taxa_table[lvl].elements.data.shape[0]
+                if n_classes == n_classes_lvl:
+                    classes = difile.taxa_table[lvl].elements.data
+                    level = lvl
+            if level is None:
+                n_classes_lvl = difile.taxa_table['species'].data.shape[0]
+                if n_classes == n_classes_lvl:
+                    level = 'species'
+                    classes = difile.taxa_table['species'].data[:]
+                else:
+                    print("Cannot determine which level to use. Please specify with --level option", file=sys.stderr)
+                    exit(1)
+        else:
+            level = args.level
 
-    logger.info(f'computing accuracy for {level}{" and higher" if level else ""}')
+        logger.info(f'computing accuracy for {level}{" and higher" if level else ""}')
 
+        seq_preds = f['preds'][:].astype(int)
+        seq_labels = f['labels'][:].astype(int)
+        seq_lens = f['lengths'][:].astype(int)
 
+    mask = seq_labels != -1
+    seq_preds = seq_preds[mask]
+    seq_labels = seq_labels[mask]
+    seq_lens = seq_lens[mask]
 
-    seq_preds = f['preds'][:].astype(int)
-    seq_labels = f['labels'][:].astype(int)
-    seq_lens = f['lengths'][:].astype(int)
-
-
-    f.close()
+    logger.info(f'Keeping {mask.sum()} of {mask.shape[0]} ({mask.mean()*100:.1f}%) sequences after discarding uninitialized sequences')
 
     ## I used this code to double check that genus elements were correct
     # seq_ids = f['seq_ids'][:]
