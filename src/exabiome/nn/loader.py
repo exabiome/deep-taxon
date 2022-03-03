@@ -14,7 +14,7 @@ from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
 from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, LazyWindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence, lazy_chunk_sequence, DIFileFilter
-from ..utils import parse_seed, distsplit, get_logger
+from ..utils import parse_seed, distsplit, balsplit, get_logger
 
 import psutil
 import os
@@ -1017,7 +1017,7 @@ class LazySeqDataset(Dataset):
             self.orig_difile = self.io.read()
 
         if self._world_size > 1:
-            self.orig_difile.set_sequence_subset(distsplit(len(self.orig_difile), self._world_size, self._global_rank))
+            self.orig_difile.set_sequence_subset(balsplit(self.orig_difile.get_seq_lengths(), self._world_size, self._global_rank))
 
         self.difile = self.orig_difile
 
