@@ -60,6 +60,8 @@ def run_train(argv=None):
 
     args = parser.parse_args(argv)
 
+    job = get_job(args)
+
     with open(args.config, 'r') as f:
         conf = yaml.safe_load(f)
 
