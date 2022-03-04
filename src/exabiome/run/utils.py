@@ -54,4 +54,8 @@ def get_job(args):
         jobargs = get_jobargs(args)
         job = SlurmJob(**jobargs)
 
+    job.add_command('echo "=== exabiome package ===" >> $LOG')
+    job.add_command("pip show exabiome >> $LOG")
+    job.add_command('echo "========================" >> $LOG')
+
     return job
