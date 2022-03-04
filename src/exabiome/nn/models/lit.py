@@ -126,7 +126,7 @@ class AbstractLit(LightningModule):
         output = self.forward(seqs)
         loss = self._loss(output, target)
         if self.hparams.classify:
-            self.log(self.train_acc, self.accuracy(output, target))
+            self.log(self.train_acc, self.accuracy(output, target), prog_bar=True)
         self.log(self.train_loss, loss)
         self.log('time', time())
         return loss
@@ -140,7 +140,7 @@ class AbstractLit(LightningModule):
         output = self(seqs)
         loss = self._loss(output, target)
         if self.hparams.classify:
-            self.log(self.val_acc, self.accuracy(output, target))
+            self.log(self.val_acc, self.accuracy(output, target), prog_bar=True)
         self.log(self.val_loss, loss)
         self.log('time', time())
         return loss
