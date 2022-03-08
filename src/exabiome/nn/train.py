@@ -79,6 +79,7 @@ def get_conf_args():
         'layers': dict(help='layers for an MLP model', default=None),
         'window': dict(type=int, help='the window size to use to chunk sequences', default=None),
         'step': dict(type=int, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)', default=None),
+        'n_partitions': dict(type=int, help='the number of dataset partitions.', default=1),
         'fwd_only': dict(action='store_true', help='use forward strand of sequences only', default=False),
         'classify': dict(action='store_true', help='run a classification problem', default=False),
         'manifold': dict(action='store_true', help='run a manifold learning problem', default=False),

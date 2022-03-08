@@ -24,6 +24,7 @@ def main():
             'count-sequence': Command('gtdb.prepare_data.count_sequence', 'Count the length of total sequence length for a set of accessions'),
             'sample-nonrep': Command('gtdb.sample.sample_nonrep', 'Get test strain genomes'),
             'sample-gtdb': Command('gtdb.sample.sample_tree', 'Sample taxa from a tree'),
+            'test-loaders': Command('nn.loader.check_loaded_sequences', 'load data and test that it is correct'),
         },
         'Training and models': {
             'train': Command('nn.train.run_lightning', 'Run training with PyTorch Lightning'),
@@ -59,6 +60,8 @@ def main():
             'test-input': Command('testing.dataset.check_sequences', 'Test input file against original fasta files'),
             'dset-info': Command('nn.loader.dataset_stats', 'Read a dataset and print the number of samples to stdout'),
             'extract-profile': Command('nn.summarize.get_profile_data', 'Extract profile data from log files'),
+            'conf-model': Command('nn.summarize.train_confidence_model', 'Train or convert a prediction confidence model'),
+            'deploy-pkg': Command('nn.deploy.build_deployment_pkg', 'Build Zip package for deploying model'),
         }
     }
     import sys

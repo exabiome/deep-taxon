@@ -47,12 +47,11 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
     parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk or aggregation')
-    parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=0)
-    parser.add_argument('-a', '--aggregate', action='store_true', help='aggregate chunks within sequences', default=False)
-    parser.add_argument('-S', '--n_seqs', type=int, default=2500, help='the number of sequences to aggregate chunks for between each write to disk')
+    # parser.add_argument('-a', '--aggregate', action='store_true', help='aggregate chunks within sequences', default=False)
+    parser.add_argument('-S', '--n_seqs', type=int, default=500, help='the number of sequences to aggregate chunks for between each write to disk')
     parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
                         help='store the top TOPN probablities of each output. By default, TOPN=1')
-    parser.add_argument('-O', '--no_outputs', action='store_true', help='do not store network outputs', default=False)
+    parser.add_argument('-c', '--save_chunks', action='store_true', help='do store network outputs for each chunk', default=False)
 
     env_grp = parser.add_argument_group("Resource Manager").add_mutually_exclusive_group()
     env_grp.add_argument("--lsf", default=False, action='store_true', help='running in an LSF environment')
@@ -72,7 +71,7 @@ def parse_args(*addl_args, argv=None):
     return args
 
 
-def process_args(args, size=1, rank=0, comm=None):
+def process_args(args, comm=None):
     """
     Process arguments for running inference
     """
@@ -91,15 +90,20 @@ def process_args(args, size=1, rank=0, comm=None):
     args.logger = logger
 
 
-    addl_args = dict()
+    rank = 0
+    size = 1
+    local_rank = 0
+    env = None
 
     if args.slurm:
-        addl_args['environment'] = SLURMEnvironment()
+        env = SLURMEnvironment()
     elif args.lsf:
-        addl_args['environment'] = LSFEnvironment()
+        env = LSFEnvironment()
 
-    if args.debug:
-        addl_args['fast_dev_run'] = True
+    if env is not None:
+        local_rank = env.local_rank()
+        rank = env.global_rank()
+        size = env.world_size()
 
     # Figure out the checkpoint file to read from
     # and where to save outputs to
@@ -147,12 +151,13 @@ def process_args(args, size=1, rank=0, comm=None):
 
     if size > 1:
         dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
-        args.logger.info(f'rank {rank} - processing {len(dataset)} samples subset')
     else:
         dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+
+    tot_bases = dataset.orig_difile.get_seq_lengths().sum()
+    args.logger.info(f'rank {rank} - processing {tot_bases} bases across {len(dataset)} samples')
+
     tmp_dset = dataset
-    if args.start > 0:
-        warnings.warn('Ignoring --start. Updated code does not support this')
 
     kwargs = dict(batch_size=args.batch_size, shuffle=False)
     if args.num_workers > 0:
@@ -160,9 +165,8 @@ def process_args(args, size=1, rank=0, comm=None):
         kwargs['multiprocessing_context'] = 'spawn'
         kwargs['worker_init_fn'] = dataset.worker_init
         kwargs['persistent_workers'] = True
-    ldr = get_loader(tmp_dset, inference=True, **kwargs)
+    loader = get_loader(tmp_dset, inference=True, **kwargs)
 
-    args.loader = ldr
     args.difile = dataset.difile
 
     # return the model, any arguments, and Lighting Trainer args just in case
@@ -174,13 +178,10 @@ def process_args(args, size=1, rank=0, comm=None):
 
     model.eval()
 
-    ret = [model, dataset, args, addl_args]
+    ret = [model, dataset, loader, args, env]
 
     if size > 1:
-        if 'environment' not in addl_args:
-            print(f'rank {rank} - Please specify --lsf or --slurm if running distributed', file=sys.stderr)
-            sys.exit(1)
-        args.device = torch.device('cuda:%d' % addl_args['environment'].local_rank())
+        args.device = torch.device('cuda:%d' % local_rank)
     else:
         args.device = torch.device('cuda')
 
@@ -196,111 +197,22 @@ def run_inference(argv=None):
     """
 
     args = parse_args(argv=argv)
-    RANK = 0
-    SIZE = 1
-    COMM = None
+    model, dataset, loader, args, env = process_args(args)
+
     f_kwargs = dict()
-    if 'OMPI_COMM_WORLD_RANK' in os.environ:
-        # load this after so we can get usage
-        # statement without having to load MPI
+    if env is not None:
+        rank = env.global_rank()
+        size = env.world_size()
+
         from mpi4py import MPI
+        args.logger.info(f'rank {rank} - Using MPI-IO')
+        f_kwargs['driver'] = 'mpio'
+        f_kwargs['comm'] = MPI.COMM_WORLD
 
-        COMM = MPI.COMM_WORLD
-        RANK = COMM.Get_rank()
-        SIZE = COMM.Get_size()
-        if SIZE > 1:
-            f_kwargs['driver'] = 'mpio'
-            f_kwargs['comm'] = COMM
-    else:
-        args.logger.info('OMPI_COMM_WORLD_RANK not set in environment -- not using MPI')
+    parallel_chunked_inf_summ(model, dataset, loader, args, f_kwargs)
 
 
-
-    model, dataset, args, addl_targs = process_args(args, size=SIZE, rank=RANK)
-
-    if args.in_memory:
-        if SIZE > 1:
-            print("Cannot do in-memory inference with MPI", file=sys.stderr)
-            exit(1)
-        args.logger.info(f'running in-memory inference')
-        in_memory_inference(model, dataset, args, addl_targs)
-    else:
-        if SIZE > 1:
-            fkwargs['comm'] = COMM
-            args.logger.info(f'running parallel chunked inference')
-        else:
-            args.logger.info(f'running serial chunked inference')
-        if args.aggregate:
-            parallel_chunked_inf_summ(model, dataset, args, addl_targs, f_kwargs)
-        else:
-            args.logger.info('not doing antying -- you kept around old, dead code that you should probably remove')
-            #parallel_chunked_inference(model, dataset, args, addl_targs, COMM, SIZE, RANK, f_kwargs, probs=not args.features)
-
-
-def parallel_chunked_inference(model, dataset, args, addl_targs, comm, size, rank, fkwargs, probs=True):
-    from sklearn.metrics import confusion_matrix
-
-    n_samples = len(dataset)
-    f = h5py.File(args.output, 'w', **fkwargs)
-    outputs = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
-    labels = f.require_dataset('labels', shape=(n_samples,), dtype=int)
-    orig_lens = f.require_dataset('orig_lens', shape=(n_samples,), dtype=int)
-    seq_ids = f.require_dataset('seq_ids', shape=(n_samples,), dtype=int)
-
-    model.to(args.device)
-
-    if size > 1: comm.Barrier()
-
-    confmats = dict()
-    if probs:
-        confmat_grp = f.require_group('confusion')
-        preds = f.require_dataset('preds', shape=(n_samples,), dtype=int)
-        confusion_matrix = partial(confusion_matrix, labels=np.arange(args.n_outputs))
-
-    for loader_key, loader in args.loaders.items():
-        if rank == 0: args.logger.info(f'computing outputs for {loader_key}')
-        mask = f.require_dataset(loader_key, shape=(n_samples,), dtype=bool, fillvalue=False)
-        if probs:
-            confmats[loader_key] = np.zeros((args.n_outputs, args.n_outputs), dtype=int)
-        for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=rank==0):
-            order = np.argsort(idx)
-            idx = idx[order]
-            with ccm(size > 1, outputs.collective):
-                outputs[idx] = _outputs[order]
-            with ccm(size > 1, labels.collective):
-                labels[idx] = _labels[order]
-            with ccm(size > 1, orig_lens.collective):
-                orig_lens[idx] = _orig_lens[order]
-            with ccm(size > 1, seq_ids.collective):
-                seq_ids[idx] = _seq_ids[order]
-            with ccm(size > 1, mask.collective):
-                mask[idx] = True
-            if probs:
-                _preds = _outputs.argmax(axis=1)
-                confmats[loader_key] += confusion_matrix(_labels, _preds)
-                with ccm(size > 1, preds.collective):
-                    preds[idx] = _preds[order]
-
-    if size > 1:
-        comm.Barrier()
-        for loader_key, confmat in confmats.items():
-            if rank == 0: args.logger.info(f'reducing {loader_key} confusion matrix')
-            recv = np.zeros_like(confmat)
-            comm.Reduce(confmat, recv)
-            confmats[loader_key] = recv
-        comm.Barrier()
-
-    confdsets = {loader_key: confmat_grp.require_dataset(loader_key, shape=(args.n_outputs, args.n_outputs), dtype=int) for loader_key in confmats}
-    if rank == 0:
-        for loader_key, confmat in confmats.items():
-            if rank == 0: args.logger.info(f'writing {loader_key} confusion matrix')
-            confdsets[loader_key][:] = confmat
-
-    f.close()
-    if rank == 0: args.logger.info(f'closing {args.output}')
-
-
-def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
+def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
     n_samples = len(dataset.orig_difile.seq_table)
     all_seq_ids = dataset.orig_difile.get_sequence_subset()
@@ -308,16 +220,21 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
 
     f = h5py.File(args.output, 'w', **fkwargs)
     outputs_dset = None
-    if not args.no_outputs:
+    if args.save_chunks:
         outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
-    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int)
+    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
+    labels_dset.attrs['n_classes'] = args.n_outputs
 
     maxprob_dset = None
     if args.maxprob > 0 :
-        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=int)
+        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
 
-    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int)
-    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int)
+    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
+    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
+    if all_seq_ids is None:
+        seqlen_dset[:] = seq_lengths
+    else:
+        seqlen_dset[all_seq_ids] = seq_lengths
 
     # to-write queues - we use those so we're not doing I/O at every iteration
     outputs_q = list()
@@ -327,7 +244,7 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
 
     # write what's in the to-write queues
     if not hasattr(args, 'n_seqs'):
-        args.n_seqs = 2500
+        args.n_seqs = 500
 
     # ensure that dataset is closed before we start up the DataLoader
     dataset.close()
@@ -335,7 +252,8 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
     # send model to GPU
     model.to(args.device)
 
-    for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, args.loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0):
+    uniq_labels = set()
+    for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0):
 
         seqs, counts = np.unique(_seq_ids, return_counts=True)
         outputs_sum = list()
@@ -344,6 +262,7 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
             mask = _seq_ids == i
             outputs_sum.append(_outputs[mask].sum(axis=0))
             labels.append(_labels[mask][0])
+        uniq_labels.update(_labels)
 
         # Add the first sum of this iteration to the last sum of the
         # previous iteration if they belong to the same sequence
@@ -359,12 +278,14 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
         outputs_q.extend(outputs_sum)
         seqs_q.extend(seqs)
         counts_q.extend(counts)
-        labels_q.extend(counts)
+        labels_q.extend(labels)
 
+        # write when we get above a certain number of sequences
         if len(outputs_q) > args.n_seqs:
             idx = seqs_q[:-1]
+            args.logger.debug(f"rank {dataset.rank} - saving these sequences {idx}")
             # compute mean from sums
-            for i in range(len(seqs_q) - 1):
+            for i in range(len(idx)):
                 outputs_q[i] /= counts_q[i]
 
             if outputs_dset is not None:
@@ -375,7 +296,7 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
                 k = outputs_q[0].shape[0] - args.maxprob
                 maxprobs = list()
                 for i in range(len(idx)):
-                    maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:]))
+                    maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
                 maxprob_dset[idx] = maxprobs
 
             if preds_dset is not None:
@@ -387,8 +308,10 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
             counts_q = counts_q[-1:]
             labels_q = labels_q[-1:]
 
+    args.logger.debug(f"rank {dataset.rank} - saving these sequences {seqs_q}")
+    args.logger.debug(f"rank {dataset.rank} - came across these labels {list(sorted(uniq_labels))}")
     # clean up what's left in the to-write queue
-    for i in seqs_q:
+    for i in range(len(seqs_q)):
         outputs_q[i] /= counts_q[i]
 
     if outputs_dset is not None:
@@ -399,17 +322,14 @@ def parallel_chunked_inf_summ(model, dataset, args, addl_targs, fkwargs):
         k = outputs_q[0].shape[0] - args.maxprob
         maxprobs = list()
         for i in range(len(seqs_q)):
-            maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:]))
+            maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
         maxprob_dset[seqs_q] = maxprobs
 
     if preds_dset is not None:
         preds = [np.argmax(outputs_q[i]) for i in range(len(seqs_q))]
         preds_dset[seqs_q] = preds
 
-
-    # copy sequences lengths for convenience
-    if dataset.rank == 0: args.logger.info(f'closing {args.output}')
-
+    args.logger.info(f'rank {dataset.rank} - closing {args.output}')
     f.close()
 
 
@@ -473,58 +393,6 @@ def cat(indices, outputs, labels, orig_lens, seq_ids):
            torch.cat(seq_ids).numpy())
     return ret
 
-
-def in_memory_inference(model, dataset, args, addl_targs):
-
-    n_samples = len(dataset)
-    # make temporary datasets and do all I/O at the end
-    tmp_emb = np.zeros(shape=(n_samples, args.n_outputs), dtype=float)
-    tmp_label = np.zeros(shape=(n_samples,), dtype=int)
-    tmp_olen = np.zeros(shape=(n_samples,), dtype=int)
-    tmp_seq_id = None
-    if args.save_seq_ids:
-        tmp_seq_id = np.zeros(shape=(n_samples,), dtype=int)
-    indices = list()
-    masks = dict()
-
-    model.to(args.device)
-    for loader_key, loader in args.loaders.items():
-        args.logger.info(f'computing outputs for {loader_key}')
-        idx, outputs, labels, orig_lens, seq_ids = get_outputs(model, loader, args.device, debug=args.debug)
-        order = np.argsort(idx)
-        idx = idx[order]
-        args.logger.info('stashing outputs, shape ' + str(outputs[order].shape))
-        tmp_emb[idx] = outputs[order]
-        args.logger.info('stashing labels')
-        tmp_label[idx] = labels[order]
-        args.logger.info('stashing orig_lens')
-        tmp_olen[idx] = orig_lens
-        args.logger.info('stashing mask')
-
-        mask = np.zeros(n_samples, dtype=bool)
-        mask[idx] = True
-        masks[loader_key] = mask
-        if args.save_seq_ids:
-            args.logger.info('stashing seq_ids')
-            tmp_seq_id[idx] = seq_ids[order]
-        indices.append(idx)
-
-    args.logger.info("writing data")
-    f = h5py.File(args.output, 'w')
-    f.create_dataset('label_names', data=dataset.label_names, dtype=h5py.special_dtype(vlen=str))
-
-    for k,v in masks.items():
-        f.create_dataset(k, data=v)
-
-    args.logger.info("writing outputs, shape " + str(tmp_emb.shape))
-    f.create_dataset('outputs', data=tmp_emb)
-    args.logger.info("writing labels, shape " + str(tmp_label.shape))
-    f.create_dataset('labels', data=tmp_label)
-    args.logger.info("writing orig_lens, shape " + str(tmp_olen.shape))
-    f.create_dataset('orig_lens', data=tmp_olen)
-    if args.save_seq_ids:
-        args.logger.info("writing seq_ids, shape " + str(tmp_olen.shape))
-        f.create_dataset('seq_ids', data=tmp_seq_id)
 
 from . import models  # noqa: E402
 

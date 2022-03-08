@@ -2,18 +2,19 @@ import argparse
 import sys
 from time import time
 import warnings
+from tqdm import tqdm
 
 import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, Sampler, Subset
+from torch.utils.data import DataLoader, Dataset, Sampler, Subset, SequentialSampler
 from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from hdmf.common import get_hdf5io
 
 from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, LazyWindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence, lazy_chunk_sequence, DIFileFilter
-from ..utils import parse_seed, distsplit
+from ..utils import parse_seed, distsplit, balsplit, get_logger
 
 import psutil
 import os
@@ -65,6 +66,7 @@ def dataset_stats(argv=None):
     add_dataset_arguments(parser)
     parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=None)
     parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
+    parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
     test_group.add_argument('--mem', default=False, action='store_true', help='print memory usage before and after loading')
@@ -140,8 +142,8 @@ def dataset_stats(argv=None):
 
 
     if args.test_read:
-        dataset.close()
-        from tqdm import tqdm
+        if args.num_workers > 0:
+            dataset.close()
         print("Attempting to read training data")
         if args.lightning:
             if args.mem:
@@ -199,6 +201,90 @@ def dataset_stats(argv=None):
                 bad = True
         if not bad:
             print(f'taxonomic hierarchy for {tl1} to {tl2} okay')
+
+
+def read_all_seqs(fa_path):
+
+    import skbio
+    from skbio.sequence import DNA, Protein
+    kwargs = {'format': 'fasta', 'constructor': DNA, 'validate': False}
+    seqs = list()
+    for seq in skbio.io.read(fa_path, **kwargs):
+        seqs.append(seq.values.astype('U'))
+    return "".join(np.concatenate(seqs))
+
+def check_loaded_sequences(argv=None):
+    """Read a dataset and print the number of samples to stdout"""
+    from ..utils import get_genomic_path
+
+    parser =  argparse.ArgumentParser()
+    parser.add_argument('input', type=str, help='the HDF5 DeepIndex file')
+    parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
+    add_dataset_arguments(parser)
+    type_group = parser.add_mutually_exclusive_group()
+    type_group.add_argument('--train', action='store_true', help='use training data loader', default=False)
+    type_group.add_argument('--validate', action='store_true', help='use validation data loader', default=False)
+    parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=0)
+    parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=1)
+    parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
+    parser.add_argument('-b', '--batch_size', type=int, help='the number of workers to load data with', default=1)
+    test_group = parser.add_argument_group('Test reading')
+    test_group.add_argument('-N', '--num_batches', type=int, help='the number of batches to load when testing read', default=1)
+    test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
+
+
+    args = parser.parse_args(argv)
+    logger = get_logger()
+
+    tr_len = None
+    va_len = None
+    args.downsample = False
+    args.loader_kwargs = dict()
+    args.load = False
+    args.pin_memory = False
+    args.num_workers = 0
+    args.shuffle = False
+    logger.info(f"loading data from {args.input}")
+    data_mod = DeepIndexDataModule(hparams=args, keep_open=True, rank=args.rank, size=args.size)
+    dataset = data_mod.dataset
+
+    if not (args.train or args.validate):
+        args.train = True
+
+    if args.train:
+        logger.info(f"getting training data loader")
+        tr = data_mod.train_dataloader()
+    else:
+        logger.info(f"getting validation data loader")
+        tr = data_mod.val_dataloader()
+
+    stop = args.num_batches - 1
+
+
+    logger.info(f"Checking {args.num_batches} batches with a batch size of {args.batch_size}")
+    correct = 0
+    rc = 0
+    n_samples = 0
+    for idx, (seqs, labels) in tqdm(enumerate(tr), total=args.num_batches):
+        print(seqs, labels)
+        for i in range(len(seqs)):
+            n_samples += 1
+            func = get_genomic_path
+            tid = dataset.difile.taxa_table.taxon_id.data[labels[i]]
+            path = get_genomic_path(tid, args.fadir)
+            seq = read_all_seqs(path)
+            sample = "".join(dataset.vocab[seqs[i]]).rstrip('N')
+            if sample in seq:
+                correct += 1
+            else:
+                sample = "".join(dataset.vocab[dataset.difile.rcmap[seqs[i]]])[::-1].rstrip('N')
+                if sample in seq:
+                    correct += 1
+                    rc += 1
+        if idx == stop:
+            break
+
+    logger.info(f"{correct} ({rc} revcomped) samples of {n_samples} existed in the respective genomes returned by the loader")
 
 
 class SplitCollater:
@@ -513,16 +599,42 @@ def get_loader(dataset, inference=False, **kwargs):
     return DataLoader(orig_dataset, collate_fn=collater, **kwargs)
 
 
+def check_rng(rng):
+    if rng is None:
+        return np.random.default_rng()
+    elif isinstance(rng, (int, np.integer)):
+        return np.random.default_rng(rng)
+    return rng
+
+
+class WORHelper:
+
+    def __init__(self, length, rng=None):
+        self.period = length
+        self.rng = check_rng(rng)
+        self.indices = np.arange(length)
+        self.curr_max = length - 1
+
+    def sample(self):
+        idx = self.rng.integers(self.curr_max + 1)
+        ret = self.indices[idx]
+        end = self.curr_max
+        self.indices[end], self.indices[idx] = self.indices[idx], self.indices[end]
+        self.curr_max = (self.curr_max - 1) % self.period
+        return ret
+
+
 class WORSampler(Sampler):
     """Without Replacement Sampler"""
 
-    def __init__(self, length, rng=None, rank=0, size=1):
+    def __init__(self, length, rng=None, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
+        """
+        Args:
+            n_partitions :          number of deterministic partitions to break up dataset into
+            part_smplr_rng :        Partition Sampler RNG
+        """
         super().__init__(None)
-        if rng is None:
-            rng = np.random.default_rng()
-        elif isinstance(rng, (int, np.integer)):
-            rng = np.random.default_rng(rng)
-        self.rng = rng
+        self.rng = check_rng(rng)
         dtype = np.uint32
         if length > (2**32 - 1):
             dtype = np.uint64
@@ -537,33 +649,51 @@ class WORSampler(Sampler):
         if size > 1:
             self.indices = np.arange(rank, length, size, dtype=dtype)
             if trim:
+                # This systematically throws out up to (size - 1) samples
                 self.indices = self.indices[:length // size]
         else:
             self.indices = np.arange(length, dtype=dtype)
-        self.curr_len = len(self.indices)
+        self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
+
+        # set an initial value for curr_part (i.e. current partition)
+        # so we can calculate lenght in __len__
+        self.curr_part = self.part_sampler.sample()
+        self.curr_len = len(self)
 
     def __iter__(self):
-        self.curr_len = len(self.indices)
+        self.curr_len = len(self)
         return self
 
     def __len__(self):
-        return len(self.indices)
+        return (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1
 
     def __next__(self):
         if self.curr_len == 0:
+            self.curr_part = self.part_sampler.sample()
             raise StopIteration
-        idx = self.rng.integers(self.curr_len)
+        idx = self.rng.integers(self.curr_len) * self.part_sampler.period + self.curr_part
+        end = (self.curr_len - 1) * self.part_sampler.period + self.curr_part
         ret = self.indices[idx]
-        self.indices[self.curr_len - 1], self.indices[idx] = self.indices[idx], self.indices[self.curr_len - 1]
+        self.indices[end], self.indices[idx] = self.indices[idx], self.indices[end]
         self.curr_len -= 1
         return ret
 
 
-class DSSampler(Sampler):
+class DSSampler(SequentialSampler):
     """Distributed Sequential Sampler"""
 
-    def __init__(self, length, rank=0, size=1):
+    def __init__(self, length, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
+        """
+        Args:
+            n_partitions :          number of deterministic partitions to break up dataset into
+            part_smplr_rng :        Partition Sampler RNG
+        """
         super().__init__(None)
+        self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
+
+        # set an initial value for curr_part (i.e. current partition)
+        # so we can calculate lenght in __len__
+        self.curr_part = self.part_sampler.sample()
         if size > 1:
             self.start, self.end = distsplit(length, size, rank, arange=False)
         else:
@@ -571,10 +701,18 @@ class DSSampler(Sampler):
             self.end = length
 
     def __iter__(self):
-        return iter(range(self.start, self.end))
+        self.__it = iter(range(self.start + self.curr_part, self.end, self.part_sampler.period))
+        return self
 
     def __len__(self):
-        return self.end - self.start
+        return (self.end - self.start - self.curr_part - 1) // self.part_sampler.period + 1
+
+    def __next__(self):
+        try:
+            return next(self.__it)
+        except StopIteration:
+            self.curr_part = self.part_sampler.sample()
+            raise StopIteration
 
 
 class SubsetDataLoader(DataLoader):
@@ -601,6 +739,8 @@ class DeepIndexDataModule(pl.LightningDataModule):
         super().__init__()
 
         kwargs = dict(batch_size=hparams.batch_size)
+        if seed is None:
+            seed = parse_seed('')
 
         if inference:
             hparams.manifold = False
@@ -613,11 +753,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
 
             # set up the training sampler - shuffle for training
             train_len = self.dataset.get_subset_len(train=True)
-            self._tr_sampler = WORSampler(train_len, rng=seed, rank=rank, size=size)
+            self._tr_sampler = WORSampler(train_len, rng=seed, rank=rank, size=size, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
             # set up the validation sampler - DO NOT shuffle for training
             val_len = self.dataset.get_subset_len(validate=True)
-            self._val_sampler = DSSampler(val_len, rank=rank, size=size)
+            self._val_sampler = DSSampler(val_len, rank=rank, size=size, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
         self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
 
@@ -877,7 +1017,7 @@ class LazySeqDataset(Dataset):
             self.orig_difile = self.io.read()
 
         if self._world_size > 1:
-            self.orig_difile.set_sequence_subset(distsplit(len(self.orig_difile), self._world_size, self._global_rank))
+            self.orig_difile.set_sequence_subset(balsplit(self.orig_difile.get_seq_lengths(), self._world_size, self._global_rank))
 
         self.difile = self.orig_difile
 

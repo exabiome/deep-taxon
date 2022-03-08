@@ -101,3 +101,91 @@ def to_onnx(argv=None):
                           output_names = ['output'],                        # the model's output names
                           dynamic_axes={'input' : {0 : 'batch_size'},       # variable length axes
                                         'output' : {0 : 'batch_size'}})
+
+def build_deployment_pkg(argv=None):
+    """
+    Convert a Torch model checkpoint to ONNX format
+    """
+
+    import json
+    import os
+    import shutil
+    import tempfile
+    import zipfile
+    from hdmf.common import get_hdf5io
+
+    desc = "Convert a Torch model checkpoint to ONNX format"
+    epi = ("By default, the ONNX file will be written to same directory "
+           "as checkpoint")
+
+    parser = argparse.ArgumentParser(description=desc, epilog=epi)
+    parser.add_argument('input', type=str, help='the input file to run inference on')
+    parser.add_argument('config', type=str, help='the config file used for training')
+    parser.add_argument('nn_model', type=str, help='the NN model for doing predictions')
+    parser.add_argument('conf_model', type=str, help='the checkpoint file to use for running inference')
+    parser.add_argument('output_dir', type=str, help='the directory to copy to before zipping')
+    parser.add_argument('-f', '--force', action='store_true', default=False, help='overwrite output if it exists')
+    parser.add_argument('-s', '--softmax', action='store_true', default=False, help='add softmax layer to model before exporting')
+
+    if len(argv) == 0:
+        parser.print_help()
+        sys.exit(1)
+
+    args = parser.parse_args(argv)
+
+    logger = get_logger()
+
+
+    if os.path.exists(args.output_dir):
+        print(f"{args.output_dir} exists, exiting")
+        exit(1)
+
+    os.mkdir(args.output_dir)
+    tmpdir = args.output_dir
+
+    logger.info(f'Using temporary directory {tmpdir}')
+    logger.info(f'loading sample input from {args.input}')
+
+    io = get_hdf5io(args.input, 'r')
+    difile = io.read()
+    tt = difile.taxa_table
+    _load = lambda x: x[:]
+    for col in tt.columns:
+        col.transform(_load)
+    tt_df = tt.to_dataframe().set_index('taxon_id')
+    io.close()
+
+    path = lambda x: os.path.join(tmpdir, os.path.basename(x))
+
+    manifest = {
+        'taxa_table': os.path.join(tmpdir, "taxa_table.csv"),
+        'nn_model': path(args.nn_model),
+        'conf_model': path(args.conf_model),
+        'training_config': path(args.config)
+    }
+
+    logger.info(f"exporting taxa table CSV to {manifest['taxa_table']}")
+    tt_df.to_csv(manifest['taxa_table'])
+    logger.info(f"copying {args.nn_model} to {manifest['nn_model']}")
+    shutil.copyfile(args.nn_model, manifest['nn_model'])
+    logger.info(f"copying {args.conf_model} to {manifest['conf_model']}")
+    shutil.copyfile(args.conf_model, manifest['conf_model'])
+    logger.info(f"copying {args.config} to {manifest['training_config']}")
+    shutil.copyfile(args.config, manifest['training_config'])
+
+    with open(os.path.join(tmpdir, 'manifest.json'), 'w') as f:
+        json.dump(manifest, f, indent=4)
+
+
+    zip_path = args.output_dir + ".zip"
+    zipf = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED)
+    for root, dirs, files in os.walk(tmpdir):
+        for file in files:
+            path = os.path.join(root, file)
+            logger.info(f'adding {path} to {zip_path}')
+            zipf.write(path)
+
+    zipf.close()
+
+    logger.info(f'removing {tmpdir}')
+    shutil.rmtree(tmpdir)

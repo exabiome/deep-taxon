@@ -136,8 +136,10 @@ class AbstractJob(metaclass=ABCMeta):
     def add_addl_jobflag(self, flag, val):
         self.addl_job_flags[flag] = val
 
-    def submit_job(self, path):
+    def submit_job(self, path, conda_env=None):
         cmd = f'{self.submit_cmd} {path}'
+        if conda_env is not None:
+            cmd = f'conda run -n {conda_env} {cmd}'
         print(cmd)
         output = subprocess.check_output(
                     cmd,

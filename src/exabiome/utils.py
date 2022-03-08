@@ -158,3 +158,23 @@ def distsplit(dset_len, size, rank, arange=True):
         return np.arange(b, b+q)
     else:
         return b, b+q
+
+def balsplit(weights, size, rank):
+    """
+    Get a balanced partition from weighted data
+    for rank *rank* when world size is *size*
+    """
+    srt = np.argsort(weights)
+    s = 0
+    e = len(srt) - 1
+    curr = 0
+    ids = [list() for i in range(size)]
+    while s < e:
+        ids[curr].append(srt[s])
+        ids[curr].append(srt[e])
+        s += 1
+        e -= 1
+        curr = (curr + 1) % size
+    if s == e:
+        ids[size - 1].append(srt[s])
+    return np.array(np.sort(ids[rank]))
