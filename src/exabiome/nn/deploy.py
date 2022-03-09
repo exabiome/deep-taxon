@@ -125,7 +125,6 @@ def build_deployment_pkg(argv=None):
     parser.add_argument('conf_model', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('output_dir', type=str, help='the directory to copy to before zipping')
     parser.add_argument('-f', '--force', action='store_true', default=False, help='overwrite output if it exists')
-    parser.add_argument('-s', '--softmax', action='store_true', default=False, help='add softmax layer to model before exporting')
 
     if len(argv) == 0:
         parser.print_help()
@@ -137,8 +136,12 @@ def build_deployment_pkg(argv=None):
 
 
     if os.path.exists(args.output_dir):
-        print(f"{args.output_dir} exists, exiting")
-        exit(1)
+        if args.force:
+            logger.info(f"{args.output_dir} exists, removing tree")
+            shutil.rmtree(args.output_dir)
+        else:
+            logger.error(f"{args.output_dir} exists, exiting")
+            exit(1)
 
     os.mkdir(args.output_dir)
     tmpdir = args.output_dir
@@ -149,6 +152,7 @@ def build_deployment_pkg(argv=None):
     io = get_hdf5io(args.input, 'r')
     difile = io.read()
     tt = difile.taxa_table
+    vocab = difile.seq_table.sequence.elements.data[:].tolist()
     _load = lambda x: x[:]
     for col in tt.columns:
         col.transform(_load)
@@ -161,7 +165,8 @@ def build_deployment_pkg(argv=None):
         'taxa_table': os.path.join(tmpdir, "taxa_table.csv"),
         'nn_model': path(args.nn_model),
         'conf_model': path(args.conf_model),
-        'training_config': path(args.config)
+        'training_config': path(args.config),
+        'vocabulary': vocab,
     }
 
     logger.info(f"exporting taxa table CSV to {manifest['taxa_table']}")
@@ -189,3 +194,160 @@ def build_deployment_pkg(argv=None):
 
     logger.info(f'removing {tmpdir}')
     shutil.rmtree(tmpdir)
+
+
+def run_onnx_inference(argv=None):
+    """
+    Convert a Torch model checkpoint to ONNX format
+    """
+
+    import argparse
+    import json
+    from time import time
+
+    import numpy as np
+    import onnxruntime as ort
+    import pandas as pd
+    import ruamel.yaml as yaml
+    import skbio
+    from skbio.sequence import DNA
+
+    from exabiome.sequence.convert import DNAVocabIterator
+    from exabiome.utils import get_logger
+
+
+    desc = "Run predictions using ONNX"
+    epi = ("")
+
+    parser = argparse.ArgumentParser(description=desc, epilog=epi)
+    parser.add_argument('deploy_dir', type=str, help='the directory containing all the data for deployment')
+    parser.add_argument('fastas', nargs='+', type=str, help='the Fasta files to do taxonomic classification on')
+    parser.add_argument('-F', '--fof', action='store_true', default=False, help='a file-of-files was passed in')
+    parser.add_argument('-o', '--output', type=str, default=None, help='the output file to save classifications to')
+
+    args = parser.parse_args(argv)
+
+    if args.fof:
+        with open(args.fastas[0], 'r') as f:
+            args.fastas = [s.strip() for s in f.readlines()]
+
+    files = ('taxa_table', 'nn_model', 'conf_model', 'training_config')
+    # read manifest
+    with open(os.path.join(args.deploy_dir, 'manifest.json'), 'r') as f:
+        manifest = json.load(f)
+    # remap files in deploy_dir to be relative to where we are running
+    for key in files:
+        manifest[key] = os.path.join(args.deploy_dir, os.path.basename(manifest[key]))
+
+    model_path = manifest['nn_model']
+    conf_model_path = manifest['conf_model']
+    config_path = manifest['training_config']
+    tt_path = manifest['taxa_table']
+    vocab = manifest['vocabulary']
+
+    logger = get_logger()
+
+    logger.info(f'loading model from {model_path}')
+    nn_sess = ort.InferenceSession(model_path)
+
+    logger.info(f'loading confidence model from {conf_model_path}')
+    conf_sess = ort.InferenceSession(conf_model_path)
+    n_max_probs = conf_sess.get_inputs()[0].shape[1] - 1
+
+    logger.info(f'loading training config from {config_path}')
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    logger.info(f'loading taxonomy table from {tt_path}')
+    tt_df = pd.read_csv(tt_path)
+    outcols = ['filename', 'ID'] + tt_df.columns.tolist() + ['score']
+    outcols.remove('taxon_id')
+
+    assert nn_sess.get_outputs()[0].shape[1] == len(tt_df)
+
+    logger.info(f'found {len(tt_df)} taxa')
+
+    DNAVocabIterator.chars = ''.join(vocab)
+    encode = DNAVocabIterator.encode
+    padval = DNAVocabIterator.chars.find('N')
+    window = config['window']
+    step = config['step']
+    k = len(tt_df) - n_max_probs
+
+    all_preds = list()
+    all_maxprobs = list()
+    all_lengths = list()
+    all_seqnames = list()
+    all_filepaths = list()
+
+    logger.info(f'beginning inference')
+    before = time()
+
+    for fasta_path in args.fastas:
+        preds = list()
+        all_batches = list()
+        seq_ids = list()
+        logger.info(f'loading {fasta_path}')
+        for seq_id, seq in enumerate(skbio.read(fasta_path, format='fasta', constructor=DNA, validate=False)):
+            all_seqnames.append(seq.metadata['id'])
+            all_lengths.append(len(seq))
+            enc = encode(seq)
+            starts = np.arange(0, enc.shape[0], step)
+            ends = np.minimum(starts + window, enc.shape[0])
+            batches = np.ones((len(starts), window), dtype=int) * padval
+            for i, (s, e) in enumerate(zip(starts, ends)):
+                l = e - s
+                batches[i][:l] = enc[s:e]
+            all_batches.append(batches)
+            seq_ids.append([seq_id] * len(batches))
+
+        # aggregate everything we just pulled from the fasta file
+        n_seqs = len(seq_ids)
+        all_filepaths.extend([fasta_path] * n_seqs)
+        seq_ids = np.concatenate(seq_ids)
+        seq_in = np.concatenate(all_batches)
+
+        # run inference
+        logger.info(f'running inference on {len(seq_in)} chunks')
+        outputs = nn_sess.run(None, {'input': seq_in})[0]
+
+        # aggregate chunks by sequence
+        logger.info('aggregating by sequence')
+        aggregated = np.zeros((n_seqs, outputs.shape[1]))
+        for seq_id in seq_ids:
+            mask = seq_ids == seq_id
+            aggregated[seq_id] = outputs[mask].mean(axis=0)
+
+        # get prediction and maximum probabilities for confidence scoring
+        logger.info('getting max probabilities')
+        preds = np.argmax(aggregated, axis=1)
+        all_maxprobs.append(np.sort(np.partition(aggregated, k)[:, k:])[::-1])
+        all_preds.append(preds)
+
+    # build input matrix for confidence model
+    all_lengths = np.array(all_lengths, dtype=np.float32)
+    all_maxprobs = np.concatenate(all_maxprobs)
+    conf_input = np.concatenate([all_lengths[:, np.newaxis], all_maxprobs], axis=1, dtype=np.float32)
+
+    # get confidence probabilities
+    logger.info('calculating confidence probabilities')
+    conf = conf_sess.run(None, {'float_input': conf_input})[1][:, 1]
+
+    # build the final output data frame
+    logger.info('building final output data frame')
+    all_preds = np.concatenate(all_preds)
+    output = tt_df.iloc[all_preds].copy()
+    output['filename'] = all_filepaths
+    output['ID'] = all_seqnames
+    output['score'] = conf
+    output = output[outcols]
+
+    # write out data
+    if args.output is None:
+        outf = sys.stdout
+    else:
+        outf = open(args.output, 'w')
+    output.to_csv(outf, index=False)
+
+    after = time()
+    logger.info(f'Took {after - before:.1f} seconds')
