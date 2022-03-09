@@ -35,10 +35,10 @@ def check_argv(argv=None):
     return argv
 
 
-def parse_logger(string):
+def parse_logger(string, stream=sys.stderr):
     if not string:
-        ret = logging.getLogger('stdout')
-        hdlr = logging.StreamHandler(sys.stdout)
+        ret = logging.getLogger()
+        hdlr = logging.StreamHandler(stream)
     else:
         ret = logging.getLogger(string)
         hdlr = logging.FileHandler(string)
