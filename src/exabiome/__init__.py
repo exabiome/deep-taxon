@@ -62,6 +62,7 @@ def main():
             'extract-profile': Command('nn.summarize.get_profile_data', 'Extract profile data from log files'),
             'conf-model': Command('nn.summarize.train_confidence_model', 'Train or convert a prediction confidence model'),
             'deploy-pkg': Command('nn.deploy.build_deployment_pkg', 'Build Zip package for deploying model'),
+            'onnx-run': Command('nn.deploy.run_onnx_inference', 'Run a classification with ONNX models'),
         }
     }
     import sys

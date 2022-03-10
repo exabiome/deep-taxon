@@ -1010,15 +1010,25 @@ def train_confidence_model(argv=None):
     parser.add_argument('-O', '--onnx', metavar='PATH', nargs='?', const=True, default=False, type=str,
                         help='Save data in ONNX format. If an argument is passed, it is assumed to be the path to a pickled model to convert to ONNX format')
     parser.add_argument("-k", "--topk", metavar="TOPK", type=int, help="use the TOPK probabilities for building confidence model", default=None)
+    parser.add_argument('-j', '--n_jobs', metavar='NJOBS', nargs='?', const=True, default=None, type=int,
+                        help='the number of jobs to use for cross-validation. if NJOBS is not specified, use the number of folds i.e. 5')
+    parser.add_argument('-c', '--cvs', metavar='NFOLDS', default=5, type=int,
+                        help='the number of cross-validation folds to use. default is 5')
 
     args = parser.parse_args(argv)
+
+    if args.n_jobs and isinstance(args.n_jobs, bool):
+        args.n_jobs = args.cvs
 
     logger = get_logger()
 
     if isinstance(args.onnx, str):
-        with open(args.onnx, 'rb') as f:
+        # just convert the given model to ONNX
+        with open(args.output, 'rb') as f:
             lr = pickle.load(f)
+        args.output = args.onnx
     else:
+        # train a new model
         logger.info(f"reading outputs summary data from {args.summary}")
         f = h5py.File(args.summary, 'r')
 
@@ -1037,7 +1047,7 @@ def train_confidence_model(argv=None):
         scaler = MaxAbsScaler()
         scaler.fit(X)
 
-        lrcv = LogisticRegressionCV(penalty='elasticnet', solver='saga', l1_ratios=[.1, .5, .7, .9, .95, .99, 1])
+        lrcv = LogisticRegressionCV(penalty='elasticnet', solver='saga', l1_ratios=[.1, .5, .7, .9, .95, .99, 1], n_jobs=args.n_jobs, cv=args.cvs)
         logger.info(f"building confidence model with \n{lrcv}")
 
         lrcv.fit(scaler.transform(X), y)
@@ -1053,13 +1063,13 @@ def train_confidence_model(argv=None):
 
         logger.info(f"saving {lr} to ONNX file {args.output}")
         initial_type = [('float_input', FloatTensorType([None, lr.coef_.shape[1]]))]
-        onx = convert_sklearn(lr, initial_types=initial_type)
+        onx = convert_sklearn(lr, initial_types=initial_type, options={type(lr): {'zipmap': False}})
         with open(args.output, "wb") as f:
             f.write(onx.SerializeToString())
     else:
         logger.info(f"pickling {lr} to {args.output}")
-        with open(args.onnx, 'wb') as f:
-            pickle.load(lr, f)
+        with open(args.output, 'wb') as f:
+            pickle.dump(lr, f)
 
 
 if __name__ == '__main__':
