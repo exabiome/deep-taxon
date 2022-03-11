@@ -48,7 +48,7 @@ class SlurmJob(AbstractJob):
         #self.add_addl_jobflag('G', self.gpus)
         self.add_addl_jobflag('c', 10)
         self.add_addl_jobflag('-ntasks-per-node', self.gpus)
-        self.add_addl_jobflag('-gpus-per-task', 1)
+        self.add_addl_jobflag('-gpus-per-node', 4)
 
         n_gpus = self.gpus
         self.use_bb = False
