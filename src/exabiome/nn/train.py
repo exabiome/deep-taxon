@@ -426,11 +426,15 @@ def print0(*msg, **kwargs):
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
     global RANK
-
+    from pytorch_lightning.loggers import WandbLogger
     import numpy as np
     import traceback
     import os
     import pprint
+    import wandb
+    
+    wandb_logger = WandbLogger(project="deep-taxon", entity='deep-taxon')
+
 
     pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
 
@@ -496,8 +500,8 @@ def run_lightning(argv=None):
     targs = dict(
         enable_checkpointing=True,
         callbacks=callbacks,
-        logger = CSVLogger(save_dir=output('logs')),
-        profiler = "simple",
+        logger = wandb_logger,#CSVLogger(save_dir=output('logs')),
+        #profiler = "simple",
         num_sanity_val_steps = 0,
     )
     targs.update(addl_targs)
