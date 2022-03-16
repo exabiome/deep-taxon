@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 import sys
 
@@ -206,6 +207,7 @@ def run_onnx_inference(argv=None):
     from time import time
 
     import numpy as np
+    from numpy.lib.stride_tricks import sliding_window_view as swv
     import onnxruntime as ort
     import pandas as pd
     import ruamel.yaml as yaml
@@ -222,8 +224,10 @@ def run_onnx_inference(argv=None):
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
     parser.add_argument('deploy_dir', type=str, help='the directory containing all the data for deployment')
     parser.add_argument('fastas', nargs='+', type=str, help='the Fasta files to do taxonomic classification on')
+    parser.add_argument('-c', '--n_chunks', type=int, default=10000, help='the number of sequence chunks to process at a time')
     parser.add_argument('-F', '--fof', action='store_true', default=False, help='a file-of-files was passed in')
     parser.add_argument('-o', '--output', type=str, default=None, help='the output file to save classifications to')
+    parser.add_argument('-d', '--debug', action='store_true', default=False, help='print specific information about sequences')
 
     args = parser.parse_args(argv)
 
@@ -246,6 +250,8 @@ def run_onnx_inference(argv=None):
     vocab = manifest['vocabulary']
 
     logger = get_logger()
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
 
     logger.info(f'loading model from {model_path}')
     nn_sess = ort.InferenceSession(model_path)
@@ -285,10 +291,12 @@ def run_onnx_inference(argv=None):
 
     for fasta_path in args.fastas:
         preds = list()
-        all_batches = list()
-        seq_ids = list()
         logger.info(f'loading {fasta_path}')
-        for seq_id, seq in enumerate(skbio.read(fasta_path, format='fasta', constructor=DNA, validate=False)):
+
+        aggregated = list()
+        n_seqs = 0
+        for seq in skbio.read(fasta_path, format='fasta', constructor=DNA, validate=False):
+            n_seqs += 1
             all_seqnames.append(seq.metadata['id'])
             all_lengths.append(len(seq))
             enc = encode(seq)
@@ -298,25 +306,17 @@ def run_onnx_inference(argv=None):
             for i, (s, e) in enumerate(zip(starts, ends)):
                 l = e - s
                 batches[i][:l] = enc[s:e]
-            all_batches.append(batches)
-            seq_ids.append([seq_id] * len(batches))
+            logger.debug(f'getting outputs for {all_seqnames[-1]}, {len(batches)} chunks, {all_lengths[-1]} bases')
+            outputs = np.zeros(len(tt_df), dtype=float)
+            for s in range(0, len(batches), args.n_chunks):
+                e = s + args.n_chunks
+                outputs += nn_sess.run(None, {'input': batches[s:e]})[0].sum(axis=0)
+            outputs /= len(batches)
+            aggregated.append(outputs)
 
         # aggregate everything we just pulled from the fasta file
-        n_seqs = len(seq_ids)
         all_filepaths.extend([fasta_path] * n_seqs)
-        seq_ids = np.concatenate(seq_ids)
-        seq_in = np.concatenate(all_batches)
-
-        # run inference
-        logger.info(f'running inference on {len(seq_in)} chunks')
-        outputs = nn_sess.run(None, {'input': seq_in})[0]
-
-        # aggregate chunks by sequence
-        logger.info('aggregating by sequence')
-        aggregated = np.zeros((n_seqs, outputs.shape[1]))
-        for seq_id in seq_ids:
-            mask = seq_ids == seq_id
-            aggregated[seq_id] = outputs[mask].mean(axis=0)
+        aggregated = np.array(aggregated)
 
         # get prediction and maximum probabilities for confidence scoring
         logger.info('getting max probabilities')
