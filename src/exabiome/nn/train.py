@@ -490,7 +490,6 @@ def run_lightning(argv=None):
     callbacks = [
         ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode=mode, monitor=monitor),
         LearningRateMonitor(logging_interval='epoch'),
-        #DeviceStatsMonitor()
     ]
 
     if args.early_stop:
