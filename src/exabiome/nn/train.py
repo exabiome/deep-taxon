@@ -421,7 +421,6 @@ def run_lightning(argv=None):
     import traceback
     import os
     import pprint
-    import wandb
 
     pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
 
