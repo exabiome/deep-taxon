@@ -502,7 +502,6 @@ def run_lightning(argv=None):
         enable_checkpointing=True,
         callbacks=callbacks,
         logger = wandb_logger,
-        #profiler = "simple",
         num_sanity_val_steps = 0,
     )
     targs.update(addl_targs)
