@@ -23,8 +23,6 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor
 
-from pytorch_lightning.profiler import PyTorchProfiler
-
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
 from pytorch_lightning.plugins.environments import SLURMEnvironment
@@ -155,8 +153,6 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     prof_grp = parser.add_mutually_exclusive_group()
-    prof_grp.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
-    prof_grp.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
     parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
@@ -280,14 +276,6 @@ def process_args(args=None, return_io=False):
         else:
             warnings.warn("Ignoring -c/--checkpoint argument because {args.checkpoint} does not exist.")
             args.checkpoint = None
-
-    if args.profile:
-        #targs['profiler'] = 'advanced'
-        pass
-    elif args.cuda_profile:
-        pass
-        #targs['profiler'] = PyTorchProfiler(filename=f'pytorch_prof.{RANK:0{len(str(SIZE))}}',
-        #                                    emit_nvtx=True)
 
     targs['replace_sampler_ddp'] = False
 
