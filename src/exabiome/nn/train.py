@@ -282,10 +282,12 @@ def process_args(args=None, return_io=False):
             args.checkpoint = None
 
     if args.profile:
-        targs['profiler'] = 'advanced'
+        #targs['profiler'] = 'advanced'
+        pass
     elif args.cuda_profile:
-        targs['profiler'] = PyTorchProfiler(filename=f'pytorch_prof.{RANK:0{len(str(SIZE))}}',
-                                            emit_nvtx=True)
+        pass
+        #targs['profiler'] = PyTorchProfiler(filename=f'pytorch_prof.{RANK:0{len(str(SIZE))}}',
+        #                                    emit_nvtx=True)
 
     targs['replace_sampler_ddp'] = False
 
@@ -432,13 +434,13 @@ def run_lightning(argv=None):
     import os
     import pprint
     import wandb
-    
-    wandb_logger = WandbLogger(project="deep-taxon", entity='deep-taxon')
-
 
     pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+    
+    wandb_logger = WandbLogger(project="deep-taxon", entity='deep-taxon',
+                              name=args.experiment)
     # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
     #     from mpi4py import MPI
     #     comm = MPI.COMM_WORLD
@@ -488,7 +490,7 @@ def run_lightning(argv=None):
     callbacks = [
         ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode=mode, monitor=monitor),
         LearningRateMonitor(logging_interval='epoch'),
-        DeviceStatsMonitor()
+        #DeviceStatsMonitor()
     ]
 
     if args.early_stop:
