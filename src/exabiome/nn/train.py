@@ -501,7 +501,7 @@ def run_lightning(argv=None):
     targs = dict(
         enable_checkpointing=True,
         callbacks=callbacks,
-        logger = wandb_logger,#CSVLogger(save_dir=output('logs')),
+        logger = wandb_logger,
         #profiler = "simple",
         num_sanity_val_steps = 0,
     )
