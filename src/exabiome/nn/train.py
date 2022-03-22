@@ -23,8 +23,6 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor
 
-from pytorch_lightning.profiler import PyTorchProfiler
-
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
 from pytorch_lightning.plugins.environments import SLURMEnvironment
@@ -155,8 +153,6 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     prof_grp = parser.add_mutually_exclusive_group()
-    prof_grp.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
-    prof_grp.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
     parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
@@ -280,12 +276,6 @@ def process_args(args=None, return_io=False):
         else:
             warnings.warn("Ignoring -c/--checkpoint argument because {args.checkpoint} does not exist.")
             args.checkpoint = None
-
-    if args.profile:
-        targs['profiler'] = 'advanced'
-    elif args.cuda_profile:
-        targs['profiler'] = PyTorchProfiler(filename=f'pytorch_prof.{RANK:0{len(str(SIZE))}}',
-                                            emit_nvtx=True)
 
     targs['replace_sampler_ddp'] = False
 
@@ -426,7 +416,7 @@ def print0(*msg, **kwargs):
 def run_lightning(argv=None):
     '''Run training with PyTorch Lightning'''
     global RANK
-
+    from pytorch_lightning.loggers import WandbLogger
     import numpy as np
     import traceback
     import os
@@ -435,6 +425,9 @@ def run_lightning(argv=None):
     pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+    
+    wandb_logger = WandbLogger(project="deep-taxon", entity='deep-taxon',
+                              name=args.experiment)
     # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
     #     from mpi4py import MPI
     #     comm = MPI.COMM_WORLD
@@ -484,7 +477,6 @@ def run_lightning(argv=None):
     callbacks = [
         ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode=mode, monitor=monitor),
         LearningRateMonitor(logging_interval='epoch'),
-        DeviceStatsMonitor()
     ]
 
     if args.early_stop:
@@ -496,8 +488,7 @@ def run_lightning(argv=None):
     targs = dict(
         enable_checkpointing=True,
         callbacks=callbacks,
-        logger = CSVLogger(save_dir=output('logs')),
-        profiler = "simple",
+        logger = wandb_logger,
         num_sanity_val_steps = 0,
     )
     targs.update(addl_targs)
