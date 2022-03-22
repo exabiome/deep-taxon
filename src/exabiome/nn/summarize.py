@@ -1063,7 +1063,7 @@ def train_confidence_model(argv=None):
 
         logger.info(f"saving {lr} to ONNX file {args.output}")
         initial_type = [('float_input', FloatTensorType([None, lr.coef_.shape[1]]))]
-        onx = convert_sklearn(lr, initial_types=initial_type, options={type(lr): {'zipmap': False}})
+        onx = convert_sklearn(lr, target_opset=12, initial_types=initial_type, options={type(lr): {'zipmap': False}})
         with open(args.output, "wb") as f:
             f.write(onx.SerializeToString())
     else:

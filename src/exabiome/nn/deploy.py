@@ -253,11 +253,15 @@ def run_onnx_inference(argv=None):
     if args.debug:
         logger.setLevel(logging.DEBUG)
 
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = 1
+    so.inter_op_num_threads = 1
+
     logger.info(f'loading model from {model_path}')
-    nn_sess = ort.InferenceSession(model_path)
+    nn_sess = ort.InferenceSession(model_path, sess_options=so)
 
     logger.info(f'loading confidence model from {conf_model_path}')
-    conf_sess = ort.InferenceSession(conf_model_path)
+    conf_sess = ort.InferenceSession(conf_model_path, sess_options=so)
     n_max_probs = conf_sess.get_inputs()[0].shape[1] - 1
 
     logger.info(f'loading training config from {config_path}')
