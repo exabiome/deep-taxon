@@ -1,23 +1,24 @@
 #!/bin/bash
-#SBATCH --qos=regular
-#SBATCH -A m3513
+#SBATCH --qos=genepool
+#SBATCH -A genother
 #SBATCH --nodes=1
-#SBATCH --constraint=haswell
 #SBATCH --time=1440
 #SBATCH -o benchmarks/run_cat.%j.log
 #SBATCH -e benchmarks/run_cat.%j.log
 #SBATCH -J cat_pipeline
+# SBATCH --constraint=haswell
 
 ############################
 # This script expects the following files and directory structure:
 #
 # ./
 #   run_cat.sh                        # This script
+#   r202_taxonomy.csv                 # The GTDB taxonomy file from running diamond/blast_lca.py prep-meta
 #
 # benchmarks/
-#   r202.nonrep.sample.files.txt      # a file of Fasta file paths for running the benchmark. Files should be named using NCBI
+#   r202.nonrep.sample.files.small.txt      # a file of Fasta file paths for running the benchmark. Files should be named using NCBI
 #                                     # convention for naming files from NCBI Assembly
-#   append_accession.py              # a script for appending NCBI accessions to sequences in Fasta file
+#   append_accession.py               # a script for appending NCBI accessions to sequences in Fasta file
 #
 # diamond/
 #   r202.rep.protein.dmnd             # the DIAMOND database made from GTDB representative proteins. Fasta headers for 
@@ -33,13 +34,13 @@ DIR="benchmarks/run_cat.$SLURM_JOB_ID"
 mkdir -p $DIR
 log "storing results in $DIR"
 
-FASTA_FOF="benchmarks/r202.nonrep.sample.files.txt"
+FASTA_FOF="benchmarks/r202.nonrep.sample.files.small.txt"
 ALL_FNA="$DIR/all_genomic.fna"
 ACC_SCRIPT="benchmarks/append_accession.py"
 
 log "workflow_begin `date +%s`"
 log "concatenating fastas and adding labels"
-echo "" > $ALL_FNA
+echo -n > $ALL_FNA
 for FA in `cat $FASTA_FOF`; do
     echo $FA
     python $ACC_SCRIPT $FA >> $ALL_FNA
@@ -55,7 +56,7 @@ log "prodigal_end `date +%s`"
 
 DB="diamond/r202.rep.protein.dmnd"
 DIAMOND_OUTPUT="$DIR/diamond.out"
-FLAGS="blastp --db $DB --query $ALL_FAA -f 6 -o $DIAMOND_OUTPUT --tmpdir $TMPDIR"
+FLAGS="blastp --db $DB --query $ALL_FAA -f 6 -o $DIAMOND_OUTPUT --tmpdir $TMPDIR -p 1"
 log "diamond_begin `date +%s`"
 diamond $FLAGS > $DIR/diamond.log 2>&1 
 log "diamond_end `date +%s`"
@@ -77,6 +78,6 @@ log "cat_end `date +%s`"
 
 TAX_ACC="$DIR/tax_acc.csv"
 log "taxacc_begin `date +%s`"
-python $SCRIPT tax-acc -o $TAX_ACC $SEQ_LCA $TAX_CSV
+python $SCRIPT tax-acc -o $TAX_ACC $SEQ_LCA $TAX_CSV $ALL_FNA
 log "taxacc_end  `date +%s`"
 log "workflow_end `date +%s`"

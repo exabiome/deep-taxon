@@ -4,6 +4,7 @@ import os
 import sys
 
 import pandas as pd
+import skbio.io as skio
 from tqdm import tqdm
 
 taxlevels = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
@@ -223,11 +224,20 @@ def tax_acc(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('lca', type=str, help='aggregated ORF LCA output. See agg-orf command')
     parser.add_argument('taxonomy', type=str, help='the preprocessed GTDB taxonomy file. See prep-meta command')
+    parser.add_argument('fasta', type=str, help='the input Fasta file with genomic sequences')
     parser.add_argument('-o', '--output', type=str, help='the output file to save results to', default=None)
 
     args = parser.parse_args(argv)
 
     logger = get_logger()
+
+    seqs = list()
+    accs = list()
+    for seq in skio.read(args.fasta, format='fasta'):
+        accession, length, seq_name = seq.metadata['id'].split('-')
+        seqs.append(seq_name)
+        accs.append(accession)
+    input_df = pd.DataFrame({'accession': accs, 'seq_name': seqs})
 
     # accession,domain,phylum,class,order,family,genus,species,gtdb_genome_representative
     logger.info(f'Reading taxonomy from {args.taxonomy}')
@@ -242,6 +252,8 @@ def tax_acc(argv):
 
     logger.info(f'Reading LCA results from {args.lca}')
     lca_df = pd.read_csv(args.lca)
+
+    lca_df = input_df.set_index('seq_name').join(lca_df.set_index('seq_name').drop('accession', axis=1))
 
     taxdf = taxdf.filter(lca_df['accession'], axis=0)
 
