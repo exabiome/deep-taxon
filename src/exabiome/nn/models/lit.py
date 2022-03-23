@@ -36,6 +36,7 @@ class AbstractLit(LightningModule):
             self._loss =  nn.MSELoss()
         self.set_inference(False)
         self.lr = lr or getattr(hparams, 'lr', None)
+        self.last_time = time()
 
     def copy_hparams(self, hparams):
         if isinstance(hparams, argparse.Namespace):
@@ -116,11 +117,20 @@ class AbstractLit(LightningModule):
         acc = (pred == target).float().sum()/len(target)
         return acc
 
+    def step_time(self):
+        curr_time = time()
+        ret = curr_time - self.last_time
+        self.last_time = curr_time
+        return ret
+
     def predict_step(self, batch, batch_idx, dataloader_idx=None):
         idx, seqs, target, olen, seq_id = batch
         return self.forward(seqs)
 
     # TRAIN
+    def on_train_start(self):
+        self.last_time = time()
+
     def training_step(self, batch, batch_idx):
         seqs, target = batch
         output = self.forward(seqs)
@@ -128,13 +138,16 @@ class AbstractLit(LightningModule):
         if self.hparams.classify:
             self.log(self.train_acc, self.accuracy(output, target), prog_bar=True)
         self.log(self.train_loss, loss)
-        self.log('time', time())
+        self.log('time', self.step_time())
         return loss
 
     def training_epoch_end(self, outputs):
         return None
 
     # VALIDATION
+    def on_validation_start(self):
+        self.last_time = time()
+
     def validation_step(self, batch, batch_idx):
         seqs, target = batch
         output = self(seqs)
@@ -142,7 +155,7 @@ class AbstractLit(LightningModule):
         if self.hparams.classify:
             self.log(self.val_acc, self.accuracy(output, target), prog_bar=True)
         self.log(self.val_loss, loss)
-        self.log('time', time())
+        self.log('time', self.step_time())
         return loss
 
     def validation_epoch_end(self, outputs):
@@ -154,7 +167,7 @@ class AbstractLit(LightningModule):
         output = self(seqs)
         loss = self._loss(output, target)
         self.log(self.test_loss, loss)
-        self.log('time', time())
+        self.log('time', self.step_time())
         return loss
 
     def test_epoch_end(self, outputs):
