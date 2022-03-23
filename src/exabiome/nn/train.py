@@ -142,6 +142,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     parser.add_argument('--early_stop', action='store_true', default=False, help='stop early if validation loss does not improve')
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
+    parser.add_argument('--csv', action='store_true', default=False, help='log to a CSV file instead of WandB')
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-i', '--init', type=str, help='a checkpoint to initalize a model from', default=None)
@@ -157,7 +158,6 @@ def parse_args(*addl_args, argv=None):
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
-    grp.add_argument('--horovod', default=False, action='store_true', help='run using Horovod backend')
     grp.add_argument('--lsf', default=False, action='store_true', help='running on LSF system')
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
 
@@ -425,9 +425,7 @@ def run_lightning(argv=None):
     pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
-    
-    wandb_logger = WandbLogger(project="deep-taxon", entity='deep-taxon',
-                              name=args.experiment)
+
     # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
     #     from mpi4py import MPI
     #     comm = MPI.COMM_WORLD
@@ -470,6 +468,12 @@ def run_lightning(argv=None):
 
     seed_everything(args.seed)
 
+    if args.csv:
+        logger = CSVLogger(save_dir=output('logs')),
+    else:
+        logger = WandbLogger(project="deep-taxon", entity='deep-taxon',
+                              name=args.experiment)
+
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
@@ -488,7 +492,7 @@ def run_lightning(argv=None):
     targs = dict(
         enable_checkpointing=True,
         callbacks=callbacks,
-        logger = wandb_logger,
+        logger = logger,
         num_sanity_val_steps = 0,
     )
     targs.update(addl_targs)

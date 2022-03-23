@@ -54,6 +54,7 @@ def run_train(argv=None):
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
     parser.add_argument('--early_stop',         help="use PL early stopping", action='store_true', default=False)
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
+    parser.add_argument('--csv', action='store_true', default=False, help='log to a CSV file instead of WandB')
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
@@ -87,6 +88,9 @@ def run_train(argv=None):
 
     if args.early_stop:
         options += f' --early_stop'
+
+    if args.csv:
+        options += f' --csv'
 
     if args.swa:
         options += f' --swa'
