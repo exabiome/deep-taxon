@@ -170,6 +170,7 @@ def run_train(argv=None):
     job.output = f'{expdir}/train.%{job.job_fmt_var}.log'
     job.error = job.output
 
+    job.set_env_var('', )
     job.set_env_var('OMP_NUM_THREADS', 1)
 
     job.set_env_var('OPTIONS', options)
@@ -177,6 +178,13 @@ def run_train(argv=None):
     job.set_env_var('CONF', f'{expdir}/train.$JOB.yml')
     job.set_env_var('INPUT', args.input)
     job.set_env_var('LOG', '$OUTDIR.log')
+
+
+    if args.cuda_profile:
+        job.set_env_var('NCCL_DEBUG', 'TRACE')
+        job.set_env_var('NCCL_DEBUG_SUBSYS', 'ALL')
+        job.set_env_var('NCCL_GRAPH_DUMP_FILE', '$OUTDIR/topology.$SLURM_PROCID.xml')
+        job.set_env_var('NCCL_DEBUG_FILE', '$OUTDIR/nccl_trace_tag.$SLURM_PROCID.txt')
 
     input_var = 'INPUT'
 
@@ -223,7 +231,7 @@ def run_train(argv=None):
     else:
         srun = 'srun'
         if args.cuda_profile:
-            srun += ' nsys profile -t nvtx,cuda --output=$OUTDIR/nsys_report.%h.%p.h5 --export=hdf --stats=true'
+            srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
 
 
