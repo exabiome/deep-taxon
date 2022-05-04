@@ -55,6 +55,7 @@ def run_train(argv=None):
     parser.add_argument('--early_stop',         help="use PL early stopping", action='store_true', default=False)
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('--csv', action='store_true', default=False, help='log to a CSV file instead of WandB')
+    parser.add_argument('--shm', action='store_true', default=False, help='copy input to shared memory before training')
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
@@ -170,7 +171,6 @@ def run_train(argv=None):
     job.output = f'{expdir}/train.%{job.job_fmt_var}.log'
     job.error = job.output
 
-    job.set_env_var('', )
     job.set_env_var('OMP_NUM_THREADS', 1)
 
     job.set_env_var('OPTIONS', options)
@@ -181,10 +181,10 @@ def run_train(argv=None):
 
 
     if args.cuda_profile:
-        job.set_env_var('NCCL_DEBUG', 'TRACE')
-        job.set_env_var('NCCL_DEBUG_SUBSYS', 'ALL')
-        job.set_env_var('NCCL_GRAPH_DUMP_FILE', '$OUTDIR/topology.$SLURM_PROCID.xml')
-        job.set_env_var('NCCL_DEBUG_FILE', '$OUTDIR/nccl_trace_tag.$SLURM_PROCID.txt')
+        job.set_env_var('NCCL_DEBUG', 'TRACE', export=True)
+        job.set_env_var('NCCL_DEBUG_SUBSYS', 'ALL', export=True)
+        job.set_env_var('NCCL_GRAPH_DUMP_FILE', '$OUTDIR/topology.$SLURM_PROCID.xml', export=True)
+        job.set_env_var('NCCL_DEBUG_FILE', '$OUTDIR/nccl_trace_tag.$SLURM_PROCID.txt', export=True)
 
     input_var = 'INPUT'
 
@@ -202,13 +202,17 @@ def run_train(argv=None):
     else:
         train_cmd += ' --slurm'
         if job.use_bb:
-            job.set_env_var('BB_INPUT', '/tmp/`basename $INPUT`')
+            job.set_env_var('BB_INPUT', '/dev/shm/`basename $INPUT`')
             input_var = 'BB_INPUT'
 
             job.add_command('echo "$INPUT to $BB_INPUT" >> $LOG')
             job.add_command('cp $INPUT $BB_INPUT') #, run=f'srun -n {args.nodes} -r 1 -a 1')
             job.add_command('ls /tmp') #, run='jsrun -n 1')
             job.add_command('ls $BB_INPUT') #, run='jsrun -n 1')
+        elif args.shm:
+            job.set_env_var('SHM_INPUT', '/dev/shm/`basename $INPUT`')
+            input_var = 'SHM_INPUT'
+            job.add_command(f"srun --ntasks {args.nodes} --ntasks-per-node 1 cp $INPUT $SHM_INPUT")
 
 
     train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
