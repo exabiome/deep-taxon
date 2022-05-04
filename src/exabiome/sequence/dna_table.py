@@ -424,7 +424,7 @@ class DeepIndexFile(Container):
         self.tree = tree
         self._sanity = False
         self._sanity_features = 5
-        self.labels = None
+        self._labels = None
         self.__indices = None
         self.__n_outputs = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
@@ -456,7 +456,7 @@ class DeepIndexFile(Container):
             genome_idx = self.seq_table['genome'].data[:]
         else:
             genome_idx = self.seq_table['genome'].data[self.__indices]
-        self.labels = genome_labels[genome_idx]
+        self._labels = genome_labels[genome_idx]
 
     def get_label_classes(self, label_key=None):
         label_key = label_key or self.label_key
@@ -493,7 +493,7 @@ class DeepIndexFile(Container):
         idx = self.seq_table.id[arg]
         #label = self.genome_table['rep_idx'].get(self.seq_table['genome'].get(arg, index=True), index=True)
         label = arg
-        label = self.labels[label]
+        label = self._labels[label]
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
         length = self.seq_table['length'].get(arg)
         return {'id': idx, 'seq': seq, 'label': label, 'length': length}
@@ -578,7 +578,6 @@ class AbstractChunkedDIFile(DIFileFilter):
         self.seq_idx = np.asarray(seq_idx)
         self.start = np.asarray(start)
         self.end = np.asarray(end)
-        self.labels = np.asarray(labels)
         if frac_good is not None:
             self.n_discarded = int(len(seq_idx) / frac_good - len(seq_idx))
         else:
@@ -725,7 +724,6 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         self.step = step
         self.difile = difile
         self.lengths = difile.seq_table['length'].data
-        self.labels = LabelComputer(self.lut, difile.labels)
         self.n_discarded = int(self.lut[-1] / frac_good - self.lut[-1])
 
         self.subset_counts = None
@@ -763,7 +761,6 @@ class LazyWindowChunkedDIFile(DIFileFilter):
             self.lut = np.cumsum(self.subset_counts)
             self.starts = starts
             self.seed = seed
-        self.labels = LabelComputer(self.lut, self.difile.labels)
 
     def __getitem__(self, i):
         if not isinstance(i, (int, np.integer)):
@@ -838,12 +835,6 @@ class RevCompFilter(DIFileFilter):
         super().__init__(difile)
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
-
-    def labels(self):
-        if isinstance(self.difile, LazyWindowChunkedDIFile):
-            self.labels = LabelComputer(self.difile.labels.lut, self.difile.labels, revcomp=True)
-        else:
-            self.labels = np.repeat(self.difile.labels, 2)
 
     def __len__(self):
         return 2 * len(self.difile)

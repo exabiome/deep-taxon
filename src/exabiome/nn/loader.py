@@ -923,18 +923,19 @@ class LazySeqDataset(Dataset):
         self.open()
         self.__len = len(self.difile)
         self._orig_len = self.__len
+        self.__n_outputs = self.difile.n_outputs
         if self.__lazy_chunk:
             if isinstance(self.difile, DIFileFilter):
                 counts = self.difile.get_counts(orig=True)
                 self._val_counts = np.round(self.val_frac * counts).astype(int)
                 self._train_counts = counts - self._val_counts
-                counts[1:] = counts[1:] - counts[:-1]
-                self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
-            else:
-                self.taxa_counts = np.bincount(self.orig_difile.labels).astype(int)
-            self.taxa_labels = np.arange(len(self.taxa_counts))
-        else:
-            self.taxa_labels, self.taxa_counts = np.unique(self.difile.labels, return_counts=True)
+        #        counts[1:] = counts[1:] - counts[:-1]
+        #        self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
+        #    else:
+        #        self.taxa_counts = np.bincount(self.orig_difile.labels).astype(int)
+        #    self.taxa_labels = np.arange(len(self.taxa_counts))
+        #else:
+        #    self.taxa_labels, self.taxa_counts = np.unique(self.difile.labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
 
         self.vocab = self.orig_difile.get_vocab()
@@ -994,6 +995,10 @@ class LazySeqDataset(Dataset):
 
         if not keep_open:
             self.close()
+
+    @property
+    def n_outputs(self):
+        return self.__n_outputs
 
     def close(self):
         if self.io is not None:
