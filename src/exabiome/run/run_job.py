@@ -17,7 +17,7 @@ def run_train(argv=None):
     parser.add_argument('config', help='the config file to use')
     parser.add_argument('sh', nargs='?', help='a path to write the shell script to')
 
-    parser.add_argument('-o', '--outdir',      help="the output directory", default=None)
+    parser.add_argument('-o', '--outdir',      help="the output directory", default='.')
     parser.add_argument('-m', '--message',     help="message to write to log file", default=None)
     parser.add_argument('-L', '--log',         help="the log file to store run information in", default='jobs.log')
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
