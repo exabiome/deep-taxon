@@ -929,13 +929,6 @@ class LazySeqDataset(Dataset):
                 counts = self.difile.get_counts(orig=True)
                 self._val_counts = np.round(self.val_frac * counts).astype(int)
                 self._train_counts = counts - self._val_counts
-        #        counts[1:] = counts[1:] - counts[:-1]
-        #        self.taxa_counts = np.bincount(self.orig_difile.labels, weights=counts).astype(int)
-        #    else:
-        #        self.taxa_counts = np.bincount(self.orig_difile.labels).astype(int)
-        #    self.taxa_labels = np.arange(len(self.taxa_counts))
-        #else:
-        #    self.taxa_labels, self.taxa_counts = np.unique(self.difile.labels, return_counts=True)
         self.label_names = self.difile.get_label_classes()
 
         self.vocab = self.orig_difile.get_vocab()
