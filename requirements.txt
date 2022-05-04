@@ -3,3 +3,5 @@ pytorch_lightning==1.5.8
 torch==1.7.1
 torch_optimizer==0.1.0
 tqdm
+wandb
+scikit-bio

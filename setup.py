@@ -27,8 +27,9 @@ reqs = [
     'scipy',
     'scikit-learn',
     'torch_optimizer',
-    #'scikit-bio',
+    'scikit-bio',
     'hdmf',
+    'wandb',
 ]
 
 print(reqs)
