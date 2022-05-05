@@ -90,9 +90,6 @@ def run_train(argv=None):
     if args.early_stop:
         options += f' --early_stop'
 
-    if args.csv:
-        options += f' --csv'
-
     if args.swa:
         options += f' --swa'
 
@@ -100,6 +97,10 @@ def run_train(argv=None):
         options += f' --profile'
     elif args.cuda_profile:
         options += f' --cuda_profile'
+        args.csv = True
+
+    if args.csv:
+        options += f' --csv'
 
     chunks = f'chunks_W{conf["window"]}_S{conf["step"]}'
 
@@ -183,8 +184,8 @@ def run_train(argv=None):
     if args.cuda_profile:
         job.set_env_var('NCCL_DEBUG', 'TRACE', export=True)
         job.set_env_var('NCCL_DEBUG_SUBSYS', 'ALL', export=True)
-        job.set_env_var('NCCL_GRAPH_DUMP_FILE', '$OUTDIR/topology.$SLURM_PROCID.xml', export=True)
-        job.set_env_var('NCCL_DEBUG_FILE', '$OUTDIR/nccl_trace_tag.$SLURM_PROCID.txt', export=True)
+        job.set_env_var('NCCL_GRAPH_DUMP_FILE', '$OUTDIR/topology.%h.%p.xml', export=True)
+        job.set_env_var('NCCL_DEBUG_FILE', '$OUTDIR/nccl_trace_tag.%h.%p.txt', export=True)
 
     input_var = 'INPUT'
 
