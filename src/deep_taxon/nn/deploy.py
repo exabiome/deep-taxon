@@ -214,8 +214,8 @@ def run_onnx_inference(argv=None):
     import skbio
     from skbio.sequence import DNA
 
-    from exabiome.sequence.convert import DNAVocabIterator
-    from exabiome.utils import get_logger
+    from deep_taxon.sequence.convert import DNAVocabIterator
+    from deep_taxon.utils import get_logger
 
 
     desc = "Run predictions using ONNX"

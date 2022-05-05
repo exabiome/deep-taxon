@@ -1,6 +1,6 @@
-import exabiome.sequence
+import deep_taxon.sequence
 from hdmf.common import get_hdf5io
-from exabiome.response.embedding import read_embedding
+from deep_taxon.response.embedding import read_embedding
 
 import pandas as pd
 

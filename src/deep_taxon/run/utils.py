@@ -13,7 +13,6 @@ def check_summit(args):
         args.conda_env = os.environ.get('CONDA_DEFAULT_ENV', None)
         if args.conda_env is None:
             raise RuntimeError("Cannot determine the conda environment to use")
-        #args.conda_env = 'exabiome-wml-1.7.0-3'
 
 
 def check_nersc(args):
@@ -21,8 +20,6 @@ def check_nersc(args):
         args.gpus = 4
     if args.nodes is None:
         args.nodes = 1
-    # if args.outdir is None:
-    #     args.outdir = os.path.abspath(os.path.expandvars("$SCRATCH/exabiome/deep-taxon"))
     if args.queue is None:
         args.queue = 'regular'
 
@@ -54,8 +51,8 @@ def get_job(args):
         jobargs = get_jobargs(args)
         job = SlurmJob(**jobargs)
 
-    job.add_command('echo "=== exabiome package ===" >> $LOG')
-    job.add_command("pip show exabiome >> $LOG")
+    job.add_command('echo "=== deep-taxon package ===" >> $LOG')
+    job.add_command("pip show deep-taxon >> $LOG")
     job.add_command('echo "========================" >> $LOG')
 
     return job

@@ -650,7 +650,7 @@ def aggregate_chunks(argv=None):
     import torch.nn.functional as F
     from contextlib import contextmanager
 
-    from exabiome.utils import parse_logger
+    from deep_taxon.utils import parse_logger
 
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=str, help="the inference file with individual sample (i.e. chunks) outputs")

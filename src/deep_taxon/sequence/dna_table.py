@@ -289,7 +289,7 @@ class TaxaTable(DynamicTable, TorchableMixin):
         """
         Return a mapping from the *out_tax* taxonomic level to the *in_tax* taxonomic level
 
-        See exabiome.nn.model.resnet.ResNet.reconfigure_outputs for an example of where this gets used
+        See deep_taxon.nn.model.resnet.ResNet.reconfigure_outputs for an example of where this gets used
         Args:
             in_tax (str)        : the input taxonomic level
             out_tax (str)       : the output taxonomic level

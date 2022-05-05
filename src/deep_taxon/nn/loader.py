@@ -1129,6 +1129,5 @@ class LazySeqDataset(Dataset):
         seq = torch.as_tensor(seq, dtype=torch.int64)
         if self.__ohe:
             seq = F.one_hot(seq, num_classes=self.vocab_len).float()
-        seq = seq.T
         label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label, seq_id)

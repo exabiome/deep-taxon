@@ -1,4 +1,4 @@
-from exabiome.response.tree import upgma_tree
+from deep_taxon.response.tree import upgma_tree
 from scipy.spatial.distance import pdist, squareform
 from skbio.stats.distance import DistanceMatrix
 from datetime import datetime
