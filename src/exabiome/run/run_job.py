@@ -17,7 +17,7 @@ def run_train(argv=None):
     parser.add_argument('config', help='the config file to use')
     parser.add_argument('sh', nargs='?', help='a path to write the shell script to')
 
-    parser.add_argument('-o', '--outdir',      help="the output directory", default=None)
+    parser.add_argument('-o', '--outdir',      help="the output directory", default='.')
     parser.add_argument('-m', '--message',     help="message to write to log file", default=None)
     parser.add_argument('-L', '--log',         help="the log file to store run information in", default='jobs.log')
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
@@ -55,6 +55,7 @@ def run_train(argv=None):
     parser.add_argument('--early_stop',         help="use PL early stopping", action='store_true', default=False)
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('--csv', action='store_true', default=False, help='log to a CSV file instead of WandB')
+    parser.add_argument('--shm', action='store_true', default=False, help='copy input to shared memory before training')
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
@@ -89,9 +90,6 @@ def run_train(argv=None):
     if args.early_stop:
         options += f' --early_stop'
 
-    if args.csv:
-        options += f' --csv'
-
     if args.swa:
         options += f' --swa'
 
@@ -99,6 +97,10 @@ def run_train(argv=None):
         options += f' --profile'
     elif args.cuda_profile:
         options += f' --cuda_profile'
+        args.csv = True
+
+    if args.csv:
+        options += f' --csv'
 
     chunks = f'chunks_W{conf["window"]}_S{conf["step"]}'
 
@@ -178,6 +180,13 @@ def run_train(argv=None):
     job.set_env_var('INPUT', args.input)
     job.set_env_var('LOG', '$OUTDIR.log')
 
+
+    if args.cuda_profile:
+        job.set_env_var('NCCL_DEBUG', 'TRACE', export=True)
+        job.set_env_var('NCCL_DEBUG_SUBSYS', 'ALL', export=True)
+        job.set_env_var('NCCL_GRAPH_DUMP_FILE', '$OUTDIR/topology.%h.%p.xml', export=True)
+        job.set_env_var('NCCL_DEBUG_FILE', '$OUTDIR/nccl_trace_tag.%h.%p.txt', export=True)
+
     input_var = 'INPUT'
 
     train_cmd = 'deep-taxon train'
@@ -194,13 +203,17 @@ def run_train(argv=None):
     else:
         train_cmd += ' --slurm'
         if job.use_bb:
-            job.set_env_var('BB_INPUT', '/tmp/`basename $INPUT`')
+            job.set_env_var('BB_INPUT', '/dev/shm/`basename $INPUT`')
             input_var = 'BB_INPUT'
 
             job.add_command('echo "$INPUT to $BB_INPUT" >> $LOG')
             job.add_command('cp $INPUT $BB_INPUT') #, run=f'srun -n {args.nodes} -r 1 -a 1')
             job.add_command('ls /tmp') #, run='jsrun -n 1')
             job.add_command('ls $BB_INPUT') #, run='jsrun -n 1')
+        elif args.shm:
+            job.set_env_var('SHM_INPUT', '/dev/shm/`basename $INPUT`')
+            input_var = 'SHM_INPUT'
+            job.add_command(f"srun --ntasks {args.nodes} --ntasks-per-node 1 cp $INPUT $SHM_INPUT")
 
 
     train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
@@ -223,7 +236,7 @@ def run_train(argv=None):
     else:
         srun = 'srun'
         if args.cuda_profile:
-            srun += ' nsys profile -t nvtx,cuda --output=$OUTDIR/nsys_report.%h.%p.h5 --export=hdf --stats=true'
+            srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
 
 

@@ -18,10 +18,11 @@ from hdmf.utils import docval
 import argparse
 import logging
 
-
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor
+
+from pytorch_lightning.profiler import PyTorchProfiler
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
 from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
@@ -51,7 +52,7 @@ def get_conf_args():
         'model': dict(help='the model to run. see show-models for a list of available models', choices=list(models._models.keys()), default='resnet18'),
         'seed': dict(type=parse_seed, default='', help='seed to use for train-test split'),
         'downsample': dict(type=float, default=None, help='amount to downsample dataset to'),
-        'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns,ens, or phylo'),
+        'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns,ens, or phylo (Ignored)'),
         'ens_beta': dict(help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9),
         'phylo_neighbors': dict(help='the number of neighbors to use for phylogenetic weighting', default=5),
         'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify', default=None),
@@ -153,13 +154,13 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
     parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
-    prof_grp = parser.add_mutually_exclusive_group()
     parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
     parser.add_argument('--lr_find', default=False, action='store_true', help='find optimal learning rate')
     grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
     grp.add_argument('--lsf', default=False, action='store_true', help='running on LSF system')
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
+    parser.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
 
     dl_grp = parser.add_argument_group('Data loading')
     dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
@@ -277,6 +278,9 @@ def process_args(args=None, return_io=False):
             warnings.warn("Ignoring -c/--checkpoint argument because {args.checkpoint} does not exist.")
             args.checkpoint = None
 
+    if args.cuda_profile:
+        targs['profiler'] = PyTorchProfiler(filename=f'pytorch_prof.{RANK:0{len(str(SIZE))}}', emit_nvtx=True)
+
     targs['replace_sampler_ddp'] = False
 
     args.loader_kwargs = dict()
@@ -292,25 +296,11 @@ def process_args(args=None, return_io=False):
 
     # if classification problem, use the number of taxa as the number of outputs
     if args.classify:
-        args.n_outputs = len(data_mod.dataset.taxa_labels)
+        args.n_outputs = data_mod.dataset.n_outputs
 
     args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
     model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
-
-    if args.weighted is not None:
-        if args.weighted == 'ens':
-            weights = (1 - args.ens_beta)/(1 - args.ens_beta**data_mod.dataset.taxa_counts)
-        elif args.weighted == 'isns':
-            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
-        elif args.weighted == 'ins':
-            weights = np.sqrt(1/data_mod.dataset.taxa_counts)
-        elif args.weighted == 'phy':
-            k = args.phylo_neighbors
-            weights = np.partition(data_mod.dataset.distances, k, axis=1)[:, :k].sum(axis=1)
-        else:
-            raise ValueError("Unrecognized value for option 'weighted': '%s'" % args.weighted)
-        model.set_class_weights(weights)
 
     if args.num_workers > 0:
         data_mod.dataset.close()
@@ -363,7 +353,7 @@ def benchmark_pass(argv=None):
 
     args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
     if args.classify:
-        args.n_outputs = len(data_mod.dataset.taxa_labels)
+        args.n_outputs = data_mod.dataset.n_outputs
     model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
 
     dataset = data_mod.dataset
@@ -620,7 +610,7 @@ def get_model_info(argv=None):
     dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
     args.input_nc = 136 if args.tnf else len(dataset.vocab)
     if args.classify:
-        args.n_outputs = len(dataset.taxa_labels)
+        args.n_outputs = dataset.n_outputs
 
     model = process_model(args, taxa_table=dataset.difile.taxa_table)
 

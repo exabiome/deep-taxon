@@ -424,7 +424,7 @@ class DeepIndexFile(Container):
         self.tree = tree
         self._sanity = False
         self._sanity_features = 5
-        self.labels = None
+        self._labels = None
         self.__indices = None
         self.__n_outputs = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
@@ -456,7 +456,7 @@ class DeepIndexFile(Container):
             genome_idx = self.seq_table['genome'].data[:]
         else:
             genome_idx = self.seq_table['genome'].data[self.__indices]
-        self.labels = genome_labels[genome_idx]
+        self._labels = genome_labels[genome_idx]
 
     def get_label_classes(self, label_key=None):
         label_key = label_key or self.label_key
@@ -491,8 +491,7 @@ class DeepIndexFile(Container):
     def get(self, arg):
         arg = self.__translate_arg(arg)
         idx = self.seq_table.id[arg]
-        label = self.genome_table['rep_idx'].get(self.seq_table['genome'].get(arg, index=True), index=True)
-        label = self.labels[label]
+        label = self._labels[arg]
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
         length = self.seq_table['length'].get(arg)
         return {'id': idx, 'seq': seq, 'label': label, 'length': length}
@@ -505,6 +504,9 @@ class DeepIndexFile(Container):
         return copy.copy(self.__indices)
 
     def __translate_arg(self, arg):
+        """
+        Translate from a subset index to the original sequence index
+        """
         if self.__indices is None:
             return arg
         else:
@@ -574,7 +576,6 @@ class AbstractChunkedDIFile(DIFileFilter):
         self.seq_idx = np.asarray(seq_idx)
         self.start = np.asarray(start)
         self.end = np.asarray(end)
-        self.labels = np.asarray(labels)
         if frac_good is not None:
             self.n_discarded = int(len(seq_idx) / frac_good - len(seq_idx))
         else:
@@ -721,7 +722,6 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         self.step = step
         self.difile = difile
         self.lengths = difile.seq_table['length'].data
-        self.labels = LabelComputer(self.lut, difile.labels)
         self.n_discarded = int(self.lut[-1] / frac_good - self.lut[-1])
 
         self.subset_counts = None
@@ -759,7 +759,6 @@ class LazyWindowChunkedDIFile(DIFileFilter):
             self.lut = np.cumsum(self.subset_counts)
             self.starts = starts
             self.seed = seed
-        self.labels = LabelComputer(self.lut, self.difile.labels)
 
     def __getitem__(self, i):
         if not isinstance(i, (int, np.integer)):
@@ -835,12 +834,6 @@ class RevCompFilter(DIFileFilter):
         vocab = difile.seq_table.sequence.elements.data
         self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
 
-    def labels(self):
-        if isinstance(self.difile, LazyWindowChunkedDIFile):
-            self.labels = LabelComputer(self.difile.labels.lut, self.difile.labels, revcomp=True)
-        else:
-            self.labels = np.repeat(self.difile.labels, 2)
-
     def __len__(self):
         return 2 * len(self.difile)
 
@@ -855,42 +848,3 @@ class RevCompFilter(DIFileFilter):
             raise ValueError("Cannot run without loading data. Use -l to load data") from e
         item['id'] = oarg if oarg >= 0 else len(self) + oarg
         return item
-
-
-class DIFileManager:
-
-    def __init__(self, path, tgt_tax_lvl, comm=None, load_data=False, rank=0, size=1):
-        self.path = path
-        self.comm = comm
-        self.load_data = load_data
-        self.difile = None
-        self._world_size = size
-        self._global_rank = rank
-        self.tgt_tax_lvl = tgt_tax_lvl
-
-    def open(self):
-        """Open the HDMF file and set up chunks and taxonomy label"""
-        if self.comm is not None:
-            self.io = get_hdf5io(self.path, 'r', comm=self.comm, driver='mpio')
-        else:
-            self.io = get_hdf5io(self.path, 'r')
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.difile = self.io.read()
-
-        if self._world_size > 1:
-            self.difile.set_sequence_subset(distsplit(len(self.difile), self._world_size, self._global_rank))
-
-        self.load(sequence=self.load_data)
-
-        self.difile.set_label_key(self.tgt_tax_lvl)
-
-    def load(self, sequence=False, device=None):
-        _load = lambda x: x[:]
-        self.difile.seq_table['id'].transform(_load)
-        self.difile.seq_table['length'].transform(lambda x: x[:].astype(int))
-        self.difile.seq_table['sequence_index'].transform(_load)
-        if sequence:
-            self.difile.seq_table['sequence_index'].target.transform(_load)
-
-

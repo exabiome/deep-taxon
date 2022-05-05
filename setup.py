@@ -5,7 +5,7 @@ import re
 import subprocess
 
 def get_git_revision_hash():
-    return subprocess.check_output(['git', 'rev-parse', 'HEAD'])
+    return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('utf-8')
 
 def get_git_revision_short_hash():
     return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'])
@@ -27,16 +27,17 @@ reqs = [
     'scipy',
     'scikit-learn',
     'torch_optimizer',
-    #'scikit-bio',
+    'scikit-bio',
     'hdmf',
+    'wandb',
 ]
 
 print(reqs)
 
 setup_args = {
-    'version': get_git_revision_short_hash(),
+    'version': '0.0.1',
     'name': 'exabiome',
-    'description': 'A package for Exabiome code',
+    'description': 'A package for Exabiome code. Built from revisions ' + get_git_revision_hash(),
     'long_description': readme,
     'long_description_content_type': 'text/x-rst; charset=UTF-8',
     'author': 'Andrew Tritt',
