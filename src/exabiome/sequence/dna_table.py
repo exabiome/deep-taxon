@@ -491,8 +491,7 @@ class DeepIndexFile(Container):
     def get(self, arg):
         arg = self.__translate_arg(arg)
         idx = self.seq_table.id[arg]
-        label = arg
-        label = self._labels[label]
+        label = self._labels[arg]
         seq = self.seq_table['sequence'].get(arg, index=True)   # sequence data
         length = self.seq_table['length'].get(arg)
         return {'id': idx, 'seq': seq, 'label': label, 'length': length}
