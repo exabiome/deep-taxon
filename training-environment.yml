@@ -11,4 +11,3 @@ dependencies:
   - pip:
     - torch-optimizer
     - wandb
-    - scikit-bio
