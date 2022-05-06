@@ -121,8 +121,8 @@ def prepare_data(argv=None):
     from hdmf.data_utils import DataChunkIterator
 
     from ..utils import get_faa_path, get_fna_path, get_genomic_path
-    from exabiome.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator, DNAVocabGeneIterator
-    from exabiome.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable, TreeGraph
+    from deep_taxon.sequence.convert import AASeqIterator, DNASeqIterator, DNAVocabIterator, DNAVocabGeneIterator
+    from deep_taxon.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable, TreeGraph
 
     parser = argparse.ArgumentParser()
     parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')

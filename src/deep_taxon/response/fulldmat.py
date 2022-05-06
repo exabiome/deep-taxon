@@ -1,8 +1,8 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from exabiome.response.tree import read_tree, get_phylo_stats
-from exabiome.response.embedding import read_distances
+from deep_taxon.response.tree import read_tree, get_phylo_stats
+from deep_taxon.response.embedding import read_distances
 
 from scipy.spatial.distance import pdist, squareform
 from scipy.stats import spearmanr, pearsonr

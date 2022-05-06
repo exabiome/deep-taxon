@@ -1,0 +1,14 @@
+FROM continuumio/anaconda3:2021.11
+
+COPY . .
+
+RUN conda env create - training-environment.yml \
+    && conda clean -afy \
+    && find /opt/conda/ -follow -type f -name '*.pyc' -delete \
+
+RUN conda run -n deep-taxon-train \
+  python -m pip install .
+
+CMD [ \
+  "conda", "run", "-n", "deep-taxon-train", "deep-taxon", "train" \
+]

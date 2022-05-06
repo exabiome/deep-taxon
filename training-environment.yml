@@ -1,0 +1,14 @@
+name: deep-taxon-train
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - pytorch
+  - pytorch-lightning
+  - hdmf
+  - pip
+  - pip:
+    - torch-optimizer
+    - wandb
+    - scikit-bio

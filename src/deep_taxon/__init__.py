@@ -3,7 +3,7 @@ from importlib import import_module
 
 class Command:
     def __init__(self, module, doc):
-        ar = f'exabiome.{module}'.split('.')
+        ar = f'deep_taxon.{module}'.split('.')
         self.pkg = '.'.join(ar[:-1])
         self.func = ar[-1]
         self.doc = doc

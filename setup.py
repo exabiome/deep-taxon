@@ -36,18 +36,18 @@ print(reqs)
 
 setup_args = {
     'version': '0.0.1',
-    'name': 'exabiome',
+    'name': 'deep-taxon',
     'description': 'A package for Exabiome code. Built from revisions ' + get_git_revision_hash(),
     'long_description': readme,
     'long_description_content_type': 'text/x-rst; charset=UTF-8',
     'author': 'Andrew Tritt',
     'author_email': 'ajtritt@lbl.gov',
-    'url': 'https://github.com/ajtritt/exabiome',
+    'url': 'http://github.com/exabiome/deep-taxon',
     'license': "BSD",
     'install_requires': reqs,
     'packages': pkgs,
     'package_dir': {'': 'src'},
-    'package_data': {'exabiome.sequence': ["%s/*.yaml" % schema_dir, "%s/*.json" % schema_dir]},
+    'package_data': {'deep_taxon.sequence': ["%s/*.yaml" % schema_dir, "%s/*.json" % schema_dir]},
     'classifiers': [
         "Programming Language :: Python",
         "Programming Language :: Python :: 3.5",
@@ -66,7 +66,7 @@ setup_args = {
 
     'entry_points': {
         'console_scripts': [
-            'deep-taxon = exabiome:main',
+            'deep-taxon = deep_taxon:main',
         ],
     },
     'keywords': 'python '
