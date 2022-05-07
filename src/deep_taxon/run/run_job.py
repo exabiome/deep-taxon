@@ -184,7 +184,7 @@ def run_train(argv=None):
     if args.cuda_profile:
         job.set_env_var('NCCL_DEBUG', 'TRACE', export=True)
         job.set_env_var('NCCL_DEBUG_SUBSYS', 'ALL', export=True)
-        job.set_env_var('NCCL_GRAPH_DUMP_FILE', '$OUTDIR/topology.%h.%p.xml', export=True)
+        job.set_env_var('NCCL_GRAPH_DUMP_FILE', '$OUTDIR/topology.xml', export=True)
         job.set_env_var('NCCL_DEBUG_FILE', '$OUTDIR/nccl_trace_tag.%h.%p.txt', export=True)
 
     input_var = 'INPUT'
