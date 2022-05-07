@@ -1,6 +1,7 @@
 import sys
 import os
-sys.path.insert(0,os.path.join(os.path.dirname(sys.argv[0])))
+path = os.path.abspath(os.path.join(os.path.dirname(sys.argv[0]), '..', 'src'))
+sys.path.insert(0, path)
 
 from deep_taxon import main
 main()
