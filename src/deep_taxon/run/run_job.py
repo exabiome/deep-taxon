@@ -234,7 +234,7 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
-        srun = 'srun -n {args.nodes}'
+        srun = f'srun -n {job.nodes}'
         if args.cuda_profile:
             srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
@@ -287,9 +287,8 @@ def run_train(argv=None):
                 job.add_addl_jobflag(job.wait_flag, job_dep)
                 job.set_env_var('CKPT', os.path.join(jobdir, 'last.ckpt'))
                 if '-i' in options:
-                    s = options.find('-i ')
-                    e = options.find(' ', s+3) + 1
-                    options = options[:s] + options[e:]
+                    i = options.find('-i')
+                    options = options[:i+1] + 'c' + options[i+2:]
                 if '-c' not in options:
                     job.set_env_var('OPTIONS', options + ' -c $CKPT')
                 job.set_env_var('CMD', train_cmd)
