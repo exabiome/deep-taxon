@@ -1,7 +1,6 @@
 #!/bin/bash
-#SBATCH -q debug
 #SBATCH -A m2865_g
-#SBATCH -t 20
+#SBATCH -t 360
 #SBATCH --ntasks 64
 #SBATCH -o runs/train.%j.log
 #SBATCH -e runs/train.%j.log
@@ -13,8 +12,8 @@
 #SBATCH --image=ajtritt/deep-taxon:amd64_v1
 
 
-INPUT="/pscratch/sd/a/ajtritt/exabiome/deep-taxon/input/gtdb/r207/r207.rep.h5"
-SCRIPT="/global/homes/a/ajtritt/projects/exabiome/deep-taxon.git/bin/deep-taxon.py"
+INPUT="$PSCRATCH/exabiome/deep-taxon/input/gtdb/r207/r207.rep.h5"
+SCRIPT="$HOME/projects/exabiome/deep-taxon.git/bin/deep-taxon.py"
 NODES=16
 
 JOB="$SLURM_JOB_ID"
@@ -29,8 +28,6 @@ cp train.yml $CONF
 LOG="$OUTDIR.log"
 
 OPTIONS="--csv --slurm -g 4 -n $NODES -e 4 -k 6 -y -E shifter_n${NODES}_g4"
-CMD="$SCRIPT train --sanity 100 --slurm $OPTIONS $CONF $INPUT $OUTDIR"
+CMD="$SCRIPT train $OPTIONS $CONF $INPUT $OUTDIR"
 
-#IMG="ajtritt/deep-taxon:amd64_v1"
-#srun -u shifter --image=$IMG python $CMD > $LOG 2>&1
 srun --ntasks $(($NODES*4)) shifter python $CMD > $LOG 2>&1
