@@ -25,9 +25,9 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, Stochast
 from pytorch_lightning.profiler import PyTorchProfiler
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
-from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
-from pytorch_lightning.plugins.environments import SLURMEnvironment
-from .lsf_environment import LSFEnvironment
+from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, SingleDevicePlugin, PrecisionPlugin
+from pytorch_lightning.plugins.environments import SLURMEnvironment, LSFEnvironment
+from pytorch_lightning.strategies import DDPStrategy
 
 import torch
 
@@ -152,7 +152,6 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
-    parser.add_argument('--fp16', action='store_true', default=False, help='use 16-bit training')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
@@ -226,33 +225,26 @@ def process_args(args=None, return_io=False):
             SIZE = 1
 
     if targs['gpus'] is not None:
+        targs['accelerator'] = 'gpu'
         if targs['gpus'] == 1:
-            targs['accelerator'] = GPUAccelerator(
-                precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda'),
-                training_type_plugin = SingleDevicePlugin(torch.device(0))
-            )
+            targs['devices'] = 1
         else:
             if env is None:
                 raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
-            parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count())]
-            targs['accelerator'] = GPUAccelerator(
-                precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda'),
-                training_type_plugin = DDPPlugin(parallel_devices=parallel_devices,
-                                                 cluster_environment=env,
-                                                 find_unused_parameters=False)
-            )
+            # parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count()) if i < targs['gpus']]
+            # precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda')
             torch.cuda.set_device(env.local_rank())
-            print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
-            #targs['strategy'] = 'ddp_sharded'
+            targs['devices'] = targs['gpus']
+            targs['strategy'] = DDPStrategy(find_unused_parameters=False,
+                                            cluster_environment=env,
+                                            #accelerator=GPUAccelerator(),
+                                            #parallel_devices=parallel_devices,
+                                            #precision_plugin=precision_plugin,
+                                )
+
+            print("---- Rank %s  -  Using GPUAccelerator with DDPStrategy" % env.global_rank(), file=sys.stderr)
     else:
-        if env is None:
-            ttp = SingleDevicePlugin(torch.device('cpu'))
-        else:
-            ttp = DDPPlugin(cluster_environment=env)
-        targs['accelerator'] = CPUAccelerator(
-            precision_plugin = PrecisionPlugin(),
-            training_type_plugin = ttp
-        )
+        targs['accelerator'] = 'cpu'
 
     if args.sanity:
         if isinstance(args.sanity, str):
@@ -265,11 +257,6 @@ def process_args(args=None, return_io=False):
     if args.lr_find:
         targs['auto_lr_find'] = True
     del args.lr_find
-
-    if args.fp16:
-        targs['amp_level'] = 'O2'
-        targs['precision'] = 16
-    del args.fp16
 
     if args.checkpoint is not None:
         if os.path.exists(args.checkpoint):

@@ -234,11 +234,14 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
-        srun = 'srun'
+        srun = f'srun -n {job.nodes}'
         if args.cuda_profile:
             srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
 
+    for i in range(len(argv)):
+        if " " in argv[i]:
+            argv[i] = f'"{argv[i]}"'
 
     def submit(job, shell, message):
         job_id = job.submit_job(shell, conda_env=args.conda_env)
@@ -269,19 +272,23 @@ def run_train(argv=None):
                 print('-------------------------------------------------------------------------------', file=logout)
         return job_id, jobdir, message
 
+    continue_from = ""
     if args.sh is not None:
         if args.submit:
             msg = args.message
             for i in range(args.chain):
                 with open(args.sh, 'w') as out:
                     job.write(out)
-                jobid, jobdir, args.message = submit(job, args.sh, msg)
-                msg = f'{args.message}, continue from {jobid}'
+                jobid, jobdir, args.message = submit(job, args.sh, msg + continue_from)
+                continue_from = f', continue from {jobid}'
                 job_dep = jobid
                 if args.summit:
                     job_dep = f'ended({job_dep})'
                 job.add_addl_jobflag(job.wait_flag, job_dep)
                 job.set_env_var('CKPT', os.path.join(jobdir, 'last.ckpt'))
+                if '-i' in options:
+                    i = options.find('-i')
+                    options = options[:i+1] + 'c' + options[i+2:]
                 if '-c' not in options:
                     job.set_env_var('OPTIONS', options + ' -c $CKPT')
                 job.set_env_var('CMD', train_cmd)
