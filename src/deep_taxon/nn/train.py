@@ -25,9 +25,9 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, Stochast
 from pytorch_lightning.profiler import PyTorchProfiler
 
 from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
-from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, DDPPlugin, SingleDevicePlugin, PrecisionPlugin
-from pytorch_lightning.plugins.environments import SLURMEnvironment
-from .lsf_environment import LSFEnvironment
+from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, SingleDevicePlugin, PrecisionPlugin
+from pytorch_lightning.plugins.environments import SLURMEnvironment, LSFEnvironment
+from pytorch_lightning.strategies import DDPStrategy
 
 import torch
 
@@ -231,10 +231,18 @@ def process_args(args=None, return_io=False):
         else:
             if env is None:
                 raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
+            # parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count()) if i < targs['gpus']]
+            # precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda')
             torch.cuda.set_device(env.local_rank())
             targs['devices'] = targs['gpus']
-            targs['strategy'] = 'ddp'
-            print("---- Rank %s  -  Using GPUAccelerator with DDPPlugin" % env.global_rank(), file=sys.stderr)
+            targs['strategy'] = DDPStrategy(find_unused_parameters=False,
+                                            cluster_environment=env,
+                                            #accelerator=GPUAccelerator(),
+                                            #parallel_devices=parallel_devices,
+                                            #precision_plugin=precision_plugin,
+                                )
+
+            print("---- Rank %s  -  Using GPUAccelerator with DDPStrategy" % env.global_rank(), file=sys.stderr)
     else:
         targs['accelerator'] = 'cpu'
 
