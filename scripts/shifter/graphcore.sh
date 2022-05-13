@@ -2,8 +2,8 @@
 #SBATCH -A m2865_g
 #SBATCH -t 360
 #SBATCH --ntasks 64
-#SBATCH -o runs/train.%j.log
-#SBATCH -e runs/train.%j.log
+#SBATCH -o train.%j.log
+#SBATCH -e train.%j.log
 #SBATCH -J n16_b512_SHFTR
 #SBATCH -C gpu
 #SBATCH -c 16
@@ -32,4 +32,5 @@ LOG="$OUTDIR.log"
 OPTIONS="--csv --slurm -g 4 -n $NODES -e 4 -k 6 -y -D -E shifter_n${NODES}_g4"
 CMD="$SCRIPT train $OPTIONS $CONF $INPUT $OUTDIR"
 
+mv train.$JOB.log $LOG
 srun --ntasks $(($NODES*4)) shifter python $CMD > $LOG 2>&1
