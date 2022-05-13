@@ -149,6 +149,7 @@ def parse_args(*addl_args, argv=None):
     grp.add_argument('-i', '--init', type=str, help='a checkpoint to initalize a model from', default=None)
     grp.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
     parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
+    parser.add_argument('-D', '--disable_checkpoint', action='store_true', help='do not save model checkpoints every epoch', default=False)
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
@@ -456,9 +457,15 @@ def run_lightning(argv=None):
 
     monitor, mode = (AbstractLit.val_loss, 'min') if args.manifold else (AbstractLit.val_acc, 'max')
     callbacks = [
-        ModelCheckpoint(dirpath=outdir, save_weights_only=False, save_last=True, save_top_k=3, mode=mode, monitor=monitor),
         LearningRateMonitor(logging_interval='epoch'),
     ]
+    if not args.disable_checkpoint:
+        callbacks.append(ModelCheckpoint(dirpath=outdir,
+                                         save_weights_only=False,
+                                         save_last=True,
+                                         save_top_k=3,
+                                         mode=mode,
+                                         monitor=monitor))
 
     if args.early_stop:
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))

@@ -27,7 +27,7 @@ cp train.yml $CONF
 
 LOG="$OUTDIR.log"
 
-OPTIONS="--csv --slurm -g 4 -n $NODES -e 4 -k 6 -y -E shifter_n${NODES}_g4"
+OPTIONS="--csv --slurm -g 4 -n $NODES -e 4 -k 6 -y -D -E shifter_n${NODES}_g4"
 CMD="$SCRIPT train $OPTIONS $CONF $INPUT $OUTDIR"
 
 srun --ntasks $(($NODES*4)) shifter python $CMD > $LOG 2>&1
