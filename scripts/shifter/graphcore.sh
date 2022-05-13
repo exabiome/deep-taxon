@@ -6,14 +6,16 @@
 #SBATCH -e runs/train.%j.log
 #SBATCH -J n16_b512_SHFTR
 #SBATCH -C gpu
-#SBATCH -c 10
+#SBATCH -c 16
 #SBATCH --ntasks-per-node 4
 #SBATCH --gpus-per-node 4
 #SBATCH --image=ajtritt/deep-taxon:amd64_v1
 
 
 INPUT="$PSCRATCH/exabiome/deep-taxon/input/gtdb/r207/r207.rep.h5"
-SCRIPT="$HOME/projects/exabiome/deep-taxon.git/bin/deep-taxon.py"
+REPO_DIR="$HOME/projects/exabiome/deep-taxon.git"
+
+SCRIPT="$REPO_DIR/bin/deep-taxon.py"
 NODES=16
 
 JOB="$SLURM_JOB_ID"
@@ -23,7 +25,7 @@ CONF="$OUTDIR.yml"
 
 mkdir -p $OUTDIR
 cp $0 $OUTDIR.sh
-cp train.yml $CONF
+cp $REPO_DIR/configs/graphcore.yml $CONF
 
 LOG="$OUTDIR.log"
 
