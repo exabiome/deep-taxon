@@ -20,7 +20,7 @@ import logging
 
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor, TQDMProgressBar
 
 from pytorch_lightning.profiler import PyTorchProfiler
 
@@ -160,6 +160,7 @@ def parse_args(*addl_args, argv=None):
     grp = parser.add_argument_group('Distributed training environments').add_mutually_exclusive_group()
     grp.add_argument('--lsf', default=False, action='store_true', help='running on LSF system')
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
+    grp.add_argument('--ipu', default=False, action='store_true', help='running on Graphcore system')
     parser.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
 
     dl_grp = parser.add_argument_group('Data loading')
@@ -191,61 +192,67 @@ def process_args(args=None, return_io=False):
 
     targs = dict(
         max_epochs=args.epochs,
-        num_nodes=args.num_nodes,
     )
 
     targs['accumulate_grad_batches'] = args.accumulate
 
-    targs['gpus'] = process_gpus(args.gpus)
-
-    del args.gpus
 
     env = None
-    if args.lsf:
-        ##########################################################################################
-        # Currently coding against pytorch-lightning 1.4.3
-        ##########################################################################################
-        if args.num_workers > 4:
-            print0("num_workers (-k) > 4 can lead to hanging on Summit -- setting to 4", file=sys.stderr)
-            args.num_workers = 4
-        args.loader_kwargs['num_workers'] = 1           # Set as a default. This will get overridden elsewhere
-        args.loader_kwargs['multiprocessing_context'] = 'spawn'
-        env = LSFEnvironment()
-    elif args.slurm:
-        env = SLURMEnvironment()
 
-    if env is not None:
-        global RANK
-        global SIZE
-        try:
-            RANK = env.global_rank()
-            SIZE = env.world_size()
-        except:
-            print(">>> Could not get global rank -- setting RANK to 0 and SIZE to 1", file=sys.stderr)
-            RANK = 0
-            SIZE = 1
 
-    if targs['gpus'] is not None:
-        targs['accelerator'] = 'gpu'
-        if targs['gpus'] == 1:
-            targs['devices'] = 1
-        else:
-            if env is None:
-                raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
-            # parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count()) if i < targs['gpus']]
-            # precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda')
-            torch.cuda.set_device(env.local_rank())
-            targs['devices'] = targs['gpus']
-            targs['strategy'] = DDPStrategy(find_unused_parameters=False,
-                                            cluster_environment=env,
-                                            #accelerator=GPUAccelerator(),
-                                            #parallel_devices=parallel_devices,
-                                            #precision_plugin=precision_plugin,
-                                )
-
-            print("---- Rank %s  -  Using GPUAccelerator with DDPStrategy" % env.global_rank(), file=sys.stderr)
+    if args.ipu:
+        targs['accelerator'] = 'ipu'
+        targs['devices'] = process_gpus(args.gpus)
     else:
-        targs['accelerator'] = 'cpu'
+        targs['gpus'] = process_gpus(args.gpus)
+        targs['num_nodes'] = args.num_nodes
+        if args.lsf:
+            ##########################################################################################
+            # Currently coding against pytorch-lightning 1.4.3
+            ##########################################################################################
+            if args.num_workers > 4:
+                print0("num_workers (-k) > 4 can lead to hanging on Summit -- setting to 4", file=sys.stderr)
+                args.num_workers = 4
+            args.loader_kwargs['num_workers'] = 1           # Set as a default. This will get overridden elsewhere
+            args.loader_kwargs['multiprocessing_context'] = 'spawn'
+            env = LSFEnvironment()
+        elif args.slurm:
+            env = SLURMEnvironment()
+
+        if env is not None:
+            global RANK
+            global SIZE
+            try:
+                RANK = env.global_rank()
+                SIZE = env.world_size()
+            except:
+                print(">>> Could not get global rank -- setting RANK to 0 and SIZE to 1", file=sys.stderr)
+                RANK = 0
+                SIZE = 1
+
+        if targs['gpus'] is not None:
+            targs['accelerator'] = 'gpu'
+            if targs['gpus'] == 1:
+                targs['devices'] = 1
+            else:
+                if env is None:
+                    raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
+                # parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count()) if i < targs['gpus']]
+                # precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda')
+                torch.cuda.set_device(env.local_rank())
+                targs['devices'] = targs['gpus']
+                targs['strategy'] = DDPStrategy(find_unused_parameters=False,
+                                                cluster_environment=env,
+                                                #accelerator=GPUAccelerator(),
+                                                #parallel_devices=parallel_devices,
+                                                #precision_plugin=precision_plugin,
+                                    )
+
+                print("---- Rank %s  -  Using GPUAccelerator with DDPStrategy" % env.global_rank(), file=sys.stderr)
+        else:
+            targs['accelerator'] = 'cpu'
+
+    del args.gpus
 
     if args.sanity:
         if isinstance(args.sanity, str):
@@ -458,6 +465,7 @@ def run_lightning(argv=None):
     monitor, mode = (AbstractLit.val_loss, 'min') if args.manifold else (AbstractLit.val_acc, 'max')
     callbacks = [
         LearningRateMonitor(logging_interval='epoch'),
+        TQDMProgressBar(refresh_rate=50)
     ]
     if not args.disable_checkpoint:
         callbacks.append(ModelCheckpoint(dirpath=outdir,
