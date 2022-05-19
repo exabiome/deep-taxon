@@ -506,6 +506,7 @@ def run_lightning(argv=None):
         print_dataloader(data_mod.val_dataloader())
 
     s = datetime.now()
+    print0('START_TIME', time())
     trainer.fit(model, data_mod)
     e = datetime.now()
     td = e - s

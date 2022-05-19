@@ -129,6 +129,7 @@ class AbstractLit(LightningModule):
 
     # TRAIN
     def on_train_start(self):
+        self.log('wall_time', time())
         self.last_time = time()
 
     def training_step(self, batch, batch_idx):
@@ -137,15 +138,16 @@ class AbstractLit(LightningModule):
         loss = self._loss(output, target)
         if self.hparams.classify:
             self.log(self.train_acc, self.accuracy(output, target), prog_bar=True)
-        self.log(self.train_loss, loss)
-        self.log('time', self.step_time())
+        self.log_dict({self.train_loss: loss, 'time': self.step_time(), 'wall_time': time()})
         return loss
 
     def training_epoch_end(self, outputs):
+        self.log('wall_time', time())
         return None
 
     # VALIDATION
     def on_validation_start(self):
+        self.log('wall_time', time())
         self.last_time = time()
 
     def validation_step(self, batch, batch_idx):
@@ -154,11 +156,11 @@ class AbstractLit(LightningModule):
         loss = self._loss(output, target)
         if self.hparams.classify:
             self.log(self.val_acc, self.accuracy(output, target), prog_bar=True)
-        self.log(self.val_loss, loss)
-        self.log('time', self.step_time())
+        self.log_dict({self.val_loss: loss, 'time': self.step_time(), 'wall_time': time()})
         return loss
 
     def validation_epoch_end(self, outputs):
+        self.log('wall_time', time())
         return None
 
     # TEST
@@ -166,9 +168,9 @@ class AbstractLit(LightningModule):
         seqs, target = batch
         output = self(seqs)
         loss = self._loss(output, target)
-        self.log(self.test_loss, loss)
-        self.log('time', self.step_time())
+        self.log_dict({self.test_loss: loss, 'time': self.step_time(), 'wall_time': time()})
         return loss
 
     def test_epoch_end(self, outputs):
+        self.log('wall_time', time())
         return None
