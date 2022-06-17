@@ -14,6 +14,8 @@ from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf.data_utils import DataIO
 from hdmf import Container, Data
 
+from ..utils import balsplit
+
 
 __all__ = ['DeepIndexFile',
            'AbstractChunkedDIFile',
@@ -425,6 +427,7 @@ class DeepIndexFile(Container):
         self._sanity = False
         self._sanity_features = 5
         self._labels = None
+        self.__loaded = False
         self.__indices = None
         self.__n_outputs = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
@@ -498,7 +501,51 @@ class DeepIndexFile(Container):
 
     def set_sequence_subset(self, indices=None):
         self.__indices = indices
-        self.set_label_key(self.label_key)
+        self._labels = self._labels[self.__indices]
+        #self.set_label_key(self.label_key)
+
+    def load(self, sequence=False, device=None):
+        indices = self.__indices
+        self.__loaded = True
+        if self.__indices is not None:
+
+            # get start/end of subset sequences
+            dset = self.seq_table['sequence_index'].data.astype(int)[:]
+            starts = dset[self.__indices - 1]
+            if self.__indices[0] == 0:
+                starts[0] = 0
+            ends = dset[self.__indices]
+
+            # get lengths of the subset sequences
+            subset_lengths = ends - starts
+
+            # compute the index for the subset
+            subset_index = np.cumsum(subset_lengths)
+
+            # read each sequence in
+            sequence_subset = np.zeros(subset_index[-1], dtype=np.uint8)
+            s_dest, e_dest = 0, 0
+            seq_dset = self.seq_table['sequence'].target.data
+            ## read one sequence at a time
+            with seq_dset.collective:
+                for s_src, e_src in zip(starts, ends):
+                    e_dest = e_src - s_src + s_dest
+                    seq_dset.read_direct(sequence_subset, np.s_[s_src:e_src], np.s_[s_dest:e_dest])
+                    s_dest = e_dest
+
+            # swap everything in
+            self.seq_table['id'].transform(lambda x: x[:][self.__indices])
+            self.seq_table['length'].transform(lambda x: subset_lengths)
+            self.seq_table['sequence_index'].transform(lambda x: subset_index)
+            if sequence:
+                self.seq_table['sequence_index'].target.transform(lambda x: sequence_subset)
+        else:
+            _load = lambda x: x[:]
+            self.seq_table['id'].transform(_load)
+            self.seq_table['length'].transform(lambda x: x.astype(int)[:])
+            self.seq_table['sequence_index'].transform(_load)
+            if sequence:
+                self.seq_table['sequence_index'].target.transform(_load)
 
     def get_sequence_subset(self):
         return copy.copy(self.__indices)
@@ -507,7 +554,7 @@ class DeepIndexFile(Container):
         """
         Translate from a subset index to the original sequence index
         """
-        if self.__indices is None:
+        if self.__indices is None or self.__loaded:
             return arg
         else:
             return self.__indices[arg]
@@ -713,9 +760,15 @@ class LazyWindowChunkedDIFile(DIFileFilter):
     An abstract class for chunking sequences from a DeepIndexFile
     """
 
-    def __init__(self, difile, window, step, min_seq_len=100):
+    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1):
         super().__init__(difile)
         counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
+
+        if size > 1:
+            indices = balsplit(counts, size, rank)
+            counts = counts[indices]
+            self.difile.set_sequence_subset(indices)
+
         self.orig_lut = np.cumsum(counts)
         self.lut = self.orig_lut
         self.window = window
@@ -791,7 +844,6 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         item['id'] = i
         item['length'] = e - s
         return item
-
 
 
 class RevCompFilter(DIFileFilter):
