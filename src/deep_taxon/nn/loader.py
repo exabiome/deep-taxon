@@ -86,13 +86,25 @@ def dataset_stats(argv=None):
 
     tr_len = None
     va_len = None
+    if (args.rank != None and args.size == None) or (args.rank != None and args.size == None):
+        print("You must specify both --rank and --size", file=sys.stderr)
+        exit(1)
+    elif args.rank is None and args.size is None:
+        args.rank = 0
+        args.size = 1
+    comm = None
+    try:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+    except:
+        pass
     if args.lightning:
         args.downsample = False
         args.loader_kwargs = dict()
         if args.mem:
             print_mem('before DeepIndexDataModule')
         before = time()
-        data_mod = DeepIndexDataModule(hparams=args, keep_open=True)
+        data_mod = DeepIndexDataModule(hparams=args, keep_open=True, rank=args.rank, size=args.size, comm=comm)
         after = time()
         if args.mem:
             print_mem('after DeepIndexDataModule ')
@@ -104,14 +116,12 @@ def dataset_stats(argv=None):
         va_len = len(dataset)
         dataset.set_subset()
     else:
-        if (args.rank != None and args.size == None) or (args.rank != None and args.size == None):
-            print("You must specify both --rank and --size", file=sys.stderr)
-            exit(1)
-
         kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True)
         if args.rank != None:
             kwargs['rank'] = args.rank
             kwargs['size'] = args.size
+        if comm is not None:
+            kwargs['comm'] = comm
         before = time()
         dataset = LazySeqDataset(**kwargs)
         dataset.load(sequence=False)
@@ -735,7 +745,7 @@ class SubsetDataLoader(DataLoader):
 
 class DeepIndexDataModule(pl.LightningDataModule):
 
-    def __init__(self, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1):
+    def __init__(self, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1, **lsd_kwargs):
         super().__init__()
 
         kwargs = dict(batch_size=hparams.batch_size)
@@ -745,10 +755,10 @@ class DeepIndexDataModule(pl.LightningDataModule):
         if inference:
             hparams.manifold = False
             hparams.graph = False
-            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
+            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open, **lsd_kwargs)
         else:
-            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
-            self.dataset.load(sequence=hparams.load)
+            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open, rank=rank, size=size, **lsd_kwargs)
+            # self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = hparams.pin_memory
 
             # set up the training sampler - shuffle for training
@@ -1014,12 +1024,7 @@ class LazySeqDataset(Dataset):
             warnings.simplefilter("ignore")
             self.orig_difile = self.io.read()
 
-        if self._world_size > 1:
-            self.orig_difile.set_sequence_subset(balsplit(self.orig_difile.get_seq_lengths(), self._world_size, self._global_rank))
-
         self.difile = self.orig_difile
-
-        self.load(sequence=self.load_data)
 
         self.difile.set_label_key(self.hparams.tgt_tax_lvl)
 
@@ -1030,6 +1035,8 @@ class LazySeqDataset(Dataset):
             self.set_revcomp()
 
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
+
+        self.orig_difile.load(sequence=self.load_data)
 
     @property
     def rank(self):
@@ -1046,7 +1053,7 @@ class LazySeqDataset(Dataset):
 
     def set_chunks(self, window, step=None):
         if self.__lazy_chunk:
-            self.difile = LazyWindowChunkedDIFile(self.difile, window, step)
+            self.difile = LazyWindowChunkedDIFile(self.difile, window, step, rank=self._global_rank, size=self._world_size)
         else:
             raise ValueError("We only support lazy chunking now")
 
@@ -1104,15 +1111,6 @@ class LazySeqDataset(Dataset):
                 transforms = [transforms]
             for tfm in transforms:
                 data.transform(tfm)
-
-    def load(self, sequence=False, device=None):
-        _load = lambda x: x[:]
-        self.orig_difile.seq_table['id'].transform(_load)
-        self.orig_difile.seq_table['length'].transform(lambda x: x[:].astype(int))
-        self.orig_difile.seq_table['sequence_index'].transform(_load)
-        if sequence:
-            self.orig_difile.seq_table['sequence_index'].target.transform(_load)
-
 
     def __getitem__(self, i):
         # get sequence
