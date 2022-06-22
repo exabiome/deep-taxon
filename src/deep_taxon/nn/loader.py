@@ -66,6 +66,7 @@ def dataset_stats(argv=None):
     add_dataset_arguments(parser)
     parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=None)
     parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
+    parser.add_argument('--mpi', default=False, action='store_true', help='user MPI rank/size')
     parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
@@ -92,12 +93,20 @@ def dataset_stats(argv=None):
     elif args.rank is None and args.size is None:
         args.rank = 0
         args.size = 1
+
     comm = None
     try:
         from mpi4py import MPI
         comm = MPI.COMM_WORLD
+        print("MPI imported.", file=sys.stderr)
+        if args.mpi:
+            args.rank = comm.Get_rank()
+            args.size = comm.Get_size()
+            print(f"Reading for rank {args.rank} of {args.size}", file=sys.stderr)
+        comm = None
     except:
         pass
+
     if args.lightning:
         args.downsample = False
         args.loader_kwargs = dict()
@@ -211,6 +220,8 @@ def dataset_stats(argv=None):
                 bad = True
         if not bad:
             print(f'taxonomic hierarchy for {tl1} to {tl2} okay')
+
+    dataset.close()
 
 
 def read_all_seqs(fa_path):
@@ -637,7 +648,7 @@ class WORHelper:
 class WORSampler(Sampler):
     """Without Replacement Sampler"""
 
-    def __init__(self, length, rng=None, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
+    def __init__(self, length, rng=None, n_partitions=1, part_smplr_rng=None):
         """
         Args:
             n_partitions :          number of deterministic partitions to break up dataset into
@@ -649,20 +660,11 @@ class WORSampler(Sampler):
         if length > (2**32 - 1):
             dtype = np.uint64
 
-        self.rank = rank
-        self.size = size
 
         # trim will clip extra samples (i.e. length % size) so that each
         # rank has the same number of samples.
         # Use this later if we decide we don't want to trim tail.
-        trim = True
-        if size > 1:
-            self.indices = np.arange(rank, length, size, dtype=dtype)
-            if trim:
-                # This systematically throws out up to (size - 1) samples
-                self.indices = self.indices[:length // size]
-        else:
-            self.indices = np.arange(length, dtype=dtype)
+        self.indices = np.arange(length, dtype=dtype)
         self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
 
         # set an initial value for curr_part (i.e. current partition)
@@ -692,7 +694,7 @@ class WORSampler(Sampler):
 class DSSampler(SequentialSampler):
     """Distributed Sequential Sampler"""
 
-    def __init__(self, length, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
+    def __init__(self, length, n_partitions=1, part_smplr_rng=None):
         """
         Args:
             n_partitions :          number of deterministic partitions to break up dataset into
@@ -704,11 +706,8 @@ class DSSampler(SequentialSampler):
         # set an initial value for curr_part (i.e. current partition)
         # so we can calculate lenght in __len__
         self.curr_part = self.part_sampler.sample()
-        if size > 1:
-            self.start, self.end = distsplit(length, size, rank, arange=False)
-        else:
-            self.start = 0
-            self.end = length
+        self.start = 0
+        self.end = length
 
     def __iter__(self):
         self.__it = iter(range(self.start + self.curr_part, self.end, self.part_sampler.period))
@@ -763,11 +762,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
 
             # set up the training sampler - shuffle for training
             train_len = self.dataset.get_subset_len(train=True)
-            self._tr_sampler = WORSampler(train_len, rng=seed, rank=rank, size=size, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
+            self._tr_sampler = WORSampler(train_len, rng=seed, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
             # set up the validation sampler - DO NOT shuffle for training
             val_len = self.dataset.get_subset_len(validate=True)
-            self._val_sampler = DSSampler(val_len, rank=rank, size=size, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
+            self._val_sampler = DSSampler(val_len, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
         self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
 
@@ -1036,7 +1035,7 @@ class LazySeqDataset(Dataset):
 
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
-        self.orig_difile.load(sequence=self.load_data)
+        self.orig_difile.load(sequence=self.load_data, verbose=self._global_rank==0)
 
     @property
     def rank(self):

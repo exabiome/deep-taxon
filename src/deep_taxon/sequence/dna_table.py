@@ -1,9 +1,11 @@
 from abc import ABCMeta, abstractmethod
 import copy
 import math
+import sys
 import warnings
 
 import numpy as np
+from tqdm import tqdm
 import torch
 import torch.nn.functional as F
 import sklearn.neighbors as skn
@@ -504,11 +506,13 @@ class DeepIndexFile(Container):
         self._labels = self._labels[self.__indices]
         #self.set_label_key(self.label_key)
 
-    def load(self, sequence=False, device=None):
+    def load(self, sequence=False, device=None, verbose=True):
         indices = self.__indices
         self.__loaded = True
         if self.__indices is not None:
 
+            if verbose:
+                print('Loading data subset - getting start/end for sequences in subset', file=sys.stderr)
             # get start/end of subset sequences
             dset = self.seq_table['sequence_index'].data.astype(int)[:]
             starts = dset[self.__indices - 1]
@@ -516,9 +520,13 @@ class DeepIndexFile(Container):
                 starts[0] = 0
             ends = dset[self.__indices]
 
+            if verbose:
+                print('Loading data subset - computing lengths for sequences in subset', file=sys.stderr)
             # get lengths of the subset sequences
             subset_lengths = ends - starts
 
+            if verbose:
+                print('Loading data subset - computing index for sequence subset', file=sys.stderr)
             # compute the index for the subset
             subset_index = np.cumsum(subset_lengths)
 
@@ -527,13 +535,19 @@ class DeepIndexFile(Container):
             s_dest, e_dest = 0, 0
             seq_dset = self.seq_table['sequence'].target.data
             ## read one sequence at a time
-            with seq_dset.collective:
-                for s_src, e_src in zip(starts, ends):
-                    e_dest = e_src - s_src + s_dest
-                    seq_dset.read_direct(sequence_subset, np.s_[s_src:e_src], np.s_[s_dest:e_dest])
-                    s_dest = e_dest
+            it = zip(starts, ends)
+            if verbose:
+                it = tqdm(it)
+            if verbose:
+                print('Loading data subset - loading sequences from subset', file=sys.stderr)
+            for s_src, e_src in it:
+                e_dest = e_src - s_src + s_dest
+                seq_dset.read_direct(sequence_subset, np.s_[s_src:e_src], np.s_[s_dest:e_dest])
+                s_dest = e_dest
 
             # swap everything in
+            if verbose:
+                print('Loading data subset - loading IDs', file=sys.stderr)
             self.seq_table['id'].transform(lambda x: x[:][self.__indices])
             self.seq_table['length'].transform(lambda x: subset_lengths)
             self.seq_table['sequence_index'].transform(lambda x: subset_index)
@@ -541,10 +555,18 @@ class DeepIndexFile(Container):
                 self.seq_table['sequence_index'].target.transform(lambda x: sequence_subset)
         else:
             _load = lambda x: x[:]
+            if verbose:
+                print('Loading data subset - loading IDs', file=sys.stderr)
             self.seq_table['id'].transform(_load)
+            if verbose:
+                print('Loading data subset - loading sequence lengths', file=sys.stderr)
             self.seq_table['length'].transform(lambda x: x.astype(int)[:])
+            if verbose:
+                print('Loading data subset - loading sequence index', file=sys.stderr)
             self.seq_table['sequence_index'].transform(_load)
             if sequence:
+                if verbose:
+                    print('Loading data subset - loading sequences', file=sys.stderr)
                 self.seq_table['sequence_index'].target.transform(_load)
 
     def get_sequence_subset(self):
@@ -774,7 +796,7 @@ class LazyWindowChunkedDIFile(DIFileFilter):
         self.window = window
         self.step = step
         self.difile = difile
-        self.lengths = difile.seq_table['length'].data
+        self.lengths = difile.seq_table['length'].data.astype(int)
         self.n_discarded = int(self.lut[-1] / frac_good - self.lut[-1])
 
         self.subset_counts = None
