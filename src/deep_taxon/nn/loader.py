@@ -142,7 +142,8 @@ def dataset_stats(argv=None):
     while not isinstance(orig_difile, DeepIndexFile):
         orig_difile = orig_difile.difile
 
-    n_taxa = len(orig_difile.genome_table)
+    #n_taxa = len(orig_difile.genome_table)
+    n_taxa = np.sum(np.bincount(difile._labels) > 0)
     n_seqs = len(orig_difile.seq_table)
 
     n_samples = len(dataset)
@@ -398,8 +399,9 @@ class SeqCollater:
 
 class TrainingSeqCollater:
 
-    def __init__(self, padval):
+    def __init__(self, padval, seq_dtype=torch.uint8):
         self.padval = padval
+        self.seq_dtype = seq_dtype
 
     def __call__(self, samples):
         maxlen = 0
@@ -418,8 +420,8 @@ class TrainingSeqCollater:
                 X_ = F.pad(X, (0, dif), value=self.padval)
             X_ret.append(X_)
             y_ret.append(y)
-        X_ret = torch.stack(X_ret)
-        y_ret = torch.stack(y_ret)
+        X_ret = torch.stack(X_ret, out=torch.zeros(len(X_ret), len(X_ret[0]), dtype=self.seq_dtype))
+        y_ret = torch.stack(y_ret, out=torch.zeros(len(X_ret), dtype=torch.int32))
         return (X_ret, y_ret)
 
 
@@ -742,6 +744,16 @@ class SubsetDataLoader(DataLoader):
         return super().__iter__()
 
 
+def get_min(val, batch_size):
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    ret = comm.allreduce(val, op=MPI.MIN)
+    if (val - ret) < batch_size:
+        ret = val
+    return ret
+
 class DeepIndexDataModule(pl.LightningDataModule):
 
     def __init__(self, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1, **lsd_kwargs):
@@ -761,11 +773,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
             kwargs['pin_memory'] = hparams.pin_memory
 
             # set up the training sampler - shuffle for training
-            train_len = self.dataset.get_subset_len(train=True)
+            train_len = get_min(self.dataset.get_subset_len(train=True), hparams.batch_size)
             self._tr_sampler = WORSampler(train_len, rng=seed, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
             # set up the validation sampler - DO NOT shuffle for training
-            val_len = self.dataset.get_subset_len(validate=True)
+            val_len = get_min(self.dataset.get_subset_len(validate=True), hparams.batch_size)
             self._val_sampler = DSSampler(val_len, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
         self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
@@ -1123,7 +1135,8 @@ class LazySeqDataset(Dataset):
         label = item['label']
         seq_id = item.get('seq_idx', -1)
         ## one-hot encode sequence
-        seq = torch.as_tensor(seq, dtype=torch.int64)
+        #seq = torch.as_tensor(seq, dtype=torch.int64)
+        seq = torch.as_tensor(seq)
         if self.__ohe:
             seq = F.one_hot(seq, num_classes=self.vocab_len).float()
         label = torch.as_tensor(label, dtype=self._label_dtype)

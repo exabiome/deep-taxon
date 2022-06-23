@@ -537,7 +537,7 @@ class DeepIndexFile(Container):
             ## read one sequence at a time
             it = zip(starts, ends)
             if verbose:
-                it = tqdm(it)
+                it = tqdm(it, total=len(starts))
             if verbose:
                 print('Loading data subset - loading sequences from subset', file=sys.stderr)
             for s_src, e_src in it:
@@ -871,7 +871,7 @@ class LazyWindowChunkedDIFile(DIFileFilter):
 class RevCompFilter(DIFileFilter):
 
     rcmap = torch.tensor([ 9, 10, 11, 12, 13, 14, 15, 16, 17,
-                           0,  1,  2,  3,  4,  5,  6,  7,  8])
+                           0,  1,  2,  3,  4,  5,  6,  7,  8], dtype=torch.uint8)
 
     chars = {
         'A': 'T',
@@ -906,7 +906,8 @@ class RevCompFilter(DIFileFilter):
     def __init__(self, difile):
         super().__init__(difile)
         vocab = difile.seq_table.sequence.elements.data
-        self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
+        #self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
+        self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.uint8)
 
     def __len__(self):
         return 2 * len(self.difile)
