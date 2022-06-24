@@ -154,6 +154,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
+    parser.add_argument('--n_splits', type=int, default=None, help='the number of ways to split data. By default, use the number of ranks')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
@@ -296,7 +297,8 @@ def process_args(args=None):
 
     difile.set_label_key(args.tgt_tax_lvl)
 
-    data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK, rank=RANK, size=SIZE)
+    data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
+                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
 
     # if classification problem, use the number of taxa as the number of outputs
     if args.classify:

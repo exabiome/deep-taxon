@@ -1,5 +1,6 @@
 from abc import ABCMeta, abstractmethod
 import copy
+from datetime import datetime
 import math
 import sys
 import warnings
@@ -34,6 +35,10 @@ __all__ = ['DeepIndexFile',
 
 NS = 'deep-index'
 
+
+def log(msg, print_msg=True):
+    if print_msg:
+        print(f'{datetime.now()} - {msg}', file=sys.stderr)
 
 class TorchableMixin:
 
@@ -513,8 +518,7 @@ class DeepIndexFile(Container):
         self.__loaded = True
         if self.__indices is not None:
 
-            if verbose:
-                print('Loading data subset - getting start/end for sequences in subset', file=sys.stderr)
+            log('Loading data subset - getting start/end for sequences in subset', print_msg=verbose)
             # get start/end of subset sequences
             dset = self.seq_table['sequence_index'].data.astype(int)[:]
             starts = dset[self.__indices - 1]
@@ -522,13 +526,11 @@ class DeepIndexFile(Container):
                 starts[0] = 0
             ends = dset[self.__indices]
 
-            if verbose:
-                print('Loading data subset - computing lengths for sequences in subset', file=sys.stderr)
+            log('Loading data subset - computing lengths for sequences in subset', print_msg=verbose)
             # get lengths of the subset sequences
             subset_lengths = ends - starts
 
-            if verbose:
-                print('Loading data subset - computing index for sequence subset', file=sys.stderr)
+            log('Loading data subset - computing index for sequence subset', print_msg=verbose)
             # compute the index for the subset
             subset_index = np.cumsum(subset_lengths)
 
@@ -540,36 +542,35 @@ class DeepIndexFile(Container):
             it = zip(starts, ends)
             if verbose:
                 it = tqdm(it, total=len(starts))
-            if verbose:
-                print('Loading data subset - loading sequences from subset', file=sys.stderr)
+            log('Loading data subset - loading sequences from subset', print_msg=verbose)
             for s_src, e_src in it:
                 e_dest = e_src - s_src + s_dest
                 seq_dset.read_direct(sequence_subset, np.s_[s_src:e_src], np.s_[s_dest:e_dest])
                 s_dest = e_dest
 
             # swap everything in
-            if verbose:
-                print('Loading data subset - loading IDs', file=sys.stderr)
+            log('Loading data subset - loading IDs', print_msg=verbose)
             self.seq_table['id'].transform(lambda x: x[:][self.__indices])
+            log('Loading data subset - swapping in lengths', print_msg=verbose)
             self.seq_table['length'].transform(lambda x: subset_lengths)
+            log('Loading data subset - swapping in sequence index', print_msg=verbose)
             self.seq_table['sequence_index'].transform(lambda x: subset_index)
             if sequence:
+                log('Loading data subset - swapping in sequence data', print_msg=verbose)
                 self.seq_table['sequence_index'].target.transform(lambda x: sequence_subset)
+            log('Loading data subset - done loading data subset', print_msg=verbose)
         else:
             _load = lambda x: x[:]
-            if verbose:
-                print('Loading data subset - loading IDs', file=sys.stderr)
+            log('Loading data - loading IDs', print_msg=verbose)
             self.seq_table['id'].transform(_load)
-            if verbose:
-                print('Loading data subset - loading sequence lengths', file=sys.stderr)
+            log('Loading data - loading sequence lengths', print_msg=verbose)
             self.seq_table['length'].transform(lambda x: x.astype(int)[:])
-            if verbose:
-                print('Loading data subset - loading sequence index', file=sys.stderr)
+            log('Loading data - loading sequence index', print_msg=verbose)
             self.seq_table['sequence_index'].transform(_load)
             if sequence:
-                if verbose:
-                    print('Loading data subset - loading sequences', file=sys.stderr)
+                log('Loading data - loading sequences', print_msg=verbose)
                 self.seq_table['sequence_index'].target.transform(_load)
+            log('Loading data - done loading data', print_msg=verbose)
 
         # for child in self.taxa_table.children:
         #     self.load_all(child)
@@ -804,12 +805,18 @@ class LazyWindowChunkedDIFile:
             counts = counts[indices]
             difile.set_sequence_subset(indices)
 
-        difile.load(verbose=rank==0)
+        difile.load(sequence=True, verbose=rank==0)
+        log('setting lengths', print_msg=rank==0)
         self.lengths = np.asarray(difile.seq_table['length'].data, dtype=int)
+        log('setting ids', print_msg=rank==0)
         self.id = np.asarray(difile.seq_table['id'].data, dtype=int)
+        log('setting labels', print_msg=rank==0)
         self.labels = np.asarray(difile._labels)
+        log('setting seq_index', print_msg=rank==0)
         self.seq_index = np.asarray(difile.seq_table['sequence_index'].data, dtype=int)
-        self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=int)
+        log('setting sequence', print_msg=rank==0)
+        self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
+        log('done setting important data', print_msg=rank==0)
 
         self.n_outputs = difile.n_outputs
         self.classes = difile.get_label_classes()
@@ -844,6 +851,7 @@ class LazyWindowChunkedDIFile:
         self.subset_counts = None
         self.seed = None
         self.starts = None
+        log('done constructing LazyWindowDIFile')
 
     @property
     def n_seqs(self):
@@ -946,7 +954,7 @@ class LazyWindowChunkedDIFile:
         item['seq_idx'] = item['id']
 
         if rev:
-            item['seq'] = self.rcmap[item['seq'][l-e:l-s]].flip(0)
+            item['seq'] = self.rcmap[item['seq'][l-e:l-s].astype(int)].flip(0)
         else:
             item['seq'] = item['seq'][s:e]
         item['id'] = i
