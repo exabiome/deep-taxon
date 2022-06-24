@@ -14,6 +14,7 @@ from .utils import process_gpus, process_model, process_output
 from .loader import add_dataset_arguments, DeepIndexDataModule
 from ..sequence import DeepIndexFile
 from hdmf.utils import docval
+from hdmf.common import get_hdf5io
 
 import argparse
 import logging
@@ -181,7 +182,7 @@ def parse_args(*addl_args, argv=None):
 
     return args
 
-def process_args(args=None, return_io=False):
+def process_args(args=None):
     """
     Process arguments for running training
     """
@@ -287,7 +288,15 @@ def process_args(args=None, return_io=False):
             raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
         args.classify = True
 
-    data_mod = DeepIndexDataModule(args, keep_open=True, seed=args.seed+RANK, rank=RANK, size=SIZE)
+
+    io = get_hdf5io(args.input, 'r')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        difile = io.read()
+
+    difile.set_label_key(args.tgt_tax_lvl)
+
+    data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK, rank=RANK, size=SIZE)
 
     # if classification problem, use the number of taxa as the number of outputs
     if args.classify:
@@ -295,16 +304,14 @@ def process_args(args=None, return_io=False):
 
     args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
-    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+    model = process_model(args, taxa_table=difile.taxa_table)
 
-    if args.num_workers > 0:
-        data_mod.dataset.close()
+    #if args.num_workers > 0:
+    #    data_mod.dataset.close()
 
-    ret = [model, args, targs]
-    if return_io:
-        ret.append(io)
+    ret = [model, args, targs, data_mod]
 
-    ret.append(data_mod)
+    io.close()
 
     return tuple(ret)
 

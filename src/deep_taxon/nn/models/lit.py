@@ -6,7 +6,6 @@ import torch
 import argparse
 from time import time
 
-from ...sequence import WindowChunkedDIFile
 from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
 
 class AbstractLit(LightningModule):
