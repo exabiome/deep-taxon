@@ -22,11 +22,7 @@ from ..utils import balsplit
 
 
 __all__ = ['DeepIndexFile',
-           'AbstractChunkedDIFile',
-           #'DIFileFilter',
-           #'WindowChunkedDIFile',
            'LazyWindowChunkedDIFile',
-           #'RevCompFilter',
            'SequenceTable',
            'GenomeTable',
            'TaxaTable',
@@ -40,32 +36,8 @@ def log(msg, print_msg=True):
     if print_msg:
         print(f'{datetime.now()} - {msg}', file=sys.stderr)
 
-class TorchableMixin:
 
-
-    def __init__(self, *args, **kwargs):
-        self.use_torch = False
-        self.classify = False
-
-    def get_torch_conversion(self, **kwargs):
-        dtype = kwargs.get('dtype')
-        device = kwargs.get('device')
-        maxlen = kwargs.get('maxlen')
-        if np.issubdtype(type(maxlen), np.integer):
-            def func(x):
-                ret = torch.zeros((maxlen, x.shape[1]))
-                ret[0:x.shape[0]] = x
-                return ret
-        else:
-            def func(x):
-                return torch.as_tensor(x, dtype=dtype, device=device)
-        return func
-
-    def set_raw(self):
-        self.convert = lambda x: x
-
-
-class AbstractSequenceTable(DynamicTable, TorchableMixin, metaclass=ABCMeta):
+class AbstractSequenceTable(DynamicTable, metaclass=ABCMeta):
 
     @abstractmethod
     def get_sequence_index(self, data, target):
@@ -242,7 +214,7 @@ class AATable(SequenceTable):
 
 
 @register_class('TaxaTable', NS)
-class TaxaTable(DynamicTable, TorchableMixin):
+class TaxaTable(DynamicTable):
 
     __columns__ = (
         {'name': 'taxon_id', 'description': 'the taxon ID'},
@@ -572,24 +544,6 @@ class DeepIndexFile(Container):
                 self.seq_table['sequence_index'].target.transform(_load)
             log('Loading data - done loading data', print_msg=verbose)
 
-        # for child in self.taxa_table.children:
-        #     self.load_all(child)
-
-        # for child in self.seq_table.children:
-        #     if child.name in ('id', 'length', 'sequence', 'sequence_index'):
-        #         continue
-        #     self.load_all(child)
-
-        # for child in self.genome_table.children:
-        #     self.load_all(child)
-
-        # breakpoint()
-
-    def load_all(self, node):
-        node.transform(lambda x: x[:])
-        for child in node.children:
-            self.load_all(child)
-
     def get_sequence_subset(self):
         return copy.copy(self.__indices)
 
@@ -623,23 +577,6 @@ class DeepIndexFile(Container):
     def to_sequence(self, data):
         return self.seq_table.to_sequence(data)
 
-    def get_knn_classifier(self, **kwargs):
-        """
-        Build a KNeighborsClassifier from taxonomic embeddings
-
-        By default, use only a single neighbor
-
-        Args:
-            kwargs  : arguments to sklearn.neighbors.KNeighborsClassifier constructor
-
-
-        """
-        kwargs.setdefault('n_neighbors', 1)
-        ret = skn.KNeighborsClassifier(**kwargs)
-        emb = self.taxa_table['embedding'][:]
-        ret.fit(emb, np.arange(emb.shape[0]))
-        return ret
-
     def set_subset(self, subset_counts, seed, starts=None):
         warnings.warn("Cannot subset DeepIndexFile -- ignoring")
 
@@ -655,52 +592,6 @@ class DIFileFilter(object):
         """Delegate retrival of attributes to the data in self.data"""
         return getattr(self.difile, attr)
 
-
-class AbstractChunkedDIFile(DIFileFilter):
-    """
-    An abstract class for chunking sequences from a DeepIndexFile
-    """
-
-    def __init__(self, difile, seq_idx, start, end, labels, frac_good=None):
-        super().__init__(difile)
-        self.seq_idx = np.asarray(seq_idx)
-        self.start = np.asarray(start)
-        self.end = np.asarray(end)
-        if frac_good is not None:
-            self.n_discarded = int(len(seq_idx) / frac_good - len(seq_idx))
-        else:
-            self.n_discarded = -1
-
-    def __len__(self):
-        return len(self.seq_idx)
-
-    def __getitem__(self, i):
-        if not isinstance(i, (int, np.integer)):
-            raise ValueError("ChunkedDIFile only supportsd indexing with an integer")
-        seq_i = self.seq_idx[i]
-        item = self.difile[seq_i]
-        s = self.start[i]
-        e = self.end[i]
-        item['seq'] = item['seq'][s:e]
-        item['seq_idx'] = seq_i
-        item['id'] = i if i >= 0 else len(self.start) + i
-        item['length'] = e - s
-        return item
-
-
-class WindowChunkedDIFile(AbstractChunkedDIFile):
-    """
-    A class for chunking sequences with a sliding window
-
-    By default windows are not overlapping
-    """
-
-    def __init__(self, difile, wlen, step=None, min_seq_len=100):
-        seq_idx, chunk_start, chunk_end, labels, frac_good = chunk_sequence(difile, wlen, step=step, min_seq_len=min_seq_len)
-        self.wlen = wlen
-        self.step = step
-        self.min_seq_len = min_seq_len
-        super().__init__(difile, seq_idx, chunk_start, chunk_end, labels, frac_good)
 
 def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     """
@@ -838,8 +729,10 @@ class LazyWindowChunkedDIFile:
             self.tree_graph = difile.tree_graph.to_spmat()
 
         self.rcmap = None
+        self.__rc = 1
         if revcomp:
             self.rcmap = torch.as_tensor(self.get_revcomp_map(self.vocab), dtype=torch.uint8)
+            self.__rc = 2
 
 
         self.orig_lut = np.cumsum(counts)
@@ -902,7 +795,7 @@ class LazyWindowChunkedDIFile:
         return counts
 
     def __len__(self):
-        return self.lut[-1] * 2 if self.rcmap is not None else self.lut[-1]
+        return self.lut[-1] * self.__rc
 
     def set_subset(self, subset_counts, seed, starts=None):
         """
@@ -923,10 +816,9 @@ class LazyWindowChunkedDIFile:
             raise ValueError("LazyWindowChunkedDIFile only supports indexing with an integer")
 
         # make sure i is a nonnegative integer
-        i = i if i >= 0 else len(self) + i
+        i = i % len(self)
         rev = 0
-        if self.rcmap is not None:
-            i, rev = divmod(i, 2)
+        i, rev = divmod(i, self.__rc)
 
         idx = i
         if idx < 0:
@@ -939,6 +831,17 @@ class LazyWindowChunkedDIFile:
             raise IndexError(f'index {i} out of bounds for LazyWindowChunkedDIFile of length {self.lut[-1]}')
         chunk_i = idx if seq_i == 0 else idx - self.lut[seq_i - 1]
 
+
+        # This section handles subsets (i.e. training vs validation). A subset is set by specifying the number of
+        # chunks in each sequence that are part of the subset. This is stored in self.lut (see set_subset method).
+        # The total number of chunks in a sequence is maintained in self.orig_lut. After the sequence to pull a chunk
+        # from is determined using self.lut (see np.searchsorted call above), the chunk to retrieve is determined using
+        # self.subset_counts and self.starts. self.subset_counts indicates how many chunks each sequence has in the subset,
+        # and self.starts indicates where those chunks start. For example, for sequence i, the chunks in sequence i
+        # that are in the subset are self.starts[i]:self.starts[i]+self.subset_counts[i].
+        # To keep subset assignment random, the chunks are randomly permuted. We do this on the fly (see permutation
+        # call below) to reduce storage overhead i.e. if we precomputed and stored them, the storage requirements for
+        # chunking would grow linearly w.r.t. the number of chunks.
         if self.subset_counts is not None:
             if self.starts is not None:
                 chunk_i += self.starts[seq_i]
@@ -948,7 +851,7 @@ class LazyWindowChunkedDIFile:
 
         s = self.step * chunk_i
         l = self.lengths[seq_i]
-        e = s + min(self.window, l)
+        e = min(s + self.window, l)
 
         item = self.__get_helper(seq_i)
         item['seq_idx'] = item['id']
@@ -960,41 +863,3 @@ class LazyWindowChunkedDIFile:
         item['id'] = i
         item['length'] = e - s
         return item
-
-
-#class RevCompFilter(DIFileFilter):
-#
-#    rcmap = torch.tensor([ 9, 10, 11, 12, 13, 14, 15, 16, 17,
-#                           0,  1,  2,  3,  4,  5,  6,  7,  8], dtype=torch.uint8)
-#
-#    @classmethod
-#    def get_revcomp_map(cls, vocab):
-#        d = {c: i for i, c in enumerate(vocab)}
-#        rcmap = np.zeros(len(vocab), dtype=int)
-#        for i, base in enumerate(vocab):
-#            rc_base = cls.chars[base]
-#            base_i = d[base]
-#            rc_base_i = d[rc_base]
-#            rcmap[base_i] = rc_base_i
-#        return rcmap
-#
-#    def __init__(self, difile):
-#        super().__init__(difile)
-#        vocab = difile.seq_table.sequence.elements.data
-#        #self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
-#        self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.uint8)
-#
-#    def __len__(self):
-#        return 2 * len(self.difile)
-#
-#    def __getitem__(self, arg):
-#        oarg = arg
-#        arg, rev = divmod(arg, 2)
-#        item = self.difile[arg]
-#        try:
-#            if rev:
-#                item['seq'] = self.rcmap[item['seq'].astype(int)].flip(0)
-#        except AttributeError as e:
-#            raise ValueError("Cannot run without loading data. Use -l to load data") from e
-#        item['id'] = oarg if oarg >= 0 else len(self) + oarg
-#        return item
