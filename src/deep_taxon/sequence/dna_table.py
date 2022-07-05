@@ -1,12 +1,9 @@
 from abc import ABCMeta, abstractmethod
 import copy
-from datetime import datetime
 import math
-import sys
 import warnings
 
 import numpy as np
-from tqdm import tqdm
 import torch
 import torch.nn.functional as F
 import sklearn.neighbors as skn
@@ -16,17 +13,14 @@ from hdmf.common import VectorIndex, VectorData, DynamicTable, CSRMatrix,\
 from hdmf.utils import docval, call_docval_func, get_docval, popargs
 from hdmf.data_utils import DataIO
 from hdmf import Container, Data
-from hdmf.common import get_hdf5io
-
-from ..utils import balsplit
 
 
 __all__ = ['DeepIndexFile',
            'AbstractChunkedDIFile',
-           #'DIFileFilter',
-           #'WindowChunkedDIFile',
+           'DIFileFilter',
+           'WindowChunkedDIFile',
            'LazyWindowChunkedDIFile',
-           #'RevCompFilter',
+           'RevCompFilter',
            'SequenceTable',
            'GenomeTable',
            'TaxaTable',
@@ -35,10 +29,6 @@ __all__ = ['DeepIndexFile',
 
 NS = 'deep-index'
 
-
-def log(msg, print_msg=True):
-    if print_msg:
-        print(f'{datetime.now()} - {msg}', file=sys.stderr)
 
 class TorchableMixin:
 
@@ -435,14 +425,12 @@ class DeepIndexFile(Container):
         self._sanity = False
         self._sanity_features = 5
         self._labels = None
-        self.__loaded = False
         self.__indices = None
         self.__n_outputs = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
         self.set_label_key('id')
         self.__rev = False
         self.__get_kwargs = dict()
-        self._vocab = np.chararray.upper(self.seq_table['sequence'].target.elements[:].astype('U1'))
 
     def set_label_key(self, val):
         self.label_key = val
@@ -470,13 +458,12 @@ class DeepIndexFile(Container):
             genome_idx = self.seq_table['genome'].data[self.__indices]
         self._labels = genome_labels[genome_idx]
 
-        if self.label_key in ('species', 'id', 'all'):
-            self._classes = self.taxa_table['species'].data[:]
+    def get_label_classes(self, label_key=None):
+        label_key = label_key or self.label_key
+        if label_key in ('species', 'id', 'all'):
+            return self.taxa_table['species'].data[:]
         else:
-            self._classes = self.taxa_table[self.label_key].elements.data[:]
-
-    def get_label_classes(self):
-        return self._classes
+            return self.taxa_table[label_key].elements.data[:]
 
     @property
     def n_outputs(self):
@@ -511,84 +498,7 @@ class DeepIndexFile(Container):
 
     def set_sequence_subset(self, indices=None):
         self.__indices = indices
-        self._labels = self._labels[self.__indices]
-
-    def load(self, sequence=False, device=None, verbose=True):
-        indices = self.__indices
-        self.__loaded = True
-        if self.__indices is not None:
-
-            log('Loading data subset - getting start/end for sequences in subset', print_msg=verbose)
-            # get start/end of subset sequences
-            dset = self.seq_table['sequence_index'].data.astype(int)[:]
-            starts = dset[self.__indices - 1]
-            if self.__indices[0] == 0:
-                starts[0] = 0
-            ends = dset[self.__indices]
-
-            log('Loading data subset - computing lengths for sequences in subset', print_msg=verbose)
-            # get lengths of the subset sequences
-            subset_lengths = ends - starts
-
-            log('Loading data subset - computing index for sequence subset', print_msg=verbose)
-            # compute the index for the subset
-            subset_index = np.cumsum(subset_lengths)
-
-            # read each sequence in
-            sequence_subset = np.zeros(subset_index[-1], dtype=np.uint8)
-            s_dest, e_dest = 0, 0
-            seq_dset = self.seq_table['sequence'].target.data
-            ## read one sequence at a time
-            it = zip(starts, ends)
-            if verbose:
-                it = tqdm(it, total=len(starts))
-            log('Loading data subset - loading sequences from subset', print_msg=verbose)
-            for s_src, e_src in it:
-                e_dest = e_src - s_src + s_dest
-                seq_dset.read_direct(sequence_subset, np.s_[s_src:e_src], np.s_[s_dest:e_dest])
-                s_dest = e_dest
-
-            # swap everything in
-            log('Loading data subset - loading IDs', print_msg=verbose)
-            self.seq_table['id'].transform(lambda x: x[:][self.__indices])
-            log('Loading data subset - swapping in lengths', print_msg=verbose)
-            self.seq_table['length'].transform(lambda x: subset_lengths)
-            log('Loading data subset - swapping in sequence index', print_msg=verbose)
-            self.seq_table['sequence_index'].transform(lambda x: subset_index)
-            if sequence:
-                log('Loading data subset - swapping in sequence data', print_msg=verbose)
-                self.seq_table['sequence_index'].target.transform(lambda x: sequence_subset)
-            log('Loading data subset - done loading data subset', print_msg=verbose)
-        else:
-            _load = lambda x: x[:]
-            log('Loading data - loading IDs', print_msg=verbose)
-            self.seq_table['id'].transform(_load)
-            log('Loading data - loading sequence lengths', print_msg=verbose)
-            self.seq_table['length'].transform(lambda x: x.astype(int)[:])
-            log('Loading data - loading sequence index', print_msg=verbose)
-            self.seq_table['sequence_index'].transform(_load)
-            if sequence:
-                log('Loading data - loading sequences', print_msg=verbose)
-                self.seq_table['sequence_index'].target.transform(_load)
-            log('Loading data - done loading data', print_msg=verbose)
-
-        # for child in self.taxa_table.children:
-        #     self.load_all(child)
-
-        # for child in self.seq_table.children:
-        #     if child.name in ('id', 'length', 'sequence', 'sequence_index'):
-        #         continue
-        #     self.load_all(child)
-
-        # for child in self.genome_table.children:
-        #     self.load_all(child)
-
-        # breakpoint()
-
-    def load_all(self, node):
-        node.transform(lambda x: x[:])
-        for child in node.children:
-            self.load_all(child)
+        self.set_label_key(self.label_key)
 
     def get_sequence_subset(self):
         return copy.copy(self.__indices)
@@ -597,7 +507,7 @@ class DeepIndexFile(Container):
         """
         Translate from a subset index to the original sequence index
         """
-        if self.__indices is None or self.__loaded:
+        if self.__indices is None:
             return arg
         else:
             return self.__indices[arg]
@@ -644,7 +554,7 @@ class DeepIndexFile(Container):
         warnings.warn("Cannot subset DeepIndexFile -- ignoring")
 
     def get_vocab(self):
-        return self._vocab
+        return np.chararray.upper(self.seq_table['sequence'].target.elements[:].astype('U1'))
 
 class DIFileFilter(object):
 
@@ -773,118 +683,50 @@ def lazy_chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     return ret, frac_good
 
 
-class LazyWindowChunkedDIFile:
+class LabelComputer:
+
+    def __init__(self, lut, orig_labels, revcomp=False):
+        self.lut = lut
+        self.orig_labels = orig_labels
+        self.revcomp = revcomp
+        self.__len = lut[-1] * 2 if revcomp else lut[-1]
+
+    def __len__(self):
+        return self.__len
+
+    def __getitem__(self, i):
+        if i < 0:
+            i += self.__len
+            if i < 0:
+                raise IndexError(f'index {i} is out of bounds for LabelComputer of length {self.__len}')
+
+        if self.revcomp:
+            i = i // 2
+
+        seq_i = np.searchsorted(self.lut, i, side="right")
+        return self.orig_labels[seq_i]
+
+
+
+class LazyWindowChunkedDIFile(DIFileFilter):
     """
     An abstract class for chunking sequences from a DeepIndexFile
     """
 
-    chars = {
-        'A': 'T',
-        'G': 'C',
-        'C': 'G',
-        'T': 'A',
-        'Y': 'R',
-        'R': 'Y',
-        'W': 'W',
-        'S': 'S',
-        'K': 'M',
-        'M': 'K',
-        'D': 'H',
-        'V': 'B',
-        'H': 'D',
-        'B': 'V',
-        'X': 'X',
-        'N': 'N',
-    }
-
-
-    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, distances=False, tree_graph=False):
+    def __init__(self, difile, window, step, min_seq_len=100):
+        super().__init__(difile)
         counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
-        if size > 1:
-            indices = balsplit(counts, size, rank)
-            counts = counts[indices]
-            difile.set_sequence_subset(indices)
-
-        difile.load(sequence=True, verbose=rank==0)
-        log('setting lengths', print_msg=rank==0)
-        self.lengths = np.asarray(difile.seq_table['length'].data, dtype=int)
-        log('setting ids', print_msg=rank==0)
-        self.id = np.asarray(difile.seq_table['id'].data, dtype=int)
-        log('setting labels', print_msg=rank==0)
-        self.labels = np.asarray(difile._labels)
-        log('setting seq_index', print_msg=rank==0)
-        self.seq_index = np.asarray(difile.seq_table['sequence_index'].data, dtype=int)
-        log('setting sequence', print_msg=rank==0)
-        self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
-        log('done setting important data', print_msg=rank==0)
-
-        self.n_outputs = difile.n_outputs
-        self.classes = difile.get_label_classes()
-        self.vocab = difile.get_vocab()
-
-        self.distances = None
-        if distances:
-            self.distances = difile.distances.data[:]
-        self.node_ids = None
-        self.tree_graph = None
-        if tree_graph:
-            leaves = difile.tree_graph.leaves[:]
-            self.node_ids = np.zeros(leaves.max()+1)
-            for i in range(len(leaves)):
-                tid = leaves[i]
-                if i < 0:
-                    continue
-                self.node_ids[tid] = i
-            self.tree_graph = difile.tree_graph.to_spmat()
-
-        self.rcmap = None
-        if revcomp:
-            self.rcmap = torch.as_tensor(self.get_revcomp_map(self.vocab), dtype=torch.uint8)
-
-
         self.orig_lut = np.cumsum(counts)
         self.lut = self.orig_lut
         self.window = window
         self.step = step
+        self.difile = difile
+        self.lengths = difile.seq_table['length'].data
         self.n_discarded = int(self.lut[-1] / frac_good - self.lut[-1])
 
         self.subset_counts = None
         self.seed = None
         self.starts = None
-        log('done constructing LazyWindowDIFile')
-
-    @property
-    def n_seqs(self):
-        return len(self.seq_index)
-
-    @classmethod
-    def get_revcomp_map(cls, vocab):
-        d = {c: i for i, c in enumerate(vocab)}
-        rcmap = np.zeros(len(vocab), dtype=int)
-        for i, base in enumerate(vocab):
-            rc_base = cls.chars[base]
-            base_i = d[base]
-            rc_base_i = d[rc_base]
-            rcmap[base_i] = rc_base_i
-        return rcmap
-
-    def __get_helper(self, arg):
-        if arg > len(self.seq_index):
-            raise ValueError("seq_index {arg} out of bound for LazyWindowChunkedDIFile of length {len(self.seq_index)}")
-        s = 0 if arg == 0 else self.seq_index[arg - 1]
-        e = self.seq_index[arg]
-        seq = self.sequence[s:e]
-
-        idx = self.id[arg]
-        label = self.labels[arg]
-        length = self.lengths[arg]
-        return {'id': idx, 'seq': seq, 'label': label, 'length': length}
-
-    def get_label_classes(self):
-        return self._classes
-
-    def get_seq_lengths(self):
-        self.lengths.copy()
 
     def get_counts(self, orig=False):
         """
@@ -902,7 +744,7 @@ class LazyWindowChunkedDIFile:
         return counts
 
     def __len__(self):
-        return self.lut[-1] * 2 if self.rcmap is not None else self.lut[-1]
+        return self.lut[-1]
 
     def set_subset(self, subset_counts, seed, starts=None):
         """
@@ -921,12 +763,6 @@ class LazyWindowChunkedDIFile:
     def __getitem__(self, i):
         if not isinstance(i, (int, np.integer)):
             raise ValueError("LazyWindowChunkedDIFile only supports indexing with an integer")
-
-        # make sure i is a nonnegative integer
-        i = i if i >= 0 else len(self) + i
-        rev = 0
-        if self.rcmap is not None:
-            i, rev = divmod(i, 2)
 
         idx = i
         if idx < 0:
@@ -947,54 +783,68 @@ class LazyWindowChunkedDIFile:
             chunk_i = chunk_indices[chunk_i]
 
         s = self.step * chunk_i
-        l = self.lengths[seq_i]
-        e = s + min(self.window, l)
+        e = s + min(self.window, self.lengths[seq_i])
 
-        item = self.__get_helper(seq_i)
+        item = self.difile[seq_i]
+        item['seq'] = item['seq'][s:e]
         item['seq_idx'] = item['id']
-
-        if rev:
-            item['seq'] = self.rcmap[item['seq'][l-e:l-s].astype(int)].flip(0)
-        else:
-            item['seq'] = item['seq'][s:e]
         item['id'] = i
         item['length'] = e - s
         return item
 
 
-#class RevCompFilter(DIFileFilter):
-#
-#    rcmap = torch.tensor([ 9, 10, 11, 12, 13, 14, 15, 16, 17,
-#                           0,  1,  2,  3,  4,  5,  6,  7,  8], dtype=torch.uint8)
-#
-#    @classmethod
-#    def get_revcomp_map(cls, vocab):
-#        d = {c: i for i, c in enumerate(vocab)}
-#        rcmap = np.zeros(len(vocab), dtype=int)
-#        for i, base in enumerate(vocab):
-#            rc_base = cls.chars[base]
-#            base_i = d[base]
-#            rc_base_i = d[rc_base]
-#            rcmap[base_i] = rc_base_i
-#        return rcmap
-#
-#    def __init__(self, difile):
-#        super().__init__(difile)
-#        vocab = difile.seq_table.sequence.elements.data
-#        #self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
-#        self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.uint8)
-#
-#    def __len__(self):
-#        return 2 * len(self.difile)
-#
-#    def __getitem__(self, arg):
-#        oarg = arg
-#        arg, rev = divmod(arg, 2)
-#        item = self.difile[arg]
-#        try:
-#            if rev:
-#                item['seq'] = self.rcmap[item['seq'].astype(int)].flip(0)
-#        except AttributeError as e:
-#            raise ValueError("Cannot run without loading data. Use -l to load data") from e
-#        item['id'] = oarg if oarg >= 0 else len(self) + oarg
-#        return item
+
+class RevCompFilter(DIFileFilter):
+
+    rcmap = torch.tensor([ 9, 10, 11, 12, 13, 14, 15, 16, 17,
+                           0,  1,  2,  3,  4,  5,  6,  7,  8])
+
+    chars = {
+        'A': 'T',
+        'G': 'C',
+        'C': 'G',
+        'T': 'A',
+        'Y': 'R',
+        'R': 'Y',
+        'W': 'W',
+        'S': 'S',
+        'K': 'M',
+        'M': 'K',
+        'D': 'H',
+        'V': 'B',
+        'H': 'D',
+        'B': 'V',
+        'X': 'X',
+        'N': 'N',
+    }
+
+    @classmethod
+    def get_revcomp_map(cls, vocab):
+        d = {c: i for i, c in enumerate(vocab)}
+        rcmap = np.zeros(len(vocab), dtype=int)
+        for i, base in enumerate(vocab):
+            rc_base = cls.chars[base]
+            base_i = d[base]
+            rc_base_i = d[rc_base]
+            rcmap[base_i] = rc_base_i
+        return rcmap
+
+    def __init__(self, difile):
+        super().__init__(difile)
+        vocab = difile.seq_table.sequence.elements.data
+        self.rcmap = torch.as_tensor(self.get_revcomp_map(vocab), dtype=torch.long)
+
+    def __len__(self):
+        return 2 * len(self.difile)
+
+    def __getitem__(self, arg):
+        oarg = arg
+        arg, rev = divmod(arg, 2)
+        item = self.difile[arg]
+        try:
+            if rev:
+                item['seq'] = self.rcmap[item['seq'].astype(int)].flip(0)
+        except AttributeError as e:
+            raise ValueError("Cannot run without loading data. Use -l to load data") from e
+        item['id'] = oarg if oarg >= 0 else len(self) + oarg
+        return item

@@ -6,6 +6,7 @@ import torch
 import argparse
 from time import time
 
+from ...sequence import WindowChunkedDIFile
 from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
 
 class AbstractLit(LightningModule):
@@ -134,7 +135,7 @@ class AbstractLit(LightningModule):
     def training_step(self, batch, batch_idx):
         seqs, target = batch
         output = self.forward(seqs)
-        loss = self._loss(output, target.long())
+        loss = self._loss(output, target)
         if self.hparams.classify:
             self.log(self.train_acc, self.accuracy(output, target), prog_bar=True)
         self.log_dict({self.train_loss: loss, 'time': self.step_time(), 'wall_time': time()})
@@ -152,7 +153,7 @@ class AbstractLit(LightningModule):
     def validation_step(self, batch, batch_idx):
         seqs, target = batch
         output = self(seqs)
-        loss = self._loss(output, target.long())
+        loss = self._loss(output, target)
         if self.hparams.classify:
             self.log(self.val_acc, self.accuracy(output, target), prog_bar=True)
         self.log_dict({self.val_loss: loss, 'time': self.step_time(), 'wall_time': time()})
@@ -166,7 +167,7 @@ class AbstractLit(LightningModule):
     def test_step(self, batch, batch_idx):
         seqs, target = batch
         output = self(seqs)
-        loss = self._loss(output, target.long())
+        loss = self._loss(output, target)
         self.log_dict({self.test_loss: loss, 'time': self.step_time(), 'wall_time': time()})
         return loss
 
