@@ -2,8 +2,12 @@ import argparse
 import sys
 from time import time
 import warnings
-from tqdm import tqdm
 
+import psutil
+import os
+
+from hdmf.common import get_hdf5io
+from tqdm import tqdm
 import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
@@ -11,13 +15,9 @@ import numpy as np
 from torch.utils.data import DataLoader, Dataset, Sampler, Subset, SequentialSampler
 from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
-from hdmf.common import get_hdf5io
 
-from ..sequence import AbstractChunkedDIFile, WindowChunkedDIFile, LazyWindowChunkedDIFile, RevCompFilter, DeepIndexFile, chunk_sequence, lazy_chunk_sequence, DIFileFilter
+from ..sequence import LazyWindowChunkedDIFile, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
 from ..utils import parse_seed, distsplit, balsplit, get_logger
-
-import psutil
-import os
 
 def print_mem(msg=None):
     pid = os.getpid()
@@ -66,6 +66,7 @@ def dataset_stats(argv=None):
     add_dataset_arguments(parser)
     parser.add_argument('--rank', type=int, help='subset the sequences based on world size and rank', default=None)
     parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
+    parser.add_argument('--mpi', default=False, action='store_true', help='user MPI rank/size')
     parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
@@ -86,13 +87,39 @@ def dataset_stats(argv=None):
 
     tr_len = None
     va_len = None
+    if (args.rank != None and args.size == None) or (args.rank != None and args.size == None):
+        print("You must specify both --rank and --size", file=sys.stderr)
+        exit(1)
+    elif args.rank is None and args.size is None:
+        args.rank = 0
+        args.size = 1
+
+    comm = None
+    try:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        print("MPI imported.", file=sys.stderr)
+        if args.mpi:
+            args.rank = comm.Get_rank()
+            args.size = comm.Get_size()
+            print(f"Reading for rank {args.rank} of {args.size}", file=sys.stderr)
+        comm = None
+    except:
+        pass
+
+    io = get_hdf5io(args.input, 'r')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        difile = io.read()
+    difile.set_label_key(args.tgt_tax_lvl)
+
     if args.lightning:
         args.downsample = False
         args.loader_kwargs = dict()
         if args.mem:
             print_mem('before DeepIndexDataModule')
         before = time()
-        data_mod = DeepIndexDataModule(hparams=args, keep_open=True)
+        data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, rank=args.rank, size=args.size, comm=comm)
         after = time()
         if args.mem:
             print_mem('after DeepIndexDataModule ')
@@ -104,27 +131,23 @@ def dataset_stats(argv=None):
         va_len = len(dataset)
         dataset.set_subset()
     else:
-        if (args.rank != None and args.size == None) or (args.rank != None and args.size == None):
-            print("You must specify both --rank and --size", file=sys.stderr)
-            exit(1)
-
         kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True)
         if args.rank != None:
             kwargs['rank'] = args.rank
             kwargs['size'] = args.size
+        if comm is not None:
+            kwargs['comm'] = comm
         before = time()
         dataset = LazySeqDataset(**kwargs)
         dataset.load(sequence=False)
         after = time()
 
+    io.close()
+
     print(f'Took {after - before} seconds to open {args.input}')
     difile = dataset.difile
-    orig_difile = difile
-    while not isinstance(orig_difile, DeepIndexFile):
-        orig_difile = orig_difile.difile
-
-    n_taxa = len(orig_difile.genome_table)
-    n_seqs = len(orig_difile.seq_table)
+    n_taxa = np.sum(np.bincount(difile.labels) > 0)
+    n_seqs = difile.n_seqs
 
     n_samples = len(dataset)
 
@@ -142,8 +165,6 @@ def dataset_stats(argv=None):
 
 
     if args.test_read:
-        if args.num_workers > 0:
-            dataset.close()
         print("Attempting to read training data")
         if args.lightning:
             if args.mem:
@@ -201,7 +222,6 @@ def dataset_stats(argv=None):
                 bad = True
         if not bad:
             print(f'taxonomic hierarchy for {tl1} to {tl2} okay')
-
 
 def read_all_seqs(fa_path):
 
@@ -377,8 +397,9 @@ class SeqCollater:
 
 class TrainingSeqCollater:
 
-    def __init__(self, padval):
+    def __init__(self, padval, seq_dtype=torch.uint8):
         self.padval = padval
+        self.seq_dtype = seq_dtype
 
     def __call__(self, samples):
         maxlen = 0
@@ -397,8 +418,8 @@ class TrainingSeqCollater:
                 X_ = F.pad(X, (0, dif), value=self.padval)
             X_ret.append(X_)
             y_ret.append(y)
-        X_ret = torch.stack(X_ret)
-        y_ret = torch.stack(y_ret)
+        X_ret = torch.stack(X_ret, out=torch.zeros(len(X_ret), len(X_ret[0]), dtype=self.seq_dtype))
+        y_ret = torch.stack(y_ret, out=torch.zeros(len(X_ret), dtype=torch.int32))
         return (X_ret, y_ret)
 
 
@@ -566,9 +587,9 @@ def get_collater(dataset, inference=False):
     if dataset.tnf:
         return TnfCollater(dataset.vocab)
     elif dataset.manifold:
-        return DistanceCollater(dataset.distances, seq_collater=collater)
+        return DistanceCollater(dataset.difile.distances, seq_collater=collater)
     elif dataset.graph:
-        return GraphCollater(dataset.node_ids, seq_collater=collater)
+        return GraphCollater(dataset.difile.node_ids, seq_collater=collater)
     else:
         if inference:
             return SeqCollater(dataset.padval)
@@ -627,7 +648,7 @@ class WORHelper:
 class WORSampler(Sampler):
     """Without Replacement Sampler"""
 
-    def __init__(self, length, rng=None, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
+    def __init__(self, length, rng=None, n_partitions=1, part_smplr_rng=None):
         """
         Args:
             n_partitions :          number of deterministic partitions to break up dataset into
@@ -639,20 +660,11 @@ class WORSampler(Sampler):
         if length > (2**32 - 1):
             dtype = np.uint64
 
-        self.rank = rank
-        self.size = size
 
         # trim will clip extra samples (i.e. length % size) so that each
         # rank has the same number of samples.
         # Use this later if we decide we don't want to trim tail.
-        trim = True
-        if size > 1:
-            self.indices = np.arange(rank, length, size, dtype=dtype)
-            if trim:
-                # This systematically throws out up to (size - 1) samples
-                self.indices = self.indices[:length // size]
-        else:
-            self.indices = np.arange(length, dtype=dtype)
+        self.indices = np.arange(length, dtype=dtype)
         self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
 
         # set an initial value for curr_part (i.e. current partition)
@@ -682,7 +694,7 @@ class WORSampler(Sampler):
 class DSSampler(SequentialSampler):
     """Distributed Sequential Sampler"""
 
-    def __init__(self, length, rank=0, size=1, n_partitions=1, part_smplr_rng=None):
+    def __init__(self, length, n_partitions=1, part_smplr_rng=None):
         """
         Args:
             n_partitions :          number of deterministic partitions to break up dataset into
@@ -694,11 +706,8 @@ class DSSampler(SequentialSampler):
         # set an initial value for curr_part (i.e. current partition)
         # so we can calculate lenght in __len__
         self.curr_part = self.part_sampler.sample()
-        if size > 1:
-            self.start, self.end = distsplit(length, size, rank, arange=False)
-        else:
-            self.start = 0
-            self.end = length
+        self.start = 0
+        self.end = length
 
     def __iter__(self):
         self.__it = iter(range(self.start + self.curr_part, self.end, self.part_sampler.period))
@@ -733,9 +742,19 @@ class SubsetDataLoader(DataLoader):
         return super().__iter__()
 
 
+def get_min(val, batch_size):
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    ret = comm.allreduce(val, op=MPI.MIN)
+    if (val - ret) < batch_size:
+        ret = val
+    return ret
+
 class DeepIndexDataModule(pl.LightningDataModule):
 
-    def __init__(self, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1):
+    def __init__(self, difile, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1, **lsd_kwargs):
         super().__init__()
 
         kwargs = dict(batch_size=hparams.batch_size)
@@ -745,19 +764,19 @@ class DeepIndexDataModule(pl.LightningDataModule):
         if inference:
             hparams.manifold = False
             hparams.graph = False
-            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
+            self.dataset = LazySeqDataset(difile, hparams=hparams, keep_open=keep_open, **lsd_kwargs)
         else:
-            self.dataset = LazySeqDataset(hparams=hparams, keep_open=keep_open)
-            self.dataset.load(sequence=hparams.load)
+            self.dataset = LazySeqDataset(difile, hparams=hparams, keep_open=keep_open, rank=rank, size=size, **lsd_kwargs)
+            # self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = hparams.pin_memory
 
             # set up the training sampler - shuffle for training
-            train_len = self.dataset.get_subset_len(train=True)
-            self._tr_sampler = WORSampler(train_len, rng=seed, rank=rank, size=size, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
+            train_len = get_min(self.dataset.get_subset_len(train=True), hparams.batch_size)
+            self._tr_sampler = WORSampler(train_len, rng=seed, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
             # set up the validation sampler - DO NOT shuffle for training
-            val_len = self.dataset.get_subset_len(validate=True)
-            self._val_sampler = DSSampler(val_len, rank=rank, size=size, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
+            val_len = get_min(self.dataset.get_subset_len(validate=True), hparams.batch_size)
+            self._val_sampler = DSSampler(val_len, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
 
         self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
 
@@ -765,7 +784,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
         kwargs['num_workers'] = hparams.num_workers
         if self._parallel_load:
             kwargs['multiprocessing_context'] = 'spawn'
-            kwargs['worker_init_fn'] = self.dataset.worker_init
+            #kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
         kwargs['collate_fn'] = get_collater(self.dataset, inference=inference)
@@ -779,15 +798,15 @@ class DeepIndexDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         kwargs = self._loader_kwargs.copy()
-        if self._parallel_load:
-            self.dataset.close()
+        #if self._parallel_load:
+        #    self.dataset.close()
         kwargs['sampler'] = self._tr_sampler
         return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
     def val_dataloader(self):
         kwargs = self._loader_kwargs.copy()
-        if self._parallel_load:
-            self.dataset.close()
+        #if self._parallel_load:
+        #    self.dataset.close()
         #kwargs.pop('sampler', None)
         kwargs['sampler'] = self._val_sampler
         return SubsetDataLoader(self.dataset, validate=True, **kwargs)
@@ -873,7 +892,7 @@ class LazySeqDataset(Dataset):
 
 
     """
-    def __init__(self, path=None, keep_open=False, hparams=None, lazy_chunk=True, rank=0, size=1, **kwargs):
+    def __init__(self, difile=None, keep_open=False, hparams=None, lazy_chunk=True, rank=0, size=1, **kwargs):
         self.__lazy_chunk = lazy_chunk
         kwargs.setdefault('input', None)
         kwargs.setdefault('window', None)
@@ -900,9 +919,7 @@ class LazySeqDataset(Dataset):
 
         hparams = argparse.Namespace(**kwargs)
 
-        self.path = path or hparams.input
         self.hparams = hparams
-        self.load_data = hparams.load
 
         self.window, self.step = check_window(hparams.window, hparams.step)
         self.revcomp = not hparams.fwd_only
@@ -919,19 +936,51 @@ class LazySeqDataset(Dataset):
         self._val_counts = None
         self._train_counts = None
 
+
+        self.manifold = False
+        self.graph = False
+        self.tnf = hparams.tnf
+        self.__ohe = hparams.ohe
+
+        distances = False
+        tree_graph = False
+
+        if hparams.manifold:
+            self.manifold = True
+            if hparams.tgt_tax_lvl != 'species':
+                raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
+            distances = True
+        elif hparams.graph:
+            self.graph = True
+            if hparams.tgt_tax_lvl != 'species':
+                raise ValueError("must run graph learning (-M) method with 'species' taxonomic level (-t)")
+            tree_graph = tree_graph
+        elif hparams.classify:
+            self.classify = True
+            if hparams.weighted == 'phy':
+                distances = True
+        else:
+            self.classify = True
+            if hparams.weighted == 'phy':
+                distances = True
+
         # open to get dataset length
-        self.open()
+
+        self.difile = LazyWindowChunkedDIFile(difile, self.window, self.step,
+                                              revcomp=self.revcomp,
+                                              rank=self._global_rank, size=self._world_size,
+                                              distances=distances, tree_graph=tree_graph)
+        self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
+
         self.__len = len(self.difile)
         self._orig_len = self.__len
         self.__n_outputs = self.difile.n_outputs
-        if self.__lazy_chunk:
-            if isinstance(self.difile, DIFileFilter):
-                counts = self.difile.get_counts(orig=True)
-                self._val_counts = np.round(self.val_frac * counts).astype(int)
-                self._train_counts = counts - self._val_counts
-        self.label_names = self.difile.get_label_classes()
 
-        self.vocab = self.orig_difile.get_vocab()
+        counts = self.difile.get_counts(orig=True)
+        self._val_counts = np.round(self.val_frac * counts).astype(int)
+        self._train_counts = counts - self._val_counts
+
+        self.vocab = self.difile.vocab
         if len(self.vocab) > 18:
             self.protein = True
             idx = np.where(self.vocab == '-')[0]
@@ -948,88 +997,15 @@ class LazySeqDataset(Dataset):
             else:
                 warnings.warn("Could not find null value for DNA sequences. Looking for 'N'. Padding with %s" % self.vocab[0])
                 self.padval = 0
-        self.vocab_len = len(self.vocab)
 
-        self.manifold = False
-        self.graph = False
-        self.tnf = hparams.tnf
-        self.distances = None
-        self.node_ids = None
-
-        if hparams.manifold:
-            self.manifold = True
-            self.distances = self.difile.distances.data[:]
-            if hparams.tgt_tax_lvl != 'species':
-                raise ValueError("must run manifold learning (-M) method with 'species' taxonomic level (-t)")
-        elif hparams.graph:
-            self.graph = True
-            if hparams.tgt_tax_lvl != 'species':
-                raise ValueError("must run graph learning (-M) method with 'species' taxonomic level (-t)")
-
-            # compute the reverse look up to go from taxon id to node id
-            leaves = self.difile.tree_graph.leaves[:]
-            node_ids = np.zeros(leaves.max()+1)
-            for i in range(len(leaves)):
-                tid = leaves[i]
-                if i < 0:
-                    continue
-                node_ids[tid] = i
-            self.node_ids = node_ids
-        elif hparams.classify:
-            self.classify = True
-            if hparams.weighted == 'phy':
-                self.distances = self.difile.distances.data[:]
-        else:
-            self.classify = True
-            if hparams.weighted == 'phy':
-                self.distances = self.difile.distances.data[:]
-
-        self.__ohe = hparams.ohe
-
-        if not keep_open:
-            self.close()
 
     @property
     def n_outputs(self):
         return self.__n_outputs
 
-    def close(self):
-        if self.io is not None:
-            self.io.close()
-        self.difile = None
-        self.orig_difile = None
-        self.io = None
-
     def get_graph(self):
         """Return a csr_matrix representation of the tree graph"""
-        return self.difile.tree_graph.to_spmat()
-
-    def open(self):
-        """Open the HDMF file and set up chunks and taxonomy label"""
-        if self.comm is not None:
-            self.io = get_hdf5io(self.path, 'r', comm=self.comm, driver='mpio')
-        else:
-            self.io = get_hdf5io(self.path, 'r')
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.orig_difile = self.io.read()
-
-        if self._world_size > 1:
-            self.orig_difile.set_sequence_subset(balsplit(self.orig_difile.get_seq_lengths(), self._world_size, self._global_rank))
-
-        self.difile = self.orig_difile
-
-        self.load(sequence=self.load_data)
-
-        self.difile.set_label_key(self.hparams.tgt_tax_lvl)
-
-        if self.window is not None:
-            self.set_chunks(self.window, self.step)
-
-        if self.revcomp:
-            self.set_revcomp()
-
-        self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
+        return self.difile.tree_graph
 
     @property
     def rank(self):
@@ -1043,15 +1019,6 @@ class LazySeqDataset(Dataset):
         # but it it appears that writing to standard error after starting a multiprocessing.Process
         # keeps thing moving along.
         self.open()
-
-    def set_chunks(self, window, step=None):
-        if self.__lazy_chunk:
-            self.difile = LazyWindowChunkedDIFile(self.difile, window, step)
-        else:
-            raise ValueError("We only support lazy chunking now")
-
-    def set_revcomp(self, revcomp=True):
-        self.difile = RevCompFilter(self.difile)
 
     def get_subset_len(self, train=False, validate=False, test=False):
         rc = 2 if self.revcomp else 1
@@ -1105,15 +1072,6 @@ class LazySeqDataset(Dataset):
             for tfm in transforms:
                 data.transform(tfm)
 
-    def load(self, sequence=False, device=None):
-        _load = lambda x: x[:]
-        self.orig_difile.seq_table['id'].transform(_load)
-        self.orig_difile.seq_table['length'].transform(lambda x: x[:].astype(int))
-        self.orig_difile.seq_table['sequence_index'].transform(_load)
-        if sequence:
-            self.orig_difile.seq_table['sequence_index'].target.transform(_load)
-
-
     def __getitem__(self, i):
         # get sequence
         try:
@@ -1126,8 +1084,9 @@ class LazySeqDataset(Dataset):
         label = item['label']
         seq_id = item.get('seq_idx', -1)
         ## one-hot encode sequence
-        seq = torch.as_tensor(seq, dtype=torch.int64)
+        #seq = torch.as_tensor(seq, dtype=torch.int64)
+        seq = torch.as_tensor(seq)
         if self.__ohe:
-            seq = F.one_hot(seq, num_classes=self.vocab_len).float()
+            seq = F.one_hot(seq, num_classes=len(self.difile.vocab)).float()
         label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label, seq_id)
