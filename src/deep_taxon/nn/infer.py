@@ -402,7 +402,7 @@ def to_hdmf_ai(argv=None):
 
     results = ResultsTable(...)
 
-    results.add_vector(ClassLabel(name='predictions', data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1, ...)))
+    results.add_column(ClassLabel(name='predictions', data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1, ...)))
 
     io = get_hdf5io(...)
 
