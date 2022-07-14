@@ -394,6 +394,34 @@ def cat(indices, outputs, labels, orig_lens, seq_ids):
     return ret
 
 
+def to_hdmf_ai(argv=None):
+
+    ResultsTable = common.get_class('ResultsTable', 'hdmf-ml')
+
+    ClassLabel = common.get_class('ClassLabel', 'hdmf-ml')
+
+    results = ResultsTable(...)
+
+    results.add_vector(ClassLabel(name='predictions', data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1, ...)))
+
+    io = get_hdf5io(...)
+
+    io.write(results)
+
+    labels_dset = results['predictions'].data
+
+    if args.save_chunks:
+        outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
+    labels_dset.attrs['n_classes'] = args.n_outputs
+
+    maxprob_dset = None
+    if args.maxprob > 0 :
+        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
+
+    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
+    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
+
 from . import models  # noqa: E402
 
 if __name__ == '__main__':
