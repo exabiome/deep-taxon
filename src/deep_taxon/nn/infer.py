@@ -408,19 +408,11 @@ def to_hdmf_ai(argv=None):
 
     io.write(results)
 
-    labels_dset = results['predictions'].data
+    pred_dset = results['predictions'].data
 
-    if args.save_chunks:
-        outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
-    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
-    labels_dset.attrs['n_classes'] = args.n_outputs
+    for dest_idx, outputs, preds in get_outputs(...):
 
-    maxprob_dset = None
-    if args.maxprob > 0 :
-        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
-
-    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
-    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
+        pred_dset[dest_idx] = preds
 
 from . import models  # noqa: E402
 
