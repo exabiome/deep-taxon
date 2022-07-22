@@ -414,6 +414,135 @@ def to_hdmf_ai(argv=None):
 
         pred_dset[dest_idx] = preds
 
+def parallel_chunked_inf_summ_hdmf(model, dataset, loader, args, fkwargs):
+
+    ResultsTable = common.get_class('ResultsTable', 'hdmf-ml')
+    ClassLabel = common.get_class('ClassLabel', 'hdmf-ml')
+    results = ResultsTable(...)
+
+    results.add_column(ClassLabel(name='predictions', data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1, ...)))
+    results.add_column(ClassLabel(name='predictions', data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1, ...)))
+
+
+    n_samples = len(dataset.orig_difile.seq_table)
+    all_seq_ids = dataset.orig_difile.get_sequence_subset()
+    seq_lengths  = dataset.orig_difile.get_seq_lengths()
+
+    f = h5py.File(args.output, 'w', **fkwargs)
+    outputs_dset = None
+    if args.save_chunks:
+        outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
+    labels_dset.attrs['n_classes'] = args.n_outputs
+
+    maxprob_dset = None
+    if args.maxprob > 0 :
+        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
+
+    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
+    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
+    if all_seq_ids is None:
+        seqlen_dset[:] = seq_lengths
+    else:
+        seqlen_dset[all_seq_ids] = seq_lengths
+
+    # to-write queues - we use those so we're not doing I/O at every iteration
+    outputs_q = list()
+    labels_q = list()
+    counts_q = list()
+    seqs_q = list()
+
+    # write what's in the to-write queues
+    if not hasattr(args, 'n_seqs'):
+        args.n_seqs = 500
+
+    # ensure that dataset is closed before we start up the DataLoader
+    dataset.close()
+
+    # send model to GPU
+    model.to(args.device)
+
+    uniq_labels = set()
+    for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0):
+
+        seqs, counts = np.unique(_seq_ids, return_counts=True)
+        outputs_sum = list()
+        labels = list()
+        for i in seqs:
+            mask = _seq_ids == i
+            outputs_sum.append(_outputs[mask].sum(axis=0))
+            labels.append(_labels[mask][0])
+        uniq_labels.update(_labels)
+
+        # Add the first sum of this iteration to the last sum of the
+        # previous iteration if they belong to the same sequence
+        if len(seqs_q) > 0 and seqs_q[-1] == seqs[0]:
+            outputs_q[-1] += outputs_sum[0]
+            counts_q[-1] += counts[0]
+            # drop the first sum so we don't end up with duplicates
+            seqs = seqs[1:]
+            counts = counts[1:]
+            outputs_sum = outputs_sum[1:]
+            labels = labels[1:]
+
+        outputs_q.extend(outputs_sum)
+        seqs_q.extend(seqs)
+        counts_q.extend(counts)
+        labels_q.extend(labels)
+
+        # write when we get above a certain number of sequences
+        if len(outputs_q) > args.n_seqs:
+            idx = seqs_q[:-1]
+            args.logger.debug(f"rank {dataset.rank} - saving these sequences {idx}")
+            # compute mean from sums
+            for i in range(len(idx)):
+                outputs_q[i] /= counts_q[i]
+
+            if outputs_dset is not None:
+                outputs_dset[idx] = outputs_q[:-1]
+            labels_dset[idx] = labels_q[:-1]
+
+            if maxprob_dset is not None:
+                k = outputs_q[0].shape[0] - args.maxprob
+                maxprobs = list()
+                for i in range(len(idx)):
+                    maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
+                maxprob_dset[idx] = maxprobs
+
+            if preds_dset is not None:
+                preds = [np.argmax(outputs_q[i]) for i in range(len(idx))]
+                preds_dset[idx] = preds
+
+            outputs_q = outputs_q[-1:]
+            seqs_q = seqs_q[-1:]
+            counts_q = counts_q[-1:]
+            labels_q = labels_q[-1:]
+
+    args.logger.debug(f"rank {dataset.rank} - saving these sequences {seqs_q}")
+    args.logger.debug(f"rank {dataset.rank} - came across these labels {list(sorted(uniq_labels))}")
+    # clean up what's left in the to-write queue
+    for i in range(len(seqs_q)):
+        outputs_q[i] /= counts_q[i]
+
+    if outputs_dset is not None:
+        outputs_dset[seqs_q] = outputs_q
+    labels_dset[seqs_q] = labels_q
+
+    if maxprob_dset is not None:
+        k = outputs_q[0].shape[0] - args.maxprob
+        maxprobs = list()
+        for i in range(len(seqs_q)):
+            maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
+        maxprob_dset[seqs_q] = maxprobs
+
+    if preds_dset is not None:
+        preds = [np.argmax(outputs_q[i]) for i in range(len(seqs_q))]
+        preds_dset[seqs_q] = preds
+
+    args.logger.info(f'rank {dataset.rank} - closing {args.output}')
+    f.close()
+
+
 from . import models  # noqa: E402
 
 if __name__ == '__main__':
