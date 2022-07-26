@@ -98,6 +98,7 @@ def run_train(argv=None):
     elif args.cuda_profile:
         options += f' --cuda_profile'
         args.csv = True
+        job.add_modules('cudatoolkit')
 
     if args.csv:
         options += f' --csv'
