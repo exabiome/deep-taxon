@@ -6,7 +6,7 @@ import torch
 import argparse
 from time import time
 
-from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
+from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss, ArcMarginProduct
 
 class AbstractLit(LightningModule):
 
@@ -31,6 +31,8 @@ class AbstractLit(LightningModule):
                 self._loss = HierarchicalLoss(hparams.n_taxa_all)
             else:
                 self._loss = nn.CrossEntropyLoss()
+        elif self.hparams.arcface:
+            self._loss = ArcMarginProduct(args.n_outputs, args.n_classes)
         else:
             self._loss =  nn.MSELoss()
         self.set_inference(False)
