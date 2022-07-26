@@ -744,7 +744,7 @@ class LazyWindowChunkedDIFile:
         self.subset_counts = None
         self.seed = None
         self.starts = None
-        log('done constructing LazyWindowDIFile')
+        log('done constructing LazyWindowDIFile', print_msg=rank==0)
 
     @property
     def n_seqs(self):
