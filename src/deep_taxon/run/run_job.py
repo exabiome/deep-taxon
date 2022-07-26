@@ -276,6 +276,8 @@ def run_train(argv=None):
     if args.sh is not None:
         if args.submit:
             msg = args.message
+            if msg is None:
+                msg = input(f"Please provide a log message for this job (logging to {args.log}): ")
             for i in range(args.chain):
                 with open(args.sh, 'w') as out:
                     job.write(out)
