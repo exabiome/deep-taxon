@@ -10,7 +10,6 @@ from torchvision.ops.misc import ConvNormActivation, Permute
 from torchvision.ops.stochastic_depth import StochasticDepth
 from torchvision.transforms._presets import ImageClassification
 from torchvision.models._api import Weights, WeightsEnum
-from ._utils import _ovewrite_named_param, handle_legacy_interface
 
 from . import model, AbstractLit
 
