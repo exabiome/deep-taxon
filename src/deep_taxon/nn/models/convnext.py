@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 from argparse import Namespace
 
 import torch
@@ -22,6 +22,57 @@ __all__ = [
 ]
 
 
+class Conv1dNormActivation(ConvNormActivation):
+    """
+    Configurable block used for Convolution2d-Normalization-Activation blocks.
+
+    Args:
+        in_channels (int): Number of channels in the input image
+        out_channels (int): Number of channels produced by the Convolution-Normalization-Activation block
+        kernel_size: (int, optional): Size of the convolving kernel. Default: 3
+        stride (int, optional): Stride of the convolution. Default: 1
+        padding (int, tuple or str, optional): Padding added to all four sides of the input. Default: None, in which case it will calculated as ``padding = (kernel_size - 1) // 2 * dilation``
+        groups (int, optional): Number of blocked connections from input channels to output channels. Default: 1
+        norm_layer (Callable[..., torch.nn.Module], optional): Norm layer that will be stacked on top of the convolution layer. If ``None`` this layer wont be used. Default: ``torch.nn.BatchNorm2d``
+        activation_layer (Callable[..., torch.nn.Module], optional): Activation function which will be stacked on top of the normalization layer (if not None), otherwise on top of the conv layer. If ``None`` this layer wont be used. Default: ``torch.nn.ReLU``
+        dilation (int): Spacing between kernel elements. Default: 1
+        inplace (bool): Parameter for the activation layer, which can optionally do the operation in-place. Default ``True``
+        bias (bool, optional): Whether to use bias in the convolution layer. By default, biases are included if ``norm_layer is None``.
+
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Union[int, Tuple[int, int]] = 3,
+        stride: Union[int, Tuple[int, int]] = 1,
+        padding: Optional[Union[int, Tuple[int, int], str]] = None,
+        groups: int = 1,
+        norm_layer: Optional[Callable[..., torch.nn.Module]] = torch.nn.BatchNorm2d,
+        activation_layer: Optional[Callable[..., torch.nn.Module]] = torch.nn.ReLU,
+        dilation: Union[int, Tuple[int, int]] = 1,
+        inplace: Optional[bool] = True,
+        bias: Optional[bool] = None,
+    ) -> None:
+
+        super().__init__(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            groups,
+            norm_layer,
+            activation_layer,
+            dilation,
+            inplace,
+            bias,
+            torch.nn.Conv1d,
+        )
+
+
+
 class LayerNorm1d(nn.LayerNorm):
     def forward(self, x: Tensor) -> Tensor:
         # x = x.permute(0, 2, 3, 1)
@@ -32,7 +83,7 @@ class LayerNorm1d(nn.LayerNorm):
         return x
 
 
-class CNBlock(AbstractLit):
+class CNBlock(nn.Module):
     def __init__(
         self,
         dim,
@@ -53,7 +104,7 @@ class CNBlock(AbstractLit):
             nn.Linear(in_features=4 * dim, out_features=dim, bias=True),
             Permute([0, 2, 1]),
         )
-        self.layer_scale = nn.Parameter(torch.ones(dim, 1, 1) * layer_scale)
+        self.layer_scale = nn.Parameter(torch.ones(dim, 1) * layer_scale)
         self.stochastic_depth = StochasticDepth(stochastic_depth_prob, "row")
 
     def forward(self, input: Tensor) -> Tensor:
@@ -84,27 +135,25 @@ class CNBlockConfig:
         return s.format(**self.__dict__)
 
 
-class ConvNeXt(nn.Module):
+class ConvNeXt(AbstractLit):
     def __init__(
         self,
         hparams: Namespace
     ) -> None:
-        super().__init__()
+        super().__init__(hparams)
 
-        if getattr(hparams, 'layer_scale', None) is None:
-            hparams.layer_scale = 1e-6
-        if getattr(hparams, 'block', None) is None:
-            hparams.block = CNBlock
-
-        if norm_layer is None:
-            norm_layer = partial(LayerNorm1d, eps=1e-6)
+        stochastic_depth_prob = getattr(hparams, 'stochastic_depth_prob ', 0.0)
+        layer_scale = getattr(hparams, 'layer_scale', 1e-6)
+        block = getattr(hparams, 'block', CNBlock)
+        norm_layer = getattr(hparams, 'norm_layer ', partial(LayerNorm1d, eps=1e-6))
+        n_emb = getattr(hparams, 'n_emb ', 8)
 
         layers: List[nn.Module] = []
 
         # Stem
         firstconv_output_channels = hparams.block_setting[0].input_channels
         layers.append(
-            ConvNormActivation(
+            Conv1dNormActivation(
                 n_emb,
                 firstconv_output_channels,
                 kernel_size=4,
@@ -113,7 +162,6 @@ class ConvNeXt(nn.Module):
                 norm_layer=norm_layer,
                 activation_layer=None,
                 bias=True,
-                conv_layer=nn.Conv1d
             )
         )
 
@@ -124,8 +172,8 @@ class ConvNeXt(nn.Module):
             stage: List[nn.Module] = []
             for _ in range(cnf.num_layers):
                 # adjust stochastic depth probability based on the depth of the stage block
-                sd_prob = hparams.stochastic_depth_prob * stage_block_id / (total_stage_blocks - 1.0)
-                stage.append(block(cnf.input_channels, hparams.layer_scale, sd_prob))
+                sd_prob = stochastic_depth_prob * stage_block_id / (total_stage_blocks - 1.0)
+                stage.append(block(cnf.input_channels, layer_scale, sd_prob))
                 stage_block_id += 1
             layers.append(nn.Sequential(*stage))
             if cnf.out_channels is not None:
@@ -138,7 +186,6 @@ class ConvNeXt(nn.Module):
                 )
 
         input_nc = getattr(hparams, 'input_nc', None)
-        n_emb = 8
 
         self.embedding = nn.Embedding(input_nc, n_emb)
 
@@ -160,7 +207,8 @@ class ConvNeXt(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def _forward_impl(self, x: Tensor) -> Tensor:
-        x = self.embedding(x)
+        x = self.embedding(x.int())
+        x = x.permute(0, 2, 1)
         x = self.features(x)
         x = self.avgpool(x)
         x = self.classifier(x)
