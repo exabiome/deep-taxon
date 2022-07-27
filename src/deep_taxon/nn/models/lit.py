@@ -6,7 +6,7 @@ import torch
 import argparse
 from time import time
 
-from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss, ArcMarginProduct
+from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
 
 class AbstractLit(LightningModule):
 
@@ -23,18 +23,15 @@ class AbstractLit(LightningModule):
         #self.hparams = self.check_hparams(hparams)
         self.save_hyperparameters(hparams)
         if self.hparams.manifold:
-            #self._loss = DistMSELoss()
             self._loss = HyperbolicMAELoss()
-            #self._loss = EuclideanMAELoss()
         elif self.hparams.classify:
             if self.hparams.tgt_tax_lvl == 'all':
                 self._loss = HierarchicalLoss(hparams.n_taxa_all)
             else:
                 self._loss = nn.CrossEntropyLoss()
-        elif self.hparams.arcface:
-            self._loss = ArcMarginProduct(args.n_outputs, args.n_classes)
         else:
             self._loss =  nn.MSELoss()
+
         self.set_inference(False)
         self.lr = lr or getattr(hparams, 'lr', None)
         self.last_time = time()
@@ -153,7 +150,7 @@ class AbstractLit(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         seqs, target = batch
-        output = self(seqs)
+        output = self.forward(seqs)
         loss = self._loss(output, target.long())
         if self.hparams.classify:
             self.log(self.val_acc, self.accuracy(output, target), prog_bar=True)

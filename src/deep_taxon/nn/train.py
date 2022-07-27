@@ -56,7 +56,7 @@ def get_conf_args():
         'weighted': dict(default=None, choices=[], help='weight classes in classification. options are ins, isns,ens, or phylo (Ignored)'),
         'ens_beta': dict(help='the value of beta to use when weighting with effective number of sample (ens)', default=0.9),
         'phylo_neighbors': dict(help='the number of neighbors to use for phylogenetic weighting', default=5),
-        'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify without arcface loss', default=512),
+        'n_outputs': dict(help='the number of outputs in the final layer. Ignored if --classify without arc_margin loss', default=512),
         'accumulate': dict(help='accumulate_grad_batches argument to pl.Trainer', default=1),
         'dropout_rate': dict(help='the dropout rate to use', default=0.5),
         'optimizer': dict(choices=['adam', 'lamb'], help='the optimizer to use', default='adam'),
@@ -82,7 +82,7 @@ def get_conf_args():
         'n_partitions': dict(type=int, help='the number of dataset partitions.', default=1),
         'fwd_only': dict(action='store_true', help='use forward strand of sequences only', default=False),
         'classify': dict(action='store_true', help='run a classification problem', default=False),
-        'arcface': dict(action='store_true', help='use arcface loss function', default=False),
+        'arc_margin': dict(action='store_true', help='use arc_margin loss function', default=False),
         'manifold': dict(action='store_true', help='run a manifold learning problem', default=False),
         'bottleneck': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=True),
         'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
@@ -302,7 +302,7 @@ def process_args(args=None):
                                    rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
 
     args.n_classes = data_mod.dataset.n_classes
-    if args.classify and not args.arcface:
+    if args.classify and not args.arc_margin:
         args.n_outputs = args.n_classes
 
     args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
