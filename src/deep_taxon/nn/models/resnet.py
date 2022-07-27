@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 
 from . import model, AbstractLit, HierarchicalClassifier
-from .arcmargin import ArcMarginProduct
 
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
@@ -207,8 +206,6 @@ class ResNet(AbstractLit):
                 nn.Linear(512, hparams.n_outputs),
             )
 
-        elif hparams.arc_margin:
-            self.fc = ArcMarginProduct(hparams.n_outputs, hparams.n_classes)
         else:
             self.fc = nn.Sequential(
                 nn.Linear(n_output_channels, 512),
