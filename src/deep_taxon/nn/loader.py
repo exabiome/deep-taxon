@@ -1090,3 +1090,6 @@ class LazySeqDataset(Dataset):
             seq = F.one_hot(seq, num_classes=len(self.difile.vocab)).float()
         label = torch.as_tensor(label, dtype=self._label_dtype)
         return (idx, seq, label, seq_id)
+
+
+class FastDataModule(pl.LightnightDataModule):
