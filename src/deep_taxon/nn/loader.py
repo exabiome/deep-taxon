@@ -742,16 +742,6 @@ class SubsetDataLoader(DataLoader):
         return super().__iter__()
 
 
-def get_min(val, batch_size):
-    from mpi4py import MPI
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
-    ret = comm.allreduce(val, op=MPI.MIN)
-    if (val - ret) < batch_size:
-        ret = val
-    return ret
-
 class DeepIndexDataModule(pl.LightningDataModule):
 
     def __init__(self, difile, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1, **lsd_kwargs):
@@ -760,6 +750,12 @@ class DeepIndexDataModule(pl.LightningDataModule):
         kwargs = dict(batch_size=hparams.batch_size)
         if seed is None:
             seed = parse_seed('')
+
+        self.seed = seed
+        self.rank = rank
+        self.size = size
+        self.n_partitions = hparams.n_partitions
+        self.batch_size = hparams.batch_size
 
         if inference:
             hparams.manifold = False
@@ -770,13 +766,8 @@ class DeepIndexDataModule(pl.LightningDataModule):
             # self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = hparams.pin_memory
 
-            # set up the training sampler - shuffle for training
-            train_len = get_min(self.dataset.get_subset_len(train=True), hparams.batch_size)
-            self._tr_sampler = WORSampler(train_len, rng=seed, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
-
-            # set up the validation sampler - DO NOT shuffle for training
-            val_len = get_min(self.dataset.get_subset_len(validate=True), hparams.batch_size)
-            self._val_sampler = DSSampler(val_len, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
+            self._tr_sampler = None
+            self._val_sampler = None
 
         self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
 
@@ -796,18 +787,35 @@ class DeepIndexDataModule(pl.LightningDataModule):
         if self._loader_kwargs.get('num_workers', None) not in (None, 0):
             self.dataset.close()
 
+    def get_min(self, val, batch_size):
+        #from mpi4py import MPI
+        #comm = MPI.COMM_WORLD
+        #rank = comm.Get_rank()
+        #size = comm.Get_size()
+        #ret = comm.allreduce(val, op=MPI.MIN)
+        import torch.distributed as dist
+        ret = torch.tensor(val).cuda()
+        dist.all_reduce(ret, op=dist.ReduceOp.MIN)
+        ret = int(ret.cpu())
+        if (val - ret) < batch_size:
+            ret = val
+        return ret
+
     def train_dataloader(self):
         kwargs = self._loader_kwargs.copy()
-        #if self._parallel_load:
-        #    self.dataset.close()
+        if self._tr_sampler is None:
+            # set up the training sampler - shuffle for training
+            train_len = self.get_min(self.dataset.get_subset_len(train=True), self.batch_size)
+            self._tr_sampler = WORSampler(train_len, rng=self.seed, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
         kwargs['sampler'] = self._tr_sampler
         return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
     def val_dataloader(self):
         kwargs = self._loader_kwargs.copy()
-        #if self._parallel_load:
-        #    self.dataset.close()
-        #kwargs.pop('sampler', None)
+        if self._val_sampler is None:
+            # set up the validation sampler - DO NOT shuffle for training
+            val_len = self.get_min(self.dataset.get_subset_len(validate=True), self.batch_size)
+            self._val_sampler = DSSampler(val_len, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
         kwargs['sampler'] = self._val_sampler
         return SubsetDataLoader(self.dataset, validate=True, **kwargs)
 

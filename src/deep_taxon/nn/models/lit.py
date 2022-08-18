@@ -65,14 +65,21 @@ class AbstractLit(LightningModule):
 
     def configure_optimizers(self):
         optimizer = None
-        if self.hparams.optimizer == 'lamb':
-            optimizer = ptoptim.Lamb(self.parameters(), lr=self.hparams.lr)
-        elif self.hparams.optimizer == 'adam':
-            optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
-        elif self.hparams.optimizer == 'adamw':
-            optimizer = optim.AdamW(self.parameters(), lr=self.hparams.lr)
+        if self.hparams.apex:
+            import apex.optimizers as aoptim
+            if self.hparams.optimizer == 'lamb':
+                optimizer = aoptim.FusedLAMB(self.parameters(), lr=self.hparams.lr)
+            elif self.hparams.optimizer == 'adamw':
+                optimizer = aoptim.FusedAdam(self.parameters(), lr=self.hparams.lr, adam_w_mode=True)
+            else:
+                optimizer = aoptim.FusedAdam(self.parameters(), lr=self.hparams.lr, adam_w_mode=False)
         else:
-            optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
+            if self.hparams.optimizer == 'lamb':
+                optimizer = ptoptim.Lamb(self.parameters(), lr=self.hparams.lr)
+            elif self.hparams.optimizer == 'adamw':
+                optimizer = optim.AdamW(self.parameters(), lr=self.hparams.lr)
+            else:
+                optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
 
         scheduler = None
         if self.hparams.lr_scheduler == 'cyclic':

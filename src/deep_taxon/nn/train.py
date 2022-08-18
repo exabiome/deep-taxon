@@ -7,7 +7,7 @@ import json
 import ruamel.yaml as yaml
 from time import time
 from tqdm import tqdm
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
@@ -25,8 +25,6 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, Stochast
 
 from pytorch_lightning.profiler import PyTorchProfiler
 
-from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
-from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, SingleDevicePlugin, PrecisionPlugin
 from pytorch_lightning.plugins.environments import SLURMEnvironment, LSFEnvironment
 from pytorch_lightning.strategies import DDPStrategy
 
@@ -164,6 +162,8 @@ def parse_args(*addl_args, argv=None):
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
     grp.add_argument('--ipu', default=False, action='store_true', help='running on Graphcore system')
     parser.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
+    parser.add_argument('--apex', action='store_true', default=False, help='use Apex AMP')
+    parser.add_argument('--n_val_checks', type=int, help='number of validation checks to run each epoch', default=1)
 
     dl_grp = parser.add_argument_group('Data loading')
     dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
@@ -197,6 +197,7 @@ def process_args(args=None):
     )
 
     targs['accumulate_grad_batches'] = args.accumulate
+    targs['val_check_interval'] = 1 / args.n_val_checks
 
 
     env = None
@@ -239,18 +240,13 @@ def process_args(args=None):
             else:
                 if env is None:
                     raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
-                # parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count()) if i < targs['gpus']]
-                # precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda')
                 torch.cuda.set_device(env.local_rank())
                 targs['devices'] = targs['gpus']
                 targs['strategy'] = DDPStrategy(find_unused_parameters=False,
-                                                cluster_environment=env,
-                                                #accelerator=GPUAccelerator(),
-                                                #parallel_devices=parallel_devices,
-                                                #precision_plugin=precision_plugin,
-                                    )
+                                                cluster_environment=env)
+            targs['precision'] = 16
+            targs['amp_backend'] = 'native'
 
-                print("---- Rank %s  -  Using GPUAccelerator with DDPStrategy" % env.global_rank(), file=sys.stderr)
         else:
             targs['accelerator'] = 'cpu'
 
@@ -263,6 +259,7 @@ def process_args(args=None):
             args.sanity = 4000
         targs['limit_train_batches'] = args.sanity
         targs['limit_val_batches'] = args.sanity // 4
+        targs['log_every_n_steps'] = args.sanity // 10
 
     if args.lr_find:
         targs['auto_lr_find'] = True
@@ -483,6 +480,14 @@ def run_lightning(argv=None):
                                          save_top_k=3,
                                          mode=mode,
                                          monitor=monitor))
+        if not args.sanity:
+            callbacks.append(ModelCheckpoint(dirpath=outdir,
+                                             save_weights_only=False,
+                                             train_time_interval=timedelta(seconds=3600),
+                                             save_top_k=5,
+                                             save_last=True,
+                                             mode=mode,
+                                             monitor=monitor))
 
     if args.early_stop:
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
