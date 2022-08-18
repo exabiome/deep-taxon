@@ -46,7 +46,7 @@ class SlurmJob(AbstractJob):
             arch = 'haswell'
         self.add_addl_jobflag('C', arch)
         #self.add_addl_jobflag('G', self.gpus)
-        self.add_addl_jobflag('c', 10)
+        self.add_addl_jobflag('-cpus-per-task', int(2*[64/self.gpus]))
         self.add_addl_jobflag('-ntasks-per-node', self.gpus)
         self.add_addl_jobflag('-gpus-per-node', 4)
 
