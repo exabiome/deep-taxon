@@ -7,6 +7,7 @@ import argparse
 from time import time
 
 from ..loss import DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
+from .. import TIME_OFFSET
 
 class AbstractLit(LightningModule):
 
@@ -65,8 +66,13 @@ class AbstractLit(LightningModule):
 
     def configure_optimizers(self):
         optimizer = None
-        if self.hparams.apex:
+        has_apex = True
+        try:
             import apex.optimizers as aoptim
+        except:
+            has_apex = False
+
+        if has_apex and self.hparams.apex:
             if self.hparams.optimizer == 'lamb':
                 optimizer = aoptim.FusedLAMB(self.parameters(), lr=self.hparams.lr)
             elif self.hparams.optimizer == 'adamw':
@@ -123,11 +129,18 @@ class AbstractLit(LightningModule):
         acc = (pred == target).float().sum()/len(target)
         return acc
 
-    def step_time(self):
+    def restart(self):
+        """Set training/validation epoch start time"""
+        t = time()
+        self.start_time = t
+        self.last_time = t
+
+    def time_stats(self, batch_idx):
         curr_time = time()
-        ret = curr_time - self.last_time
+        step_time = curr_time - self.last_time
         self.last_time = curr_time
-        return ret
+        wall_time = curr_time - TIME_OFFSET
+        return {'rate': (batch_idx + 1) / (curr_time - self.start_time), 'time': step_time, 'wall_time': wall_time}
 
     def predict_step(self, batch, batch_idx, dataloader_idx=None):
         idx, seqs, target, olen, seq_id = batch
@@ -135,8 +148,7 @@ class AbstractLit(LightningModule):
 
     # TRAIN
     def on_train_start(self):
-        self.log('wall_time', time())
-        self.last_time = time()
+        self.restart()
 
     def training_step(self, batch, batch_idx):
         seqs, target = batch
@@ -144,17 +156,17 @@ class AbstractLit(LightningModule):
         loss = self._loss(output, target.long())
         if self.hparams.classify:
             self.log(self.train_acc, self.accuracy(output, target), prog_bar=True)
-        self.log_dict({self.train_loss: loss, 'time': self.step_time(), 'wall_time': time()})
+        stats = self.time_stats(batch_idx)
+        stats[self.train_loss] = loss
+        self.log_dict(stats)
         return loss
 
     def training_epoch_end(self, outputs):
-        self.log('wall_time', time())
         return None
 
     # VALIDATION
     def on_validation_start(self):
-        self.log('wall_time', time())
-        self.last_time = time()
+        self.restart()
 
     def validation_step(self, batch, batch_idx):
         seqs, target = batch
@@ -162,11 +174,12 @@ class AbstractLit(LightningModule):
         loss = self._loss(output, target.long())
         if self.hparams.classify:
             self.log(self.val_acc, self.accuracy(output, target), prog_bar=True)
-        self.log_dict({self.val_loss: loss, 'time': self.step_time(), 'wall_time': time()})
+        stats = self.time_stats(batch_idx)
+        stats[self.val_loss] = loss
+        self.log_dict(stats)
         return loss
 
     def validation_epoch_end(self, outputs):
-        self.log('wall_time', time())
         return None
 
     # TEST
@@ -178,5 +191,4 @@ class AbstractLit(LightningModule):
         return loss
 
     def test_epoch_end(self, outputs):
-        self.log('wall_time', time())
         return None

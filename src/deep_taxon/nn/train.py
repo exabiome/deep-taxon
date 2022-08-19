@@ -13,6 +13,7 @@ from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
 from .loader import add_dataset_arguments, DeepIndexDataModule
 from ..sequence import DeepIndexFile
+from . import TIME_OFFSET
 from hdmf.utils import docval
 from hdmf.common import get_hdf5io
 
@@ -162,8 +163,8 @@ def parse_args(*addl_args, argv=None):
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
     grp.add_argument('--ipu', default=False, action='store_true', help='running on Graphcore system')
     parser.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
-    parser.add_argument('--apex', action='store_true', default=False, help='use Apex AMP')
-    parser.add_argument('--n_val_checks', type=int, help='number of validation checks to run each epoch', default=1)
+    parser.add_argument('--apex', action='store_true', default=False, help='use Apex fused optimizers')
+    parser.add_argument('-V', '--n_val_checks', type=int, help='number of validation checks to run each epoch', default=1)
 
     dl_grp = parser.add_argument_group('Data loading')
     dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
@@ -232,6 +233,11 @@ def process_args(args=None):
                 print(">>> Could not get global rank -- setting RANK to 0 and SIZE to 1", file=sys.stderr)
                 RANK = 0
                 SIZE = 1
+            print(f'global rank {env.global_rank()} of {env.world_size()} - local rank {env.local_rank()} on node {env.node_rank()} - {torch.cuda.device_count()} GPUs visible', file=sys.stderr)
+        else:
+            os.environ["MASTER_ADDR"] = "127.0.0.1"
+            os.environ["MASTER_PORT"] = "12910"
+            torch.distributed.init_process_group('nccl', rank=0, world_size=1)
 
         if targs['gpus'] is not None:
             targs['accelerator'] = 'gpu'
@@ -417,14 +423,6 @@ def run_lightning(argv=None):
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
 
-    # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
-    #     from mpi4py import MPI
-    #     comm = MPI.COMM_WORLD
-    #     RANK = comm.Get_rank()
-    # else:
-    #     RANK = 0
-    #     print('OMPI_COMM_WORLD_RANK or SLURMD_NODENAME not set in environment -- not using MPI')
-
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
     check_directory(outdir)
@@ -460,7 +458,7 @@ def run_lightning(argv=None):
     seed_everything(args.seed)
 
     if args.csv:
-        logger = CSVLogger(save_dir=output('logs')),
+        logger = CSVLogger(save_dir=output('logs'))
     else:
         logger = WandbLogger(project="deep-taxon", entity='deep-taxon',
                               name=args.experiment)
@@ -520,7 +518,10 @@ def run_lightning(argv=None):
         print_dataloader(data_mod.val_dataloader())
 
     s = datetime.now()
-    print0('START_TIME', time())
+    t = time()
+    logger.log_metrics({'start_time': t - TIME_OFFSET})
+    print0('START_TIME', t)
+    print0('LOGGER TIME OFFSET', TIME_OFFSET)
     trainer.fit(model, data_mod)
     e = datetime.now()
     td = e - s

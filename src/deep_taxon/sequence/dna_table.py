@@ -512,9 +512,9 @@ class DeepIndexFile(Container):
             seq_dset = self.seq_table['sequence'].target.data
             ## read one sequence at a time
             it = zip(starts, ends)
+            log('Loading data subset - loading sequences from subset', print_msg=verbose)
             if verbose:
                 it = tqdm(it, total=len(starts))
-            log('Loading data subset - loading sequences from subset', print_msg=verbose)
             for s_src, e_src in it:
                 e_dest = e_src - s_src + s_dest
                 seq_dset.read_direct(sequence_subset, np.s_[s_src:e_src], np.s_[s_dest:e_dest])
