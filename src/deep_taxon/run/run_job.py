@@ -40,7 +40,7 @@ def run_train(argv=None):
     grp.add_argument('--perlmutter',  help='make script for running on NERSC Perlmutter',  action='store_true', default=False)
     grp.add_argument('--summit',      help='make script for running on OLCF Summit', action='store_true', default=False)
 
-    parser.add_argument('-B', '--global_bs', type=int, help='the global batch size. Using this option will set batch_size in the config', default=None)
+    parser.add_argument('-B', '--global_bs', type=eval, help='the global batch size. Using this option will set batch_size in the config', default=None)
     parser.add_argument('-V', '--n_val_checks', type=int, help='the number of validation checks to do per epoch', default=1)
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
