@@ -148,7 +148,8 @@ def parse_args(*addl_args, argv=None):
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-i', '--init', type=str, help='a checkpoint to initalize a model from', default=None)
     grp.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
-    parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
+    parser.add_argument('-T', '--timed_checkpoint', metavar='MIN', nargs='?', const=True, default=False,
+                        help='run a checkpoing ever MIN seconds. By default MIN=10')
     parser.add_argument('-D', '--disable_checkpoint', action='store_true', help='do not save model checkpoints every epoch', default=False)
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
@@ -478,14 +479,19 @@ def run_lightning(argv=None):
                                          save_top_k=3,
                                          mode=mode,
                                          monitor=monitor))
-        if not args.sanity:
+        if args.timed_checkpoint:
+            if isinstance(args.timed_checkpoint, str):
+                args.timed_checkpoint = int(args.timed_checkpoint)
+            else:
+                args.timed_checkpoint = 10
+
             callbacks.append(ModelCheckpoint(dirpath=outdir,
+                                             filename='t-{epoch}-{step}',
                                              save_weights_only=False,
-                                             train_time_interval=timedelta(seconds=3600),
-                                             save_top_k=5,
+                                             train_time_interval=timedelta(minutes=args.timed_checkpoint),
+                                             save_top_k=1,
                                              save_last=True,
-                                             mode=mode,
-                                             monitor=monitor))
+                                             monitor=None))
 
     if args.early_stop:
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))

@@ -27,7 +27,7 @@ def run_train(argv=None):
     parser.add_argument('-a', '--chain',       help="chain jobs in submission", type=int, default=1)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
-    rsc_grp.add_argument('-T', '--time',       help='the time to run the job for', default='01:00:00')
+    rsc_grp.add_argument('-t', '--time',       help='the time to run the job for', default='01:00:00')
     rsc_grp.add_argument('-n', '--nodes',      help="the number of nodes to use", default=None, type=int)
     rsc_grp.add_argument('-g', '--gpus',       help="the number of GPUs to use", default=None, type=int)
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
@@ -40,6 +40,7 @@ def run_train(argv=None):
     grp.add_argument('--perlmutter',  help='make script for running on NERSC Perlmutter',  action='store_true', default=False)
     grp.add_argument('--summit',      help='make script for running on OLCF Summit', action='store_true', default=False)
 
+    parser.add_argument('-B', '--global_bs', type=int, help='the global batch size. Using this option will set batch_size in the config', default=None)
     parser.add_argument('-V', '--n_val_checks', type=int, help='the number of validation checks to do per epoch', default=1)
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
@@ -53,6 +54,8 @@ def run_train(argv=None):
     parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
     parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
+    parser.add_argument('-T', '--timed_checkpoint', metavar='MIN', nargs='?', const=True, default=False,
+                        help='run a checkpoing ever MIN seconds. By default MIN=10')
     parser.add_argument('--early_stop',         help="use PL early stopping", action='store_true', default=False)
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('--csv', action='store_true', default=False, help='log to a CSV file instead of WandB')
@@ -73,6 +76,9 @@ def run_train(argv=None):
     with open(args.config, 'r') as f:
         conf = yaml.safe_load(f)
 
+    if args.global_bs is not None:
+        conf['batch_size'] = args.global_bs // (args.nodes * args.gpus)
+
     if conf.get('optimizer', "").startswith('adam') and conf.get('lr_scheduler', '') == 'cyclic':
         print("ERROR - Cannot use cyclic LR scheduler with Adam/AdamW", file=sys.stderr)
         exit(1)
@@ -90,8 +96,13 @@ def run_train(argv=None):
     if args.debug:
         job.set_debug(True)
 
+    if args.timed_checkpoint:
+        options += ' -T'
+        if isinstance(args.timed_checkpoint, str):
+            options += f' {args.timed_checkpoint}'
+
     if args.sanity:
-        options = '--sanity'
+        options += ' -s'
         if isinstance(args.sanity, str):
             options += f' {args.sanity}'
 
