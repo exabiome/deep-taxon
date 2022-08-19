@@ -33,6 +33,7 @@ def run_train(argv=None):
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
     rsc_grp.add_argument('-q', '--queue',      help="the queue to submit to", default=None)
     rsc_grp.add_argument('-P', '--project',    help="the project/account to submit under", default=None)
+    rsc_grp.add_argument('-S', '--scratch',    help="the job require scratch", default=False, action='store_true')
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
@@ -265,6 +266,9 @@ def run_train(argv=None):
     for i in range(len(argv)):
         if " " in argv[i]:
             argv[i] = f'"{argv[i]}"'
+
+    if args.scratch:
+        job.add_addl_jobflag('L', 'scratch')
 
     def submit(job, shell, message):
         job_id = job.submit_job(shell, conda_env=args.conda_env)
