@@ -66,12 +66,15 @@ def run_train(argv=None):
 
     job = get_job(args)
 
+    if not os.path.exists(args.config):
+        print(f"ERROR - Config file {args.config} does not exist", file=sys.stderr)
+        exit(1)
+
     with open(args.config, 'r') as f:
         conf = yaml.safe_load(f)
 
-
     if conf.get('optimizer', "").startswith('adam') and conf.get('lr_scheduler', '') == 'cyclic':
-        print("Cannot use cyclic LR scheduler with Adam/AdamW", file=sys.stderr)
+        print("ERROR - Cannot use cyclic LR scheduler with Adam/AdamW", file=sys.stderr)
         exit(1)
 
     if conf.get('seed', None) is None:
@@ -79,6 +82,9 @@ def run_train(argv=None):
 
 
     args.input = os.path.abspath(args.input)
+    if not os.path.exists(args.input):
+        print(f"ERROR - Input file {args.input} does not exist", file=sys.stderr)
+        exit(1)
 
     options = ''
     if args.debug:
