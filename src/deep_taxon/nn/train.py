@@ -166,6 +166,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
     parser.add_argument('--apex', action='store_true', default=False, help='use Apex fused optimizers')
     parser.add_argument('-V', '--n_val_checks', type=int, help='number of validation checks to run each epoch', default=1)
+    parser.add_argument('-W', '--wandb_id', type=str, help='the WandB ID. Use this to resume previous runs', default=None)
 
     dl_grp = parser.add_argument_group('Data loading')
     dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
@@ -273,9 +274,7 @@ def process_args(args=None):
     del args.lr_find
 
     if args.checkpoint is not None:
-        if os.path.exists(args.checkpoint):
-            targs['resume_from_checkpoint'] = args.checkpoint
-        else:
+        if not os.path.exists(args.checkpoint):
             warnings.warn("Ignoring -c/--checkpoint argument because {args.checkpoint} does not exist.")
             args.checkpoint = None
 
@@ -461,6 +460,13 @@ def run_lightning(argv=None):
     if args.csv:
         logger = CSVLogger(save_dir=output('logs'))
     else:
+        #resume = None
+        #if args.checkpoint is not None:
+        #    resume = 'allow'
+        #    import wandb
+        #    args.checkpoint = wandb.restore(args.checkpoint, run_path=f'{outdir}/wandb/latest-run')
+        #logger = WandbLogger(project="deep-taxon", entity='deep-taxon', id=args.wandb_id, log_model='all',
+        #                      name=args.experiment, save_dir=outdir, resume=resume)
         logger = WandbLogger(project="deep-taxon", entity='deep-taxon',
                               name=args.experiment)
 
@@ -528,7 +534,7 @@ def run_lightning(argv=None):
     logger.log_metrics({'start_time': t - TIME_OFFSET})
     print0('START_TIME', t)
     print0('LOGGER TIME OFFSET', TIME_OFFSET)
-    trainer.fit(model, data_mod)
+    trainer.fit(model, data_mod, ckpt_path=args.checkpoint)
     e = datetime.now()
     td = e - s
     hours, seconds = divmod(td.seconds, 3600)

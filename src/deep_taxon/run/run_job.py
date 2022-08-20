@@ -65,6 +65,7 @@ def run_train(argv=None):
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
+    parser.add_argument('-W', '--wandb_id', type=str, help='the WandB ID. Use this to resume previous runs', default=hex(hash(time.time()))[2:10])
 
     args = parser.parse_args(argv)
 
@@ -122,6 +123,9 @@ def run_train(argv=None):
 
     if args.csv:
         options += f' --csv'
+    else:
+        if args.wandb_id is not None:
+            options += f' -W {args.wandb_id}'
 
     if args.apex:
         options += f' --apex'
