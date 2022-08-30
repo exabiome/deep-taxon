@@ -245,9 +245,8 @@ def run_train(argv=None):
             job.add_command(f"srun --ntasks {args.nodes} --ntasks-per-node 1 cp $INPUT $SHM_INPUT")
 
     if args.perlmutter or args.cori:
-        abspath = os.path.abspath(args.input)
         scratch = os.environ.get('SCRATCH', '')
-        if abspath.startswith(scratch):
+        if any(os.path.abspath(x).startswith(scratch) for x in (args.input, args.outdir, args.conf)):
             job.add_addl_jobflag('L', 'scratch')
 
 
