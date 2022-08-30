@@ -3,6 +3,7 @@ from datetime import datetime
 import os
 import shutil
 import sys
+from time import time
 import ruamel.yaml as yaml
 
 from .utils import get_job
@@ -33,7 +34,6 @@ def run_train(argv=None):
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
     rsc_grp.add_argument('-q', '--queue',      help="the queue to submit to", default=None)
     rsc_grp.add_argument('-P', '--project',    help="the project/account to submit under", default=None)
-    rsc_grp.add_argument('-S', '--scratch',    help="the job require scratch", default=False, action='store_true')
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
@@ -66,6 +66,7 @@ def run_train(argv=None):
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
     parser.add_argument('-W', '--wandb_id', type=str, help='the WandB ID. Use this to resume previous runs', default=hex(hash(time.time()))[2:10])
+    parser.add_argument('-S', '--shifter', type=str, help='the Docker container to use', default=None)
 
     args = parser.parse_args(argv)
 
@@ -243,6 +244,12 @@ def run_train(argv=None):
             input_var = 'SHM_INPUT'
             job.add_command(f"srun --ntasks {args.nodes} --ntasks-per-node 1 cp $INPUT $SHM_INPUT")
 
+    if args.perlmutter or args.cori:
+        abspath = os.path.abspath(args.input)
+        scratch = os.environ.get('SCRATCH', '')
+        if abspath.startswith(scratch):
+            job.add_addl_jobflag('L', 'scratch')
+
 
     train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
 
@@ -270,9 +277,6 @@ def run_train(argv=None):
     for i in range(len(argv)):
         if " " in argv[i]:
             argv[i] = f'"{argv[i]}"'
-
-    if args.scratch:
-        job.add_addl_jobflag('L', 'scratch')
 
     def submit(job, shell, message):
         job_id = job.submit_job(shell, conda_env=args.conda_env)
