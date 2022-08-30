@@ -3,7 +3,7 @@ from datetime import datetime
 import os
 import shutil
 import sys
-from time import time
+import time
 import ruamel.yaml as yaml
 
 from .utils import get_job
@@ -245,9 +245,20 @@ def run_train(argv=None):
             job.add_command(f"srun --ntasks {args.nodes} --ntasks-per-node 1 cp $INPUT $SHM_INPUT")
 
     if args.perlmutter or args.cori:
-        scratch = os.environ.get('SCRATCH', '')
+        try:
+            scratch = os.environ['SCRATCH']
+            cfs = os.environ['CFS']
+        except KeyError as e:
+            print(f"environment variable {e.message} not found", file=sys.stderr)
+            exit(1)
+        licenses = list()
         if any(os.path.abspath(x).startswith(scratch) for x in (args.input, args.outdir, args.conf)):
-            job.add_addl_jobflag('L', 'scratch')
+            licenses.append('scratch')
+        if any(os.path.abspath(x).startswith(cfs) for x in (args.input, args.outdir, args.conf)):
+            licenses.append('cfs')
+
+        if len(licenses) > 0:
+            job.add_addl_jobflag('L', ','.join(licenses))
 
 
     train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
