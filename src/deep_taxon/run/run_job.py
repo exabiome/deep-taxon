@@ -218,7 +218,13 @@ def run_train(argv=None):
 
     input_var = 'INPUT'
 
-    train_cmd = 'deep-taxon train'
+    if args.shifter:
+        exe = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'bin/deep-taxon.py'))
+        if not os.path.exists(exe):
+            print(f'Cannot find executable needed to run with shifter. Expected here: {exe}', file=sys.stderr)
+        train_cmd = f'python {exe} train'
+    else:
+        train_cmd = 'deep-taxon train'
     if args.summit:
         train_cmd += ' --lsf'
         if job.use_bb:
@@ -244,22 +250,6 @@ def run_train(argv=None):
             input_var = 'SHM_INPUT'
             job.add_command(f"srun --ntasks {args.nodes} --ntasks-per-node 1 cp $INPUT $SHM_INPUT")
 
-    if args.perlmutter or args.cori:
-        try:
-            scratch = os.environ['SCRATCH']
-            cfs = os.environ['CFS']
-        except KeyError as e:
-            print(f"environment variable {e.message} not found", file=sys.stderr)
-            exit(1)
-        licenses = list()
-        if any(os.path.abspath(x).startswith(scratch) for x in (args.input, args.outdir, args.conf)):
-            licenses.append('scratch')
-        if any(os.path.abspath(x).startswith(cfs) for x in (args.input, args.outdir, args.conf)):
-            licenses.append('cfs')
-
-        if len(licenses) > 0:
-            job.add_addl_jobflag('L', ','.join(licenses))
-
 
     train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
 
@@ -279,7 +269,28 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
+        # Get scratch and CFS directories to see if we need to specify license
+        try:
+            scratch = os.environ['SCRATCH']
+            cfs = os.environ['CFS']
+        except KeyError as e:
+            print(f"environment variable {e.message} not found", file=sys.stderr)
+            exit(1)
+        licenses = list()
+        if any(os.path.abspath(x).startswith(scratch) for x in (args.input, args.outdir, args.config)):
+            licenses.append('scratch')
+        if any(os.path.abspath(x).startswith(cfs) for x in (args.input, args.outdir, args.config)):
+            licenses.append('cfs')
+
+        if len(licenses) > 0:
+            job.add_addl_jobflag('L', ','.join(licenses))
+
         srun = f'srun -n {job.nodes}'
+
+        if args.shifter:
+            job.add_addl_jobflag('-image', args.shifter)
+            srun += ' shifter'
+
         if args.cuda_profile:
             srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
