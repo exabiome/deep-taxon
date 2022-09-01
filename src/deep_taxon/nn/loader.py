@@ -742,7 +742,43 @@ class SubsetDataLoader(DataLoader):
         return super().__iter__()
 
 
+from torch.utils.data import Dataset, DataLoader
+import torch 
+
+class fast_dataset(Dataset):
+    def __init__(self, num_samples, sample_length):
+        self.x = torch.cuda.FloatTensor(num_samples, sample_length)
+        self.y = torch.cuda.LongTensor(num_samples)
+    def __len__(self):
+        return len(self.x)
+    def __getitem__(self,idx):
+        return self.x[idx], self.y[idx]
+
 class DeepIndexDataModule(pl.LightningDataModule):
+     def __init__(self, difile, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1, **lsd_kwargs):
+        super().__init__()
+        old_ds = LazySeqDataset(difile, hparams=hparams, keep_open=keep_open, rank=rank, size=size, **lsd_kwargs)
+        kwargs = dict(batch_size=hparams.batch_size)
+        self.batch_size = hparams.batch_size
+        self.window_len = hparams.window_length
+        self.num_samples = 1000000 #need this to not be hardcoded
+        self.num_samples = len(old_ds)
+
+    def setup(self):
+        self.train_ds = fast_dataset(self.num_samples, self.window_len)
+        self.valid_ds = fast_dataset(self.num_samples, self.window_len)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_ds, batch_size=self.batch_size)
+
+    def val_dataloader(self):
+        return DataLoader(self.valid_ds, batch_size=self.batch_size)
+
+    def test_dataloader(self):
+        return None
+
+
+class oldDeepIndexDataModule(pl.LightningDataModule):
 
     def __init__(self, difile, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1, **lsd_kwargs):
         super().__init__()
