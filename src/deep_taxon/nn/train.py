@@ -301,7 +301,8 @@ def process_args(args=None):
     difile.set_label_key(args.tgt_tax_lvl)
 
     data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
-                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
+                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits,
+                                   load=args.load)
 
     # if classification problem, use the number of taxa as the number of outputs
     if args.classify:
