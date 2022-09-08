@@ -164,17 +164,20 @@ def balsplit(weights, size, rank):
     Get a balanced partition from weighted data
     for rank *rank* when world size is *size*
     """
-    srt = np.argsort(weights)
-    s = 0
-    e = len(srt) - 1
-    curr = 0
-    ids = [list() for i in range(size)]
-    while s < e:
-        ids[curr].append(srt[s])
-        ids[curr].append(srt[e])
-        s += 1
-        e -= 1
-        curr = (curr + 1) % size
-    if s == e:
-        ids[size - 1].append(srt[s])
+    from queue import PriorityQueue
+    if rank >= size:
+        raise ValueError(f"rank must be less than size - given rank={rank} size={size}")
+    srt = np.argsort(weights)[::-1]
+    queue = PriorityQueue(maxsize=size + 1)
+    ids = list()
+    for i in range(size):
+        queue.put((0, i))
+        ids.append(list())
+
+    for i in range(len(srt)):
+        item = srt[i]
+        least_load, least_rank = queue.get()
+        queue.put((least_load + weights[item], least_rank))
+        ids[least_rank].append(item)
+
     return np.array(np.sort(ids[rank]))

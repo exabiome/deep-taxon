@@ -7,13 +7,15 @@ import json
 import ruamel.yaml as yaml
 from time import time
 from tqdm import tqdm
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
 from .loader import add_dataset_arguments, DeepIndexDataModule
 from ..sequence import DeepIndexFile
+from . import TIME_OFFSET
 from hdmf.utils import docval
+from hdmf.common import get_hdf5io
 
 import argparse
 import logging
@@ -24,8 +26,6 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, Stochast
 
 from pytorch_lightning.profiler import PyTorchProfiler
 
-from pytorch_lightning.accelerators import GPUAccelerator, CPUAccelerator
-from pytorch_lightning.plugins import NativeMixedPrecisionPlugin, SingleDevicePlugin, PrecisionPlugin
 from pytorch_lightning.plugins.environments import SLURMEnvironment, LSFEnvironment
 from pytorch_lightning.strategies import DDPStrategy
 
@@ -148,11 +148,13 @@ def parse_args(*addl_args, argv=None):
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-i', '--init', type=str, help='a checkpoint to initalize a model from', default=None)
     grp.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
-    parser.add_argument('-T', '--test', action='store_true', help='run test data through model', default=False)
+    parser.add_argument('-T', '--timed_checkpoint', metavar='MIN', nargs='?', const=True, default=False,
+                        help='run a checkpoing ever MIN seconds. By default MIN=10')
     parser.add_argument('-D', '--disable_checkpoint', action='store_true', help='do not save model checkpoints every epoch', default=False)
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-n', '--num_nodes', type=int, default=1, help='the number of nodes to run on')
     parser.add_argument('-d', '--debug', action='store_true', default=False, help='run in debug mode i.e. only run two batches')
+    parser.add_argument('--n_splits', type=int, default=None, help='the number of ways to split data. By default, use the number of ranks')
     parser.add_argument('-E', '--experiment', type=str, default='default', help='the experiment name')
     parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
@@ -162,6 +164,9 @@ def parse_args(*addl_args, argv=None):
     grp.add_argument('--slurm', default=False, action='store_true', help='running on SLURM system')
     grp.add_argument('--ipu', default=False, action='store_true', help='running on Graphcore system')
     parser.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
+    parser.add_argument('--apex', action='store_true', default=False, help='use Apex fused optimizers')
+    parser.add_argument('-V', '--n_val_checks', type=int, help='number of validation checks to run each epoch', default=1)
+    parser.add_argument('-W', '--wandb_id', type=str, help='the WandB ID. Use this to resume previous runs', default=None)
 
     dl_grp = parser.add_argument_group('Data loading')
     dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
@@ -181,7 +186,7 @@ def parse_args(*addl_args, argv=None):
 
     return args
 
-def process_args(args=None, return_io=False):
+def process_args(args=None):
     """
     Process arguments for running training
     """
@@ -195,6 +200,7 @@ def process_args(args=None, return_io=False):
     )
 
     targs['accumulate_grad_batches'] = args.accumulate
+    targs['val_check_interval'] = 1 / args.n_val_checks
 
 
     env = None
@@ -229,6 +235,11 @@ def process_args(args=None, return_io=False):
                 print(">>> Could not get global rank -- setting RANK to 0 and SIZE to 1", file=sys.stderr)
                 RANK = 0
                 SIZE = 1
+            print(f'global rank {env.global_rank()} of {env.world_size()} - local rank {env.local_rank()} on node {env.node_rank()} - {torch.cuda.device_count()} GPUs visible', file=sys.stderr)
+        else:
+            os.environ["MASTER_ADDR"] = "127.0.0.1"
+            os.environ["MASTER_PORT"] = "12910"
+            torch.distributed.init_process_group('nccl', rank=0, world_size=1)
 
         if targs['gpus'] is not None:
             targs['accelerator'] = 'gpu'
@@ -237,18 +248,13 @@ def process_args(args=None, return_io=False):
             else:
                 if env is None:
                     raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
-                # parallel_devices = [torch.device(i) for i in range(torch.cuda.device_count()) if i < targs['gpus']]
-                # precision_plugin = NativeMixedPrecisionPlugin(16, 'cuda')
                 torch.cuda.set_device(env.local_rank())
                 targs['devices'] = targs['gpus']
                 targs['strategy'] = DDPStrategy(find_unused_parameters=False,
-                                                cluster_environment=env,
-                                                #accelerator=GPUAccelerator(),
-                                                #parallel_devices=parallel_devices,
-                                                #precision_plugin=precision_plugin,
-                                    )
+                                                cluster_environment=env)
+            targs['precision'] = 16
+            targs['amp_backend'] = 'native'
 
-                print("---- Rank %s  -  Using GPUAccelerator with DDPStrategy" % env.global_rank(), file=sys.stderr)
         else:
             targs['accelerator'] = 'cpu'
 
@@ -261,15 +267,14 @@ def process_args(args=None, return_io=False):
             args.sanity = 4000
         targs['limit_train_batches'] = args.sanity
         targs['limit_val_batches'] = args.sanity // 4
+        targs['log_every_n_steps'] = args.sanity // 10
 
     if args.lr_find:
         targs['auto_lr_find'] = True
     del args.lr_find
 
     if args.checkpoint is not None:
-        if os.path.exists(args.checkpoint):
-            targs['resume_from_checkpoint'] = args.checkpoint
-        else:
+        if not os.path.exists(args.checkpoint):
             warnings.warn("Ignoring -c/--checkpoint argument because {args.checkpoint} does not exist.")
             args.checkpoint = None
 
@@ -287,7 +292,17 @@ def process_args(args=None, return_io=False):
             raise ValueError('Cannot use manifold loss (i.e. -M) if adding classifier (i.e. -F)')
         args.classify = True
 
-    data_mod = DeepIndexDataModule(args, keep_open=True, seed=args.seed+RANK, rank=RANK, size=SIZE)
+
+    io = get_hdf5io(args.input, 'r')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        difile = io.read()
+
+    difile.set_label_key(args.tgt_tax_lvl)
+
+    data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
+                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits,
+                                   load=args.load)
 
     # if classification problem, use the number of taxa as the number of outputs
     if args.classify:
@@ -295,16 +310,14 @@ def process_args(args=None, return_io=False):
 
     args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
-    model = process_model(args, taxa_table=data_mod.dataset.difile.taxa_table)
+    model = process_model(args, taxa_table=difile.taxa_table)
 
-    if args.num_workers > 0:
-        data_mod.dataset.close()
+    #if args.num_workers > 0:
+    #    data_mod.dataset.close()
 
-    ret = [model, args, targs]
-    if return_io:
-        ret.append(io)
+    ret = [model, args, targs, data_mod]
 
-    ret.append(data_mod)
+    io.close()
 
     return tuple(ret)
 
@@ -411,14 +424,6 @@ def run_lightning(argv=None):
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
 
-    # if 'OMPI_COMM_WORLD_RANK' in os.environ or 'SLURMD_NODENAME' in os.environ:
-    #     from mpi4py import MPI
-    #     comm = MPI.COMM_WORLD
-    #     RANK = comm.Get_rank()
-    # else:
-    #     RANK = 0
-    #     print('OMPI_COMM_WORLD_RANK or SLURMD_NODENAME not set in environment -- not using MPI')
-
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
     check_directory(outdir)
@@ -454,8 +459,15 @@ def run_lightning(argv=None):
     seed_everything(args.seed)
 
     if args.csv:
-        logger = CSVLogger(save_dir=output('logs')),
+        logger = CSVLogger(save_dir=output('logs'))
     else:
+        #resume = None
+        #if args.checkpoint is not None:
+        #    resume = 'allow'
+        #    import wandb
+        #    args.checkpoint = wandb.restore(args.checkpoint, run_path=f'{outdir}/wandb/latest-run')
+        #logger = WandbLogger(project="deep-taxon", entity='deep-taxon', id=args.wandb_id, log_model='all',
+        #                      name=args.experiment, save_dir=outdir, resume=resume)
         logger = WandbLogger(project="deep-taxon", entity='deep-taxon',
                               name=args.experiment)
 
@@ -474,6 +486,19 @@ def run_lightning(argv=None):
                                          save_top_k=3,
                                          mode=mode,
                                          monitor=monitor))
+        if args.timed_checkpoint:
+            if isinstance(args.timed_checkpoint, str):
+                args.timed_checkpoint = int(args.timed_checkpoint)
+            else:
+                args.timed_checkpoint = 10
+
+            callbacks.append(ModelCheckpoint(dirpath=outdir,
+                                             filename='t-{epoch}-{step}',
+                                             save_weights_only=False,
+                                             train_time_interval=timedelta(minutes=args.timed_checkpoint),
+                                             save_top_k=1,
+                                             save_last=True,
+                                             monitor=None))
 
     if args.early_stop:
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
@@ -506,8 +531,11 @@ def run_lightning(argv=None):
         print_dataloader(data_mod.val_dataloader())
 
     s = datetime.now()
-    print0('START_TIME', time())
-    trainer.fit(model, data_mod)
+    t = time()
+    logger.log_metrics({'start_time': t - TIME_OFFSET})
+    print0('START_TIME', t)
+    print0('LOGGER TIME OFFSET', TIME_OFFSET)
+    trainer.fit(model, data_mod, ckpt_path=args.checkpoint)
     e = datetime.now()
     td = e - s
     hours, seconds = divmod(td.seconds, 3600)

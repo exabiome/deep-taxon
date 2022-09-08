@@ -303,7 +303,7 @@ class ResNet(AbstractLit):
 
     def _forward_impl(self, x):
         # See note [TorchScript super()]
-        x = self.embedding(x)
+        x = self.embedding(x.int())
         x = x.permute(0, 2, 1)
         x = self.conv1(x)
         x = self.bn1(x)
