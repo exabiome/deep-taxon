@@ -689,14 +689,13 @@ class LazyWindowChunkedDIFile:
     }
 
 
-    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, distances=False, tree_graph=False):
+    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, distances=False, tree_graph=False, load=True):
         counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
         if size > 1:
             indices = balsplit(counts, size, rank)
             counts = counts[indices]
             difile.set_sequence_subset(indices)
-
-        difile.load(sequence=True, verbose=rank==0)
+        difile.load(sequence=load, verbose=rank==0)
         log('setting lengths', print_msg=rank==0)
         self.lengths = np.asarray(difile.seq_table['length'].data, dtype=int)
         log('setting ids', print_msg=rank==0)
@@ -706,7 +705,10 @@ class LazyWindowChunkedDIFile:
         log('setting seq_index', print_msg=rank==0)
         self.seq_index = np.asarray(difile.seq_table['sequence_index'].data, dtype=int)
         log('setting sequence', print_msg=rank==0)
-        self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
+        if load:
+            self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
+        else:
+            self.sequence = difile.seq_table['sequence_index'].target.data
         log('done setting important data', print_msg=rank==0)
 
         self.n_outputs = difile.n_outputs

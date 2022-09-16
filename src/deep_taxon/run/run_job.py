@@ -3,6 +3,7 @@ from datetime import datetime
 import os
 import shutil
 import sys
+import time
 import ruamel.yaml as yaml
 import time
 
@@ -34,7 +35,6 @@ def run_train(argv=None):
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
     rsc_grp.add_argument('-q', '--queue',      help="the queue to submit to", default=None)
     rsc_grp.add_argument('-P', '--project',    help="the project/account to submit under", default=None)
-    rsc_grp.add_argument('-S', '--scratch',    help="the job require scratch", default=False, action='store_true')
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
@@ -67,6 +67,7 @@ def run_train(argv=None):
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
     parser.add_argument('-W', '--wandb_id', type=str, help='the WandB ID. Use this to resume previous runs', default=hex(hash(time.time()))[2:10])
+    parser.add_argument('-S', '--shifter', type=str, help='the Docker container to use', default=None)
 
     parser.add_argument('--theoretical_limit', action='store_true', default=False, 
                                                 help='use a fake dataloader to test fastest possible fwd pass')
@@ -224,7 +225,13 @@ def run_train(argv=None):
 
     input_var = 'INPUT'
 
-    train_cmd = 'deep-taxon train'
+    if args.shifter:
+        exe = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'bin/deep-taxon.py'))
+        if not os.path.exists(exe):
+            print(f'Cannot find executable needed to run with shifter. Expected here: {exe}', file=sys.stderr)
+        train_cmd = f'python {exe} train'
+    else:
+        train_cmd = 'deep-taxon train'
     if args.summit:
         train_cmd += ' --lsf'
         if job.use_bb:
@@ -269,7 +276,28 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
+        # Get scratch and CFS directories to see if we need to specify license
+        try:
+            scratch = os.environ['SCRATCH']
+            cfs = os.environ['CFS']
+        except KeyError as e:
+            print(f"environment variable {e.message} not found", file=sys.stderr)
+            exit(1)
+        licenses = list()
+        if any(os.path.abspath(x).startswith(scratch) for x in (args.input, args.outdir, args.config)):
+            licenses.append('scratch')
+        if any(os.path.abspath(x).startswith(cfs) for x in (args.input, args.outdir, args.config)):
+            licenses.append('cfs')
+
+        if len(licenses) > 0:
+            job.add_addl_jobflag('L', ','.join(licenses))
+
         srun = f'srun -n {job.nodes}'
+
+        if args.shifter:
+            job.add_addl_jobflag('-image', args.shifter)
+            srun += ' shifter'
+
         if args.cuda_profile:
             srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
@@ -277,9 +305,6 @@ def run_train(argv=None):
     for i in range(len(argv)):
         if " " in argv[i]:
             argv[i] = f'"{argv[i]}"'
-
-    if args.scratch:
-        job.add_addl_jobflag('L', 'scratch')
 
     def submit(job, shell, message):
         job_id = job.submit_job(shell, conda_env=args.conda_env)

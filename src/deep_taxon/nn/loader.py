@@ -131,7 +131,7 @@ def dataset_stats(argv=None):
         va_len = len(dataset)
         dataset.set_subset()
     else:
-        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True)
+        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True, difile=difile)
         if args.rank != None:
             kwargs['rank'] = args.rank
             kwargs['size'] = args.size
@@ -1030,7 +1030,8 @@ class LazySeqDataset(Dataset):
         self.difile = LazyWindowChunkedDIFile(difile, self.window, self.step,
                                               revcomp=self.revcomp,
                                               rank=self._global_rank, size=self._world_size,
-                                              distances=distances, tree_graph=tree_graph)
+                                              distances=distances, tree_graph=tree_graph,
+                                              load=kwargs['load'])
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
         self.__len = len(self.difile)
