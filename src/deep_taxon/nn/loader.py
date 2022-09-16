@@ -791,6 +791,7 @@ class FastDataModule(pl.LightningDataModule):
                         collate_fn=new_collate_fxn(self.batch_size, self.window_len))
 
     def test_dataloader(self):
+        
         return None
 
 
