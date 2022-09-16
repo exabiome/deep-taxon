@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from ..utils import parse_seed, check_argv, parse_logger, check_directory
 from .utils import process_gpus, process_model, process_output
-from .loader import add_dataset_arguments, DeepIndexDataModule
+from .loader import add_dataset_arguments, DeepIndexDataModule, FastDataModule
 from ..sequence import DeepIndexFile
 from . import TIME_OFFSET
 from hdmf.utils import docval
@@ -300,7 +300,11 @@ def process_args(args=None):
 
     difile.set_label_key(args.tgt_tax_lvl)
 
-    data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
+    if args.theoretical_limit:
+        data_mod = FastDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
+                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
+    else:
+        data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
                                    rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
 
     # if classification problem, use the number of taxa as the number of outputs
@@ -308,6 +312,10 @@ def process_args(args=None):
         args.n_outputs = data_mod.dataset.n_outputs
 
     args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
+
+    if args.theoretical_limit:
+        args.n_outputs = 1
+        args.input_nc = 1
 
     model = process_model(args, taxa_table=difile.taxa_table)
 
