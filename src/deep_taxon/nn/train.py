@@ -173,6 +173,9 @@ def parse_args(*addl_args, argv=None):
     dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     parser.add_argument('-q', '--quiet', action='store_true', default=False, help='do not print arguments, model, etc.')
+    parser.add_argument('--theoretical_limit', action='store_true', default=False, 
+                                                help='use a fake dataloader to test fastest possible fwd pass')
+    
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -308,14 +311,15 @@ def process_args(args=None):
                                    rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
 
     # if classification problem, use the number of taxa as the number of outputs
-    if args.classify:
+    if args.classify and not args.theoretical_limit:
         args.n_outputs = data_mod.dataset.n_outputs
-
-    args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
     if args.theoretical_limit:
         args.n_outputs = 1
         args.input_nc = 1
+    else:
+        args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
+
 
     model = process_model(args, taxa_table=difile.taxa_table)
 
