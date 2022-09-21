@@ -752,7 +752,7 @@ class fast_dataset(Dataset):
     def __len__(self):
         return len(self.x)
     def __getitem__(self,idx):
-        return None#self.x[idx], self.y[idx]
+        return None
 
 class new_collate_fxn():
     def __init__(self, batch_size, sample_length):
@@ -773,12 +773,8 @@ class FastDataModule(pl.LightningDataModule):
         self.val_pct = 0.1
         self.train_samples = int(self.num_samples * (1 - self.val_pct))
         self.valid_samples = int(self.num_samples * self.val_pct)
-        print('-----'*40)
-        print(f'the number of training samples is: {self.train_samples}')
-        print(f'the number of validation samples is: {self.valid_samples}')
         
     def setup(self, stage=None):
-        print('setting up the datasets.....')
         self.train_ds = fast_dataset(self.train_samples, self.window_len)
         self.valid_ds = fast_dataset(self.valid_samples, self.window_len)
 
@@ -791,7 +787,6 @@ class FastDataModule(pl.LightningDataModule):
                         collate_fn=new_collate_fxn(self.batch_size, self.window_len))
 
     def test_dataloader(self):
-        
         return None
 
 

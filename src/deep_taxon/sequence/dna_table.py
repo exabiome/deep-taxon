@@ -706,7 +706,11 @@ class LazyWindowChunkedDIFile:
         self.seq_index = np.asarray(difile.seq_table['sequence_index'].data, dtype=int)
         log('setting sequence', print_msg=rank==0)
         if load:
-            self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
+            data_len = len(difile.seq_table['sequence_index'].target.data)
+            print(f"the length of the data is: {data_len}")
+            half_len = int(data_len*0.5)
+            self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data[:half_len], dtype=np.uint8)
+            print(f"sequences on RAM: {len(self.sequence)}")
         else:
             self.sequence = difile.seq_table['sequence_index'].target.data
         log('done setting important data', print_msg=rank==0)
