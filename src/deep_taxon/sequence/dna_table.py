@@ -779,7 +779,7 @@ class LazyWindowChunkedDIFile:
         return self._classes
 
     def get_seq_lengths(self):
-        self.lengths.copy()
+        return self.lengths.copy()
 
     def get_counts(self, orig=False):
         """

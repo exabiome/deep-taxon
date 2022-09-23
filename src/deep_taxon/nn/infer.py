@@ -1,4 +1,5 @@
 import sys
+import warnings
 import numpy as np
 import os
 from time import time
@@ -10,6 +11,7 @@ from .loader import LazySeqDataset, get_loader, DeepIndexDataModule
 
 from .lsf_environment import LSFEnvironment
 from pytorch_lightning.plugins.environments import SLURMEnvironment
+from hdmf.common import get_hdf5io
 
 
 import glob
@@ -36,7 +38,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('checkpoint', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
     parser.add_argument('-f', '--resnet_features', action='store_true', help='drop classifier from ResNet model before inference', default=False)
-    parser.add_argument('-F', '--features', action='store_true', help='outputs are features i.e. do not softmax and compute predictions', default=False)
+    parser.add_argument('-F', '--features', action='store_true', help='do not softmax model output', default=False)
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-d', '--debug', action='store_true', default=False,
                         help='run in debug mode i.e. only run two batches')
@@ -52,6 +54,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
                         help='store the top TOPN probablities of each output. By default, TOPN=1')
     parser.add_argument('-c', '--save_chunks', action='store_true', help='do store network outputs for each chunk', default=False)
+    parser.add_argument('-O', '--save_outputs', action='store_true', help='store full network outputs for each sequence. otherwise only store top-1 probability', default=False)
 
     env_grp = parser.add_argument_group("Resource Manager").add_mutually_exclusive_group()
     env_grp.add_argument("--lsf", default=False, action='store_true', help='running in an LSF environment')
@@ -149,12 +152,19 @@ def process_args(args, comm=None):
         model = ResNetFeatures(model)
         args.features = True
 
-    if size > 1:
-        dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
-    else:
-        dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+    io = get_hdf5io(args.input, 'r')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        difile = io.read()
 
-    tot_bases = dataset.orig_difile.get_seq_lengths().sum()
+    difile.set_label_key(args.tgt_tax_lvl)
+
+    if size > 1:
+        dataset = LazySeqDataset(difile=difile, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
+    else:
+        dataset = LazySeqDataset(difile=difile, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+
+    tot_bases = dataset.difile.get_seq_lengths().sum()
     args.logger.info(f'rank {rank} - processing {tot_bases} bases across {len(dataset)} samples')
 
     tmp_dset = dataset
@@ -163,7 +173,7 @@ def process_args(args, comm=None):
     if args.num_workers > 0:
         kwargs['num_workers'] = args.num_workers
         kwargs['multiprocessing_context'] = 'spawn'
-        kwargs['worker_init_fn'] = dataset.worker_init
+        #kwargs['worker_init_fn'] = dataset.worker_init
         kwargs['persistent_workers'] = True
     loader = get_loader(tmp_dset, inference=True, **kwargs)
 
@@ -212,11 +222,11 @@ def run_inference(argv=None):
     parallel_chunked_inf_summ(model, dataset, loader, args, f_kwargs)
 
 
-def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
+def old_parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
-    n_samples = len(dataset.orig_difile.seq_table)
-    all_seq_ids = dataset.orig_difile.get_sequence_subset()
-    seq_lengths  = dataset.orig_difile.get_seq_lengths()
+    n_samples = len(dataset.difile.seq_table)
+    all_seq_ids = dataset.difile.get_sequence_subset()
+    seq_lengths  = dataset.difile.get_seq_lengths()
 
     f = h5py.File(args.output, 'w', **fkwargs)
     outputs_dset = None
@@ -394,70 +404,46 @@ def cat(indices, outputs, labels, orig_lens, seq_ids):
     return ret
 
 
-def to_hdmf_ai(argv=None):
+def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
-    ResultsTable = common.get_class('ResultsTable', 'hdmf-ml')
 
-    ClassLabel = common.get_class('ClassLabel', 'hdmf-ml')
+    from hdmf_ml import ResultsTable
+    from hdmf.backends.hdf5 import H5DataIO
 
-    results = ResultsTable(...)
+    results = ResultsTable()
 
-    results.add_column(ClassLabel(name='predictions', data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1, ...)))
+    n_samples = dataset.difile.n_seqs
 
-    io = get_hdf5io(...)
 
+    if args.save_chunks:
+        print("I will not save chunks, sorry")
+
+    prob_dset = results.add_topk_probabilities(data=H5DataIO(shape=(n_samples, args.maxprob), dtype=float, fillvalue=0.0))
+    label_dset = results.add_topk_classes(data=H5DataIO(shape=(n_samples, args.maxprob), dtype=int, fillvalue=-1))
+    target_dset = results.add_predicted_class(data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1))
+
+    outputs_dset = None
+    if args.save_outputs:
+        outputs_dset = results.add_predicted_probability(data=H5DataIO(shape=(n_samples, args.maxprob), dtype=float, fillvalue=0.0))
+
+    io = get_hdf5io(args.output, 'w')
     io.write(results)
 
-    pred_dset = results['predictions'].data
+    check = lambda dset: dset.data.dataset if dset is not None else None
 
-    for dest_idx, outputs, preds in get_outputs(...):
-
-        pred_dset[dest_idx] = preds
-
-def parallel_chunked_inf_summ_hdmf(model, dataset, loader, args, fkwargs):
-
-    ResultsTable = common.get_class('ResultsTable', 'hdmf-ml')
-    ClassLabel = common.get_class('ClassLabel', 'hdmf-ml')
-    results = ResultsTable(...)
-
-    results.add_column(ClassLabel(name='predictions', data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1, ...)))
-    results.add_column(ClassLabel(name='predictions', data=H5DataIO(shape=(n_samples,), dtype=int, fillvalue=-1, ...)))
-
-
-    n_samples = len(dataset.orig_difile.seq_table)
-    all_seq_ids = dataset.orig_difile.get_sequence_subset()
-    seq_lengths  = dataset.orig_difile.get_seq_lengths()
-
-    f = h5py.File(args.output, 'w', **fkwargs)
-    outputs_dset = None
-    if args.save_chunks:
-        outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
-    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
-    labels_dset.attrs['n_classes'] = args.n_outputs
-
-    maxprob_dset = None
-    if args.maxprob > 0 :
-        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
-
-    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
-    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
-    if all_seq_ids is None:
-        seqlen_dset[:] = seq_lengths
-    else:
-        seqlen_dset[all_seq_ids] = seq_lengths
+    prob_dset = check(prob_dset)
+    label_dset = check(label_dset)
+    target_dset = check(target_dset)
 
     # to-write queues - we use those so we're not doing I/O at every iteration
     outputs_q = list()
-    labels_q = list()
+    targets_q = list()
     counts_q = list()
     seqs_q = list()
 
     # write what's in the to-write queues
     if not hasattr(args, 'n_seqs'):
         args.n_seqs = 500
-
-    # ensure that dataset is closed before we start up the DataLoader
-    dataset.close()
 
     # send model to GPU
     model.to(args.device)
@@ -488,7 +474,7 @@ def parallel_chunked_inf_summ_hdmf(model, dataset, loader, args, fkwargs):
         outputs_q.extend(outputs_sum)
         seqs_q.extend(seqs)
         counts_q.extend(counts)
-        labels_q.extend(labels)
+        targets_q.extend(labels)
 
         # write when we get above a certain number of sequences
         if len(outputs_q) > args.n_seqs:
@@ -500,48 +486,43 @@ def parallel_chunked_inf_summ_hdmf(model, dataset, loader, args, fkwargs):
 
             if outputs_dset is not None:
                 outputs_dset[idx] = outputs_q[:-1]
-            labels_dset[idx] = labels_q[:-1]
+            target_dset[idx] = targets_q[:-1]
 
-            if maxprob_dset is not None:
-                k = outputs_q[0].shape[0] - args.maxprob
-                maxprobs = list()
-                for i in range(len(idx)):
-                    maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
-                maxprob_dset[idx] = maxprobs
-
-            if preds_dset is not None:
-                preds = [np.argmax(outputs_q[i]) for i in range(len(idx))]
-                preds_dset[idx] = preds
+            prob_dset[idx], label_dset[idx] = get_topk(args.maxprob, outputs_q[:-1])
 
             outputs_q = outputs_q[-1:]
             seqs_q = seqs_q[-1:]
             counts_q = counts_q[-1:]
-            labels_q = labels_q[-1:]
+            targets_q = targets_q[-1:]
 
     args.logger.debug(f"rank {dataset.rank} - saving these sequences {seqs_q}")
     args.logger.debug(f"rank {dataset.rank} - came across these labels {list(sorted(uniq_labels))}")
+
     # clean up what's left in the to-write queue
     for i in range(len(seqs_q)):
         outputs_q[i] /= counts_q[i]
 
     if outputs_dset is not None:
         outputs_dset[seqs_q] = outputs_q
-    labels_dset[seqs_q] = labels_q
 
-    if maxprob_dset is not None:
-        k = outputs_q[0].shape[0] - args.maxprob
-        maxprobs = list()
-        for i in range(len(seqs_q)):
-            maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
-        maxprob_dset[seqs_q] = maxprobs
-
-    if preds_dset is not None:
-        preds = [np.argmax(outputs_q[i]) for i in range(len(seqs_q))]
-        preds_dset[seqs_q] = preds
+    target_dset[seqs_q] = targets_q
+    prob_dset[seqs_q], label_dset[seqs_q] = get_topk(args.maxprob, outputs_q)
 
     args.logger.info(f'rank {dataset.rank} - closing {args.output}')
-    f.close()
 
+    io.close()
+
+
+def get_topk(topk, outputs):
+    k = outputs[0].shape[0] - topk
+    maxprobs = list()
+    maxclses = list()
+    for i in range(len(outputs)):
+        topk_idx = np.argpartition(outputs[i], k)[k:]
+        topk_idx = topk_idx[np.argsort(outputs[i][topk_idx])][::-1]
+        maxprobs.append(outputs[i][topk_idx])
+        maxclses.append(topk_idx)
+    return maxprobs, maxclses
 
 from . import models  # noqa: E402
 

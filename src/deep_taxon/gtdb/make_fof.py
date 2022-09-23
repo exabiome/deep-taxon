@@ -1,4 +1,6 @@
 import os
+import deep_taxon.sequence.dna_table
+from hdmf.common import get_hdf5io
 
 def get_taxa_id(path):
     c, n = os.path.basename(path).split('_')[0:2]
@@ -24,6 +26,8 @@ def make_fof(argv=None):
     parser.add_argument('accessions', type=str, help='A file containing accessions')
     parser.add_argument('-t', '--tree', action='store_true', default=False, help='accessions are from a tree in Newick format')
     parser.add_argument('-f', '--hdmf_file', action='store_true', default=False, help='get accessions from a DeepIndex HDMF file')
+    parser.add_argument('-A', '--append', action='store_true', default=False, help='include accessions')
+    parser.add_argument('-T', '--taxonomy', action='store_true', default=False, help='include taxonomy')
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-P', '--protein', action='store_true', default=False, help='get paths for protein files')
     grp.add_argument('-C', '--cds', action='store_true', default=False, help='get paths for CDS files')
@@ -75,10 +79,23 @@ def make_fof(argv=None):
 
     else:
         accessions = None
+        taxonomy = False
         if args.hdmf_file:
-            with h5py.File(args.accessions, 'r') as f:
-                accessions = f['genome_table']['taxon_id'][:]
+            with get_hdf5io(args.accessions, 'r') as io: #h5py.File(args.accessions, 'r') as f:
+                difile = io.read()
+                for c in difile.taxa_table.columns:
+                    c.transform(lambda x: x[:])
+                for c in difile.genome_table.columns:
+                    c.transform(lambda x: x[:])
+                tdf = difile.taxa_table.to_dataframe()
+                gdf = difile.genome_table.to_dataframe(index=True)
+                tdf.iloc[gdf['rep_idx']]
+                accessions = gdf['taxon_id']
+
         else:
+            if args.taxonomy:
+                print("-T is only valid with -f", file=sys.stderr)
+                exit()
             if os.path.exists(args.accessions):
                 with open(args.accessions, 'r') as f:
                     accessions = f.readlines()
@@ -90,8 +107,14 @@ def make_fof(argv=None):
             func = get_fna_path
         elif args.protein:
             func = get_faa_path
-        for line in accessions:
-            print(func(line.strip(), args.fadir), file=sys.stdout)
+        for idx, line in enumerate(accessions.astype('U')):
+            path = func(line.strip(), args.fadir)
+            if args.taxonomy:
+                tax = "\t".join(tdf.iloc[idx])
+                path = f'{tax}\t{path}'
+            elif args.append:
+                path = f'{line}\t{path}'
+            print(path, file=sys.stdout)
 
 
 if __name__ == '__main__':

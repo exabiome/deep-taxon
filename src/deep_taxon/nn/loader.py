@@ -138,8 +138,7 @@ def dataset_stats(argv=None):
         if comm is not None:
             kwargs['comm'] = comm
         before = time()
-        dataset = LazySeqDataset(**kwargs)
-        dataset.load(sequence=False)
+        dataset = LazySeqDataset(load=False, **kwargs)
         after = time()
 
     io.close()
