@@ -647,7 +647,7 @@ class WORHelper:
 class WORSampler(Sampler):
     """Without Replacement Sampler"""
 
-    def __init__(self, length, rng=None, n_partitions=1, part_smplr_rng=None):
+    def __init__(self, length, rng=None, n_partitions=1, part_smplr_rng=None, max_samples=None):
         """
         Args:
             n_partitions :          number of deterministic partitions to break up dataset into
@@ -664,24 +664,41 @@ class WORSampler(Sampler):
         # rank has the same number of samples.
         # Use this later if we decide we don't want to trim tail.
         self.indices = np.arange(length, dtype=dtype)
+
         self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
 
         # set an initial value for curr_part (i.e. current partition)
         # so we can calculate lenght in __len__
         self.curr_part = self.part_sampler.sample()
-        self.curr_len = len(self)
+
+        self.__len = (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1
+        if max_samples is not None:
+            self.__len = min(self.__len, max_samples)
+        self.max_samples = max_samples
+        self.i = self.__len
+
+        self.curr_len = 0
 
     def __iter__(self):
-        self.curr_len = len(self)
+        self.curr_len = (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1 # len(self)
+        if self.max_samples is not None:
+            self.i = 0
         return self
 
     def __len__(self):
-        return (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1
+        return self.__len
 
     def __next__(self):
+        if self.max_samples is not None:
+            if self.i < self.__len:
+                self.i += 1
+            else:
+                raise StopIteration
+
         if self.curr_len == 0:
             self.curr_part = self.part_sampler.sample()
             raise StopIteration
+
         idx = self.rng.integers(self.curr_len) * self.part_sampler.period + self.curr_part
         end = (self.curr_len - 1) * self.part_sampler.period + self.curr_part
         ret = self.indices[idx]
@@ -693,7 +710,7 @@ class WORSampler(Sampler):
 class DSSampler(SequentialSampler):
     """Distributed Sequential Sampler"""
 
-    def __init__(self, length, n_partitions=1, part_smplr_rng=None):
+    def __init__(self, length, n_partitions=1, part_smplr_rng=None, max_samples=None):
         """
         Args:
             n_partitions :          number of deterministic partitions to break up dataset into
@@ -707,16 +724,29 @@ class DSSampler(SequentialSampler):
         self.curr_part = self.part_sampler.sample()
         self.start = 0
         self.end = length
+        self.__len = (self.end - self.start - self.curr_part - 1) // self.part_sampler.period + 1
+        if max_samples is not None:
+            self.__len = min(self.__len, max_samples)
+        self.max_samples = max_samples
+        self.i = self.__len
+
 
     def __iter__(self):
         self.__it = iter(range(self.start + self.curr_part, self.end, self.part_sampler.period))
+        if self.max_samples is not None:
+            self.i = 0
         return self
 
     def __len__(self):
-        return (self.end - self.start - self.curr_part - 1) // self.part_sampler.period + 1
+        return self.__len
 
     def __next__(self):
         try:
+            if self.max_samples is not None:
+                if self.i < self.__len:
+                    self.i += 1
+                else:
+                    raise StopIteration
             return next(self.__it)
         except StopIteration:
             self.curr_part = self.part_sampler.sample()
@@ -755,6 +785,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
         self.size = size
         self.n_partitions = hparams.n_partitions
         self.batch_size = hparams.batch_size
+        self.sanity = hparams.sanity
 
         if inference:
             hparams.manifold = False
@@ -805,7 +836,10 @@ class DeepIndexDataModule(pl.LightningDataModule):
         if self._tr_sampler is None:
             # set up the training sampler - shuffle for training
             train_len = self.get_min(self.dataset.get_subset_len(train=True), self.batch_size)
-            self._tr_sampler = WORSampler(train_len, rng=self.seed, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
+            s_kwargs = dict(rng=self.seed, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
+            if self.sanity:
+                s_kwargs['max_samples'] = self.batch_size * self.sanity
+            self._tr_sampler = WORSampler(train_len, **s_kwargs)
         kwargs['sampler'] = self._tr_sampler
         return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
@@ -814,7 +848,10 @@ class DeepIndexDataModule(pl.LightningDataModule):
         if self._val_sampler is None:
             # set up the validation sampler - DO NOT shuffle for training
             val_len = self.get_min(self.dataset.get_subset_len(validate=True), self.batch_size)
-            self._val_sampler = DSSampler(val_len, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
+            s_kwargs = dict(n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
+            if self.sanity:
+                s_kwargs['max_samples'] = self.batch_size * self.sanity // 4
+            self._val_sampler = DSSampler(val_len, **s_kwargs)
         kwargs['sampler'] = self._val_sampler
         return SubsetDataLoader(self.dataset, validate=True, **kwargs)
 
