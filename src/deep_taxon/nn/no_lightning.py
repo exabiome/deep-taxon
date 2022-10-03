@@ -121,6 +121,7 @@ class Trainer:
             self.train_data = self.data_mod.train_dataloader()
         b_sz = len(next(iter(self.train_data))[0])
         print(f"[GPU{self.global_rank}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
+        it = self.train_data
         if self.global_rank == 0:
             it = tqdm(self.train_data, desc=f"Epoch {epoch}") #, leave=False)
         avg_loss = self._run_loop(epoch, it)
@@ -132,6 +133,7 @@ class Trainer:
     def _run_validate(self, epoch):
         if self.validate_data is None:
             self.validate_data = self.data_mod.val_dataloader()
+        it = self.validate_data
         if self.global_rank == 0:
             it = tqdm(self.validate_data, desc=f"Validation epoch {epoch}") #, leave=False)
         avg_loss = self._run_loop(epoch, it)
