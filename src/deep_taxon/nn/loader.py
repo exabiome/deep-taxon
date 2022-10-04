@@ -758,6 +758,8 @@ class new_collate_fxn():
     def __init__(self, batch_size, sample_length):
         self.x = torch.zeros((batch_size, sample_length), device='cuda', dtype=torch.half)
         self.y = torch.zeros(batch_size, device='cuda', dtype=torch.float64)
+        #self.x = torch.zeros((batch_size, sample_length), dtype=torch.half).to('cuda')
+        #self.y = torch.zeros(batch_size, dtype=torch.float64).to('cuda')
     def __call__(self, samples):
         return self.x, self.y
         
