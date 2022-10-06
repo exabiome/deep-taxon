@@ -5,6 +5,7 @@ import shutil
 import sys
 import time
 import ruamel.yaml as yaml
+import time
 
 from .utils import get_job
 from ..utils import get_seed, check_argv
@@ -68,6 +69,9 @@ def run_train(argv=None):
     parser.add_argument('-W', '--wandb_id', type=str, help='the WandB ID. Use this to resume previous runs', default=hex(hash(time.time()))[2:10])
     parser.add_argument('-S', '--shifter', type=str, help='the Docker container to use', default=None)
 
+    parser.add_argument('--theoretical_limit', action='store_true', default=False, 
+                                                help='use a fake dataloader to test fastest possible fwd pass')
+    
     args = parser.parse_args(argv)
 
     job = get_job(args)
@@ -130,6 +134,9 @@ def run_train(argv=None):
 
     if args.apex:
         options += f' --apex'
+
+    if args.theoretical_limit:
+        options += f' --theoretical_limit'
 
     chunks = f'chunks_W{conf["window"]}_S{conf["step"]}'
 
