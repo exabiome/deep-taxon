@@ -14,13 +14,14 @@ from .utils import process_gpus, process_model, process_output
 from .loader import add_dataset_arguments, DeepIndexDataModule, FastDataModule
 from ..sequence import DeepIndexFile
 from . import TIME_OFFSET
+from .no_lightning import Trainer
 from hdmf.utils import docval
 from hdmf.common import get_hdf5io
 
 import argparse
 import logging
 
-from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning import Trainer as PLTrainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor, TQDMProgressBar
 
@@ -30,7 +31,6 @@ from pytorch_lightning.plugins.environments import SLURMEnvironment, LSFEnvironm
 from pytorch_lightning.strategies import DDPStrategy
 
 import torch
-
 try:
     from mpi4py import MPI
     comm = MPI.COMM_WORLD
@@ -145,6 +145,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('--csv', action='store_true', default=False, help='log to a CSV file instead of WandB')
     parser.add_argument('-e', '--epochs', type=int, help='number of epochs to use', default=1)
+    parser.add_argument('--pytorch', action='store_true', default=False, help='do not use PyTorch Lightning')
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-i', '--init', type=str, help='a checkpoint to initalize a model from', default=None)
     grp.add_argument('-c', '--checkpoint', type=str, help='resume training from file', default=None)
@@ -239,6 +240,12 @@ def process_args(args=None):
                 RANK = 0
                 SIZE = 1
             print(f'global rank {env.global_rank()} of {env.world_size()} - local rank {env.local_rank()} on node {env.node_rank()} - {torch.cuda.device_count()} GPUs visible', file=sys.stderr)
+            if args.pytorch:
+                env.main_address
+                env.main_port
+                targs['local_rank'] = env.local_rank()
+                targs['global_rank'] = env.global_rank()
+                targs['world_size'] = env.world_size()
         else:
             os.environ["MASTER_ADDR"] = "127.0.0.1"
             os.environ["MASTER_PORT"] = "12910"
@@ -431,6 +438,7 @@ def run_lightning(argv=None):
     import os
     import pprint
 
+
     pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
@@ -534,8 +542,6 @@ def run_lightning(argv=None):
         print0('DataLoader args\n:', pformat(data_mod._loader_kwargs), file=sys.stderr)
         print0('Model:\n', model, file=sys.stderr)
 
-    trainer = Trainer(**targs)
-
     if args.debug:
         #print_dataloader(data_mod.test_dataloader())
         print_dataloader(data_mod.train_dataloader())
@@ -546,7 +552,14 @@ def run_lightning(argv=None):
     logger.log_metrics({'start_time': t - TIME_OFFSET})
     print0('START_TIME', t)
     print0('LOGGER TIME OFFSET', TIME_OFFSET)
-    trainer.fit(model, data_mod, ckpt_path=args.checkpoint)
+
+    if args.pytorch:
+        trainer = Trainer(model, targs, data_mod, outdir)
+        trainer.train(args.epochs)
+    else:
+        trainer = PLTrainer(**targs)
+        trainer.fit(model, data_mod, ckpt_path=args.checkpoint)
+
     e = datetime.now()
     td = e - s
     hours, seconds = divmod(td.seconds, 3600)
@@ -575,7 +588,7 @@ def lightning_lr_find(argv=None):
 
     targs = addl_targs
 
-    trainer = Trainer(**targs)
+    trainer = TPLrainer(**targs)
 
     s = datetime.now()
     lr_finder = trainer.lr_find(model)

@@ -23,6 +23,7 @@ def run_train(argv=None):
     parser.add_argument('-m', '--message',     help="message to write to log file", default=None)
     parser.add_argument('-L', '--log',         help="the log file to store run information in", default='jobs.log')
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
+    parser.add_argument('--pytorch',           help="use Pytorch only", action='store_true', default=False)
     prof_grp = parser.add_mutually_exclusive_group()
     prof_grp.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     prof_grp.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
@@ -112,6 +113,9 @@ def run_train(argv=None):
         options += ' -s'
         if isinstance(args.sanity, str):
             options += f' {args.sanity}'
+
+    if args.pytorch:
+        options += f' --pytorch'
 
     if args.early_stop:
         options += f' --early_stop'
