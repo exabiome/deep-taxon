@@ -1,6 +1,6 @@
-hdmf==3.2.1 
-pytorch_lightning==1.6.3 
-scikit-bio==0.5.7 
-wandb==0.12.16 
-torch_optimizer==0.3.0
-torch>=1.11
+hdmf
+pytorch_lightning
+wandb
+torch_optimizer
+torch
+git+https://github.com/ajtritt/scikit-bio@fde9179b56eef7f46e01eb2496eb24b7f04b9205
