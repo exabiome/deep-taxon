@@ -1069,7 +1069,7 @@ class LazySeqDataset(Dataset):
 
         self.__len = len(self.difile)
         self._orig_len = self.__len
-        self.__n_outputs = self.difile.n_outputs
+        self.__n_classes = self.difile.n_classes
 
         counts = self.difile.get_counts(orig=True)
         self._val_counts = np.round(self.val_frac * counts).astype(int)
@@ -1095,8 +1095,8 @@ class LazySeqDataset(Dataset):
 
 
     @property
-    def n_outputs(self):
-        return self.__n_outputs
+    def n_classes(self):
+        return self.__n_classes
 
     def get_graph(self):
         """Return a csr_matrix representation of the tree graph"""

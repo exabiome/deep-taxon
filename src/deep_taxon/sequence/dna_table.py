@@ -409,7 +409,7 @@ class DeepIndexFile(Container):
         self._labels = None
         self.__loaded = False
         self.__indices = None
-        self.__n_outputs = None
+        self.__n_classes = None
         self.__n_emb_components = self.taxa_table['embedding'].data.shape[1] if 'embedding' in self.taxa_table else 0
         self.set_label_key('id')
         self.__rev = False
@@ -421,10 +421,10 @@ class DeepIndexFile(Container):
         if val in ('species', 'id'):         # if species is specified, just use the id column
             self.label_key = 'id'
             genome_labels = self.genome_table['rep_idx'].data[:]
-            self.__n_outputs = len(self.taxa_table)
+            self.__n_classes = len(self.taxa_table)
         elif val in self.taxonomic_levels:
             self.__get_kwargs['index'] = True
-            self.__n_outputs = len(self.taxa_table[self.label_key].elements)
+            self.__n_classes = len(self.taxa_table[self.label_key].elements)
             genome_labels = self.genome_table['rep_idx'].data[:]
             genome_labels = self.taxa_table[val].data[:][genome_labels]
         elif val == 'all':                   # use all taxonomic levels as labels
@@ -451,8 +451,8 @@ class DeepIndexFile(Container):
         return self._classes
 
     @property
-    def n_outputs(self):
-        return self.__n_outputs
+    def n_classes(self):
+        return self.__n_classes
 
     def set_sanity(self, sanity, n_features=5):
         self._sanity = sanity
@@ -711,7 +711,7 @@ class LazyWindowChunkedDIFile:
             self.sequence = difile.seq_table['sequence_index'].target.data
         log('done setting important data', print_msg=rank==0)
 
-        self.n_outputs = difile.n_outputs
+        self.n_classes = difile.n_classes
         self.classes = difile.get_label_classes()
         self.vocab = difile.get_vocab()
 

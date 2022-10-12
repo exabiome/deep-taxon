@@ -205,6 +205,7 @@ class ResNet(AbstractLit):
                 nn.ReLU(inplace=True),
                 nn.Linear(512, hparams.n_outputs),
             )
+
         else:
             self.fc = nn.Sequential(
                 nn.Linear(n_output_channels, 512),
