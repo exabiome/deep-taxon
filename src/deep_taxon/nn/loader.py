@@ -131,15 +131,14 @@ def dataset_stats(argv=None):
         va_len = len(dataset)
         dataset.set_subset()
     else:
-        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True)
+        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True, difile=difile)
         if args.rank != None:
             kwargs['rank'] = args.rank
             kwargs['size'] = args.size
         if comm is not None:
             kwargs['comm'] = comm
         before = time()
-        dataset = LazySeqDataset(**kwargs)
-        dataset.load(sequence=False)
+        dataset = LazySeqDataset(load=False, **kwargs)
         after = time()
 
     io.close()
@@ -648,7 +647,7 @@ class WORHelper:
 class WORSampler(Sampler):
     """Without Replacement Sampler"""
 
-    def __init__(self, length, rng=None, n_partitions=1, part_smplr_rng=None):
+    def __init__(self, length, rng=None, n_partitions=1, part_smplr_rng=None, max_samples=None):
         """
         Args:
             n_partitions :          number of deterministic partitions to break up dataset into
@@ -665,24 +664,41 @@ class WORSampler(Sampler):
         # rank has the same number of samples.
         # Use this later if we decide we don't want to trim tail.
         self.indices = np.arange(length, dtype=dtype)
+
         self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
 
         # set an initial value for curr_part (i.e. current partition)
         # so we can calculate lenght in __len__
         self.curr_part = self.part_sampler.sample()
-        self.curr_len = len(self)
+
+        self.__len = (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1
+        if max_samples is not None:
+            self.__len = min(self.__len, max_samples)
+        self.max_samples = max_samples
+        self.i = self.__len
+
+        self.curr_len = 0
 
     def __iter__(self):
-        self.curr_len = len(self)
+        self.curr_len = (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1 # len(self)
+        if self.max_samples is not None:
+            self.i = 0
         return self
 
     def __len__(self):
-        return (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1
+        return self.__len
 
     def __next__(self):
+        if self.max_samples is not None:
+            if self.i < self.__len:
+                self.i += 1
+            else:
+                raise StopIteration
+
         if self.curr_len == 0:
             self.curr_part = self.part_sampler.sample()
             raise StopIteration
+
         idx = self.rng.integers(self.curr_len) * self.part_sampler.period + self.curr_part
         end = (self.curr_len - 1) * self.part_sampler.period + self.curr_part
         ret = self.indices[idx]
@@ -694,7 +710,7 @@ class WORSampler(Sampler):
 class DSSampler(SequentialSampler):
     """Distributed Sequential Sampler"""
 
-    def __init__(self, length, n_partitions=1, part_smplr_rng=None):
+    def __init__(self, length, n_partitions=1, part_smplr_rng=None, max_samples=None):
         """
         Args:
             n_partitions :          number of deterministic partitions to break up dataset into
@@ -708,16 +724,29 @@ class DSSampler(SequentialSampler):
         self.curr_part = self.part_sampler.sample()
         self.start = 0
         self.end = length
+        self.__len = (self.end - self.start - self.curr_part - 1) // self.part_sampler.period + 1
+        if max_samples is not None:
+            self.__len = min(self.__len, max_samples)
+        self.max_samples = max_samples
+        self.i = self.__len
+
 
     def __iter__(self):
         self.__it = iter(range(self.start + self.curr_part, self.end, self.part_sampler.period))
+        if self.max_samples is not None:
+            self.i = 0
         return self
 
     def __len__(self):
-        return (self.end - self.start - self.curr_part - 1) // self.part_sampler.period + 1
+        return self.__len
 
     def __next__(self):
         try:
+            if self.max_samples is not None:
+                if self.i < self.__len:
+                    self.i += 1
+                else:
+                    raise StopIteration
             return next(self.__it)
         except StopIteration:
             self.curr_part = self.part_sampler.sample()
@@ -742,15 +771,55 @@ class SubsetDataLoader(DataLoader):
         return super().__iter__()
 
 
-def get_min(val, batch_size):
-    from mpi4py import MPI
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
-    ret = comm.allreduce(val, op=MPI.MIN)
-    if (val - ret) < batch_size:
-        ret = val
-    return ret
+from torch.utils.data import Dataset, DataLoader
+import torch 
+
+class fast_dataset(Dataset):
+    def __init__(self, num_samples, sample_length):
+        self.x = torch.zeros((num_samples, sample_length), device='cuda', dtype=torch.half)
+        self.y = torch.zeros(num_samples, device='cuda', dtype=torch.float64)
+    def __len__(self):
+        return len(self.x)
+    def __getitem__(self,idx):
+        return None
+
+class new_collate_fxn():
+    def __init__(self, batch_size, sample_length):
+        self.x = torch.zeros((batch_size, sample_length), device='cuda', dtype=torch.half)
+        self.y = torch.zeros(batch_size, device='cuda', dtype=torch.float64)
+        #self.x = torch.zeros((batch_size, sample_length), dtype=torch.half).to('cuda')
+        #self.y = torch.zeros(batch_size, dtype=torch.float64).to('cuda')
+    def __call__(self, samples):
+        return self.x, self.y
+        
+
+class FastDataModule(pl.LightningDataModule):
+    def __init__(self, difile, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1, **lsd_kwargs):
+        super().__init__()
+        kwargs = dict(batch_size=hparams.batch_size)
+        self._loader_kwargs = kwargs
+        self.batch_size = hparams.batch_size
+        self.window_len = hparams.window
+        self.num_samples = 1500000 #25,000,000 (at 16bit) takes up 42.92gb on a card
+        self.val_pct = 0.1
+        self.train_samples = int(self.num_samples * (1 - self.val_pct))
+        self.valid_samples = int(self.num_samples * self.val_pct)
+        
+    def setup(self, stage=None):
+        self.train_ds = fast_dataset(self.train_samples, self.window_len)
+        self.valid_ds = fast_dataset(self.valid_samples, self.window_len)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_ds, batch_size=self.batch_size, 
+                        collate_fn=new_collate_fxn(self.batch_size, self.window_len))
+
+    def val_dataloader(self):
+        return DataLoader(self.valid_ds, batch_size=self.batch_size, 
+                        collate_fn=new_collate_fxn(self.batch_size, self.window_len))
+
+    def test_dataloader(self):
+        return None
+
 
 class DeepIndexDataModule(pl.LightningDataModule):
 
@@ -761,6 +830,13 @@ class DeepIndexDataModule(pl.LightningDataModule):
         if seed is None:
             seed = parse_seed('')
 
+        self.seed = seed
+        self.rank = rank
+        self.size = size
+        self.n_partitions = hparams.n_partitions
+        self.batch_size = hparams.batch_size
+        self.sanity = hparams.sanity
+
         if inference:
             hparams.manifold = False
             hparams.graph = False
@@ -770,13 +846,8 @@ class DeepIndexDataModule(pl.LightningDataModule):
             # self.dataset.load(sequence=hparams.load)
             kwargs['pin_memory'] = hparams.pin_memory
 
-            # set up the training sampler - shuffle for training
-            train_len = get_min(self.dataset.get_subset_len(train=True), hparams.batch_size)
-            self._tr_sampler = WORSampler(train_len, rng=seed, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
-
-            # set up the validation sampler - DO NOT shuffle for training
-            val_len = get_min(self.dataset.get_subset_len(validate=True), hparams.batch_size)
-            self._val_sampler = DSSampler(val_len, n_partitions=hparams.n_partitions, part_smplr_rng=seed+rank)
+            self._tr_sampler = None
+            self._val_sampler = None
 
         self._parallel_load = hparams.num_workers != None and hparams.num_workers > 0
 
@@ -796,18 +867,41 @@ class DeepIndexDataModule(pl.LightningDataModule):
         if self._loader_kwargs.get('num_workers', None) not in (None, 0):
             self.dataset.close()
 
+    def get_min(self, val, batch_size):
+        #from mpi4py import MPI
+        #comm = MPI.COMM_WORLD
+        #rank = comm.Get_rank()
+        #size = comm.Get_size()
+        #ret = comm.allreduce(val, op=MPI.MIN)
+        import torch.distributed as dist
+        ret = torch.tensor(val).cuda()
+        dist.all_reduce(ret, op=dist.ReduceOp.MIN)
+        ret = int(ret.cpu())
+        if (val - ret) < batch_size:
+            ret = val
+        return ret
+
     def train_dataloader(self):
         kwargs = self._loader_kwargs.copy()
-        #if self._parallel_load:
-        #    self.dataset.close()
+        if self._tr_sampler is None:
+            # set up the training sampler - shuffle for training
+            train_len = self.get_min(self.dataset.get_subset_len(train=True), self.batch_size)
+            s_kwargs = dict(rng=self.seed, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
+            if self.sanity:
+                s_kwargs['max_samples'] = self.batch_size * self.sanity
+            self._tr_sampler = WORSampler(train_len, **s_kwargs)
         kwargs['sampler'] = self._tr_sampler
         return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
     def val_dataloader(self):
         kwargs = self._loader_kwargs.copy()
-        #if self._parallel_load:
-        #    self.dataset.close()
-        #kwargs.pop('sampler', None)
+        if self._val_sampler is None:
+            # set up the validation sampler - DO NOT shuffle for training
+            val_len = self.get_min(self.dataset.get_subset_len(validate=True), self.batch_size)
+            s_kwargs = dict(n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
+            if self.sanity:
+                s_kwargs['max_samples'] = self.batch_size * self.sanity // 4
+            self._val_sampler = DSSampler(val_len, **s_kwargs)
         kwargs['sampler'] = self._val_sampler
         return SubsetDataLoader(self.dataset, validate=True, **kwargs)
 
@@ -969,7 +1063,8 @@ class LazySeqDataset(Dataset):
         self.difile = LazyWindowChunkedDIFile(difile, self.window, self.step,
                                               revcomp=self.revcomp,
                                               rank=self._global_rank, size=self._world_size,
-                                              distances=distances, tree_graph=tree_graph)
+                                              distances=distances, tree_graph=tree_graph,
+                                              load=kwargs['load'])
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
         self.__len = len(self.difile)

@@ -512,9 +512,9 @@ class DeepIndexFile(Container):
             seq_dset = self.seq_table['sequence'].target.data
             ## read one sequence at a time
             it = zip(starts, ends)
+            log('Loading data subset - loading sequences from subset', print_msg=verbose)
             if verbose:
                 it = tqdm(it, total=len(starts))
-            log('Loading data subset - loading sequences from subset', print_msg=verbose)
             for s_src, e_src in it:
                 e_dest = e_src - s_src + s_dest
                 seq_dset.read_direct(sequence_subset, np.s_[s_src:e_src], np.s_[s_dest:e_dest])
@@ -689,14 +689,13 @@ class LazyWindowChunkedDIFile:
     }
 
 
-    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, distances=False, tree_graph=False):
+    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, distances=False, tree_graph=False, load=True):
         counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
         if size > 1:
             indices = balsplit(counts, size, rank)
             counts = counts[indices]
             difile.set_sequence_subset(indices)
-
-        difile.load(sequence=True, verbose=rank==0)
+        difile.load(sequence=load, verbose=rank==0)
         log('setting lengths', print_msg=rank==0)
         self.lengths = np.asarray(difile.seq_table['length'].data, dtype=int)
         log('setting ids', print_msg=rank==0)
@@ -706,7 +705,10 @@ class LazyWindowChunkedDIFile:
         log('setting seq_index', print_msg=rank==0)
         self.seq_index = np.asarray(difile.seq_table['sequence_index'].data, dtype=int)
         log('setting sequence', print_msg=rank==0)
-        self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
+        if load:
+            self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
+        else:
+            self.sequence = difile.seq_table['sequence_index'].target.data
         log('done setting important data', print_msg=rank==0)
 
         self.n_classes = difile.n_classes
@@ -744,7 +746,7 @@ class LazyWindowChunkedDIFile:
         self.subset_counts = None
         self.seed = None
         self.starts = None
-        log('done constructing LazyWindowDIFile')
+        log('done constructing LazyWindowDIFile', print_msg=rank==0)
 
     @property
     def n_seqs(self):

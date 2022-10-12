@@ -3,7 +3,9 @@ from datetime import datetime
 import os
 import shutil
 import sys
+import time
 import ruamel.yaml as yaml
+import time
 
 from .utils import get_job
 from ..utils import get_seed, check_argv
@@ -21,13 +23,14 @@ def run_train(argv=None):
     parser.add_argument('-m', '--message',     help="message to write to log file", default=None)
     parser.add_argument('-L', '--log',         help="the log file to store run information in", default='jobs.log')
     parser.add_argument('--submit',            help="submit job to queue", action='store_true', default=False)
+    parser.add_argument('--pytorch',           help="use Pytorch only", action='store_true', default=False)
     prof_grp = parser.add_mutually_exclusive_group()
     prof_grp.add_argument('--profile', action='store_true', default=False, help='profile with PyTorch Lightning profile')
     prof_grp.add_argument('--cuda_profile', action='store_true', default=False, help='profile with PyTorch CUDA profiling')
     parser.add_argument('-a', '--chain',       help="chain jobs in submission", type=int, default=1)
 
     rsc_grp = parser.add_argument_group('Resource Manager Arguments')
-    rsc_grp.add_argument('-T', '--time',       help='the time to run the job for', default='01:00:00')
+    rsc_grp.add_argument('-t', '--time',       help='the time to run the job for', default='01:00:00')
     rsc_grp.add_argument('-n', '--nodes',      help="the number of nodes to use", default=None, type=int)
     rsc_grp.add_argument('-g', '--gpus',       help="the number of GPUs to use", default=None, type=int)
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
@@ -40,6 +43,8 @@ def run_train(argv=None):
     grp.add_argument('--perlmutter',  help='make script for running on NERSC Perlmutter',  action='store_true', default=False)
     grp.add_argument('--summit',      help='make script for running on OLCF Summit', action='store_true', default=False)
 
+    parser.add_argument('-B', '--global_bs', type=eval, help='the global batch size. Using this option will set batch_size in the config', default=None)
+    parser.add_argument('-V', '--n_val_checks', type=int, help='the number of validation checks to do per epoch', default=1)
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     parser.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
@@ -52,24 +57,38 @@ def run_train(argv=None):
     parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
     parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
                         help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
+    parser.add_argument('-T', '--timed_checkpoint', metavar='MIN', nargs='?', const=True, default=False,
+                        help='run a checkpoing ever MIN seconds. By default MIN=10')
     parser.add_argument('--early_stop',         help="use PL early stopping", action='store_true', default=False)
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('--csv', action='store_true', default=False, help='log to a CSV file instead of WandB')
+    parser.add_argument('--apex', action='store_true', default=False, help='use Apex fused optimizers')
     parser.add_argument('--shm', action='store_true', default=False, help='copy input to shared memory before training')
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
+    parser.add_argument('-W', '--wandb_id', type=str, help='the WandB ID. Use this to resume previous runs', default=hex(hash(time.time()))[2:10])
+    parser.add_argument('-S', '--shifter', type=str, help='the Docker container to use', default=None)
 
+    parser.add_argument('--theoretical_limit', action='store_true', default=False, 
+                                                help='use a fake dataloader to test fastest possible fwd pass')
+    
     args = parser.parse_args(argv)
 
     job = get_job(args)
 
+    if not os.path.exists(args.config):
+        print(f"ERROR - Config file {args.config} does not exist", file=sys.stderr)
+        exit(1)
+
     with open(args.config, 'r') as f:
         conf = yaml.safe_load(f)
 
+    if args.global_bs is not None:
+        conf['batch_size'] = args.global_bs // (args.nodes * args.gpus)
 
     if conf.get('optimizer', "").startswith('adam') and conf.get('lr_scheduler', '') == 'cyclic':
-        print("Cannot use cyclic LR scheduler with Adam/AdamW", file=sys.stderr)
+        print("ERROR - Cannot use cyclic LR scheduler with Adam/AdamW", file=sys.stderr)
         exit(1)
 
     if conf.get('seed', None) is None:
@@ -77,15 +96,26 @@ def run_train(argv=None):
 
 
     args.input = os.path.abspath(args.input)
+    if not os.path.exists(args.input):
+        print(f"ERROR - Input file {args.input} does not exist", file=sys.stderr)
+        exit(1)
 
     options = ''
     if args.debug:
         job.set_debug(True)
 
+    if args.timed_checkpoint:
+        options += ' -T'
+        if isinstance(args.timed_checkpoint, str):
+            options += f' {args.timed_checkpoint}'
+
     if args.sanity:
-        options = '--sanity'
+        options += ' -s'
         if isinstance(args.sanity, str):
             options += f' {args.sanity}'
+
+    if args.pytorch:
+        options += f' --pytorch'
 
     if args.early_stop:
         options += f' --early_stop'
@@ -98,9 +128,19 @@ def run_train(argv=None):
     elif args.cuda_profile:
         options += f' --cuda_profile'
         args.csv = True
+        job.add_modules('cudatoolkit')
 
     if args.csv:
         options += f' --csv'
+    else:
+        if args.wandb_id is not None:
+            options += f' -W {args.wandb_id}'
+
+    if args.apex:
+        options += f' --apex'
+
+    if args.theoretical_limit:
+        options += f' --theoretical_limit'
 
     chunks = f'chunks_W{conf["window"]}_S{conf["step"]}'
 
@@ -189,7 +229,13 @@ def run_train(argv=None):
 
     input_var = 'INPUT'
 
-    train_cmd = 'deep-taxon train'
+    if args.shifter:
+        exe = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'bin/deep-taxon.py'))
+        if not os.path.exists(exe):
+            print(f'Cannot find executable needed to run with shifter. Expected here: {exe}', file=sys.stderr)
+        train_cmd = f'python {exe} train'
+    else:
+        train_cmd = 'deep-taxon train'
     if args.summit:
         train_cmd += ' --lsf'
         if job.use_bb:
@@ -234,7 +280,28 @@ def run_train(argv=None):
         jsrun = f'jsrun -g {args.gpus} -n {args.nodes} -a {args.gpus} -r 1 -c {n_cores}'
         job.add_command('$CMD >> $LOG 2>&1', run=jsrun)
     else:
+        # Get scratch and CFS directories to see if we need to specify license
+        try:
+            scratch = os.environ['SCRATCH']
+            cfs = os.environ['CFS']
+        except KeyError as e:
+            print(f"environment variable {e.message} not found", file=sys.stderr)
+            exit(1)
+        licenses = list()
+        if any(os.path.abspath(x).startswith(scratch) for x in (args.input, args.outdir, args.config)):
+            licenses.append('scratch')
+        if any(os.path.abspath(x).startswith(cfs) for x in (args.input, args.outdir, args.config)):
+            licenses.append('cfs')
+
+        if len(licenses) > 0:
+            job.add_addl_jobflag('L', ','.join(licenses))
+
         srun = f'srun -n {job.nodes}'
+
+        if args.shifter:
+            job.add_addl_jobflag('-image', args.shifter)
+            srun += ' shifter'
+
         if args.cuda_profile:
             srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
