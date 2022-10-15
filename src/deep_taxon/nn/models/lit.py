@@ -172,7 +172,7 @@ class AbstractLit(LightningModule):
             self.log(self.train_acc, self.accuracy(output, target), prog_bar=True)
         stats = self.time_stats(batch_idx)
         stats[self.train_loss] = loss
-        self.log_dict(stats)
+        self.log_dict(stats, sync_dist=True)
         return loss
 
     def training_epoch_end(self, outputs):
@@ -191,7 +191,7 @@ class AbstractLit(LightningModule):
             self.log(self.val_acc, self.accuracy(output, target), prog_bar=True)
         stats = self.time_stats(batch_idx)
         stats[self.val_loss] = loss
-        self.log_dict(stats)
+        self.log_dict(stats, sync_dist=True)
         return loss
 
     def validation_epoch_end(self, outputs):
