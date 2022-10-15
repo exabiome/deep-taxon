@@ -17,7 +17,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 
 from ..sequence import LazyWindowChunkedDIFile, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
-from ..utils import parse_seed, distsplit, balsplit, get_logger
+from ..utils import parse_seed, distsplit, balsplit, get_logger, log
 
 def print_mem(msg=None):
     pid = os.getpid()
@@ -456,17 +456,23 @@ class DistanceCollater:
             dmat = squareform(dmat)
         #self.dmat = torch.as_tensor(dmat, dtype=torch.float).pow(2)
         #self.dmat = torch.as_tensor(dmat, dtype=torch.float).sqrt()
-        self.dmat = torch.as_tensor(dmat/dmat.max(), dtype=torch.float)
+        self.dmat = dmat
+        if not isinstance(self.dmat, torch.Tensor):
+            self.dmat = torch.from_numpy(self.dmat)
+
+        self.dmat /= self.dmat.max()
+
 
     def __call__(self, samples):
         """
         A function to collate samples and return a sub-distance matrix
         """
-        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = self.collater(samples)
+        X_ret, y_idx = self.collater(samples)
 
         # Get distances
+        y_idx = y_idx.long()
         y_ret = self.dmat[y_idx][:, y_idx]
-        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+        return X_ret, y_ret
 
 
 class TnfCollater:
@@ -582,13 +588,16 @@ class TnfCollater:
         return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
 
 
-def get_collater(dataset, inference=False):
+def get_collater(dataset, inference=False, condensed=False):
     if dataset.tnf:
         return TnfCollater(dataset.vocab)
     elif dataset.manifold:
-        return DistanceCollater(dataset.difile.distances, seq_collater=collater)
+        if condensed:
+            return TrainingSeqCollater(dataset.padval)
+        else:
+            return DistanceCollater(dataset.difile.distances, seq_collater=TrainingSeqCollater(dataset.padval))
     elif dataset.graph:
-        return GraphCollater(dataset.difile.node_ids, seq_collater=collater)
+        return GraphCollater(dataset.difile.node_ids, seq_collater=TrainingSeqCollater(dataset.padval))
     else:
         if inference:
             return SeqCollater(dataset.padval)
@@ -772,7 +781,7 @@ class SubsetDataLoader(DataLoader):
 
 
 from torch.utils.data import Dataset, DataLoader
-import torch 
+import torch
 
 class fast_dataset(Dataset):
     def __init__(self, num_samples, sample_length):
@@ -791,7 +800,7 @@ class new_collate_fxn():
         #self.y = torch.zeros(batch_size, dtype=torch.float64).to('cuda')
     def __call__(self, samples):
         return self.x, self.y
-        
+
 
 class FastDataModule(pl.LightningDataModule):
     def __init__(self, difile, hparams, inference=False, keep_open=False, seed=None, rank=0, size=1, **lsd_kwargs):
@@ -804,17 +813,17 @@ class FastDataModule(pl.LightningDataModule):
         self.val_pct = 0.1
         self.train_samples = int(self.num_samples * (1 - self.val_pct))
         self.valid_samples = int(self.num_samples * self.val_pct)
-        
+
     def setup(self, stage=None):
         self.train_ds = fast_dataset(self.train_samples, self.window_len)
         self.valid_ds = fast_dataset(self.valid_samples, self.window_len)
 
     def train_dataloader(self):
-        return DataLoader(self.train_ds, batch_size=self.batch_size, 
+        return DataLoader(self.train_ds, batch_size=self.batch_size,
                         collate_fn=new_collate_fxn(self.batch_size, self.window_len))
 
     def val_dataloader(self):
-        return DataLoader(self.valid_ds, batch_size=self.batch_size, 
+        return DataLoader(self.valid_ds, batch_size=self.batch_size,
                         collate_fn=new_collate_fxn(self.batch_size, self.window_len))
 
     def test_dataloader(self):
@@ -837,6 +846,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
         self.batch_size = hparams.batch_size
         self.sanity = hparams.sanity
 
+        log("Creating LazySeqDataset", print_msg=rank==0)
         if inference:
             hparams.manifold = False
             hparams.graph = False
@@ -858,7 +868,8 @@ class DeepIndexDataModule(pl.LightningDataModule):
             #kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
-        kwargs['collate_fn'] = get_collater(self.dataset, inference=inference)
+        log("Getting collater", print_msg=rank==0)
+        kwargs['collate_fn'] = get_collater(self.dataset, inference=inference, condensed=hparams.condensed)
         kwargs['shuffle'] = False
 
         self._loader_kwargs = kwargs

@@ -83,6 +83,8 @@ def get_conf_args():
         'classify': dict(action='store_true', help='run a classification problem', default=False),
         'arc_margin': dict(action='store_true', help='use arc_margin loss function', default=False),
         'manifold': dict(action='store_true', help='run a manifold learning problem', default=False),
+        'condensed': dict(action='store_true', help='used condensed form of distance matrix for manifold loss calculation', default=False),
+        'hyperbolic': dict(action='store_true', help='use hyperboloid distance instead of Euclidean for manifold learning', default=False),
         'bottleneck': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=True),
         'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
                            help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species'),
@@ -175,9 +177,9 @@ def parse_args(*addl_args, argv=None):
     dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     parser.add_argument('-q', '--quiet', action='store_true', default=False, help='do not print arguments, model, etc.')
-    parser.add_argument('--theoretical_limit', action='store_true', default=False, 
+    parser.add_argument('--theoretical_limit', action='store_true', default=False,
                                                 help='use a fake dataloader to test fastest possible fwd pass')
-    
+
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -328,8 +330,15 @@ def process_args(args=None):
     else:
         args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
+    distances = None
+    if args.manifold:
+        if args.condensed:
+            data_mod.dataset.difile.distances = torch.from_numpy(data_mod.dataset.difile.distances)
+            if targs['gpus'] is not None:
+                data_mod.dataset.difile.distances = data_mod.dataset.difile.distances.to(env.local_rank())
+            distances = data_mod.dataset.difile.distances
 
-    model = process_model(args, taxa_table=difile.taxa_table)
+    model = process_model(args, taxa_table=difile.taxa_table, distances=distances)
 
     #if args.num_workers > 0:
     #    data_mod.dataset.close()

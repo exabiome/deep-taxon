@@ -6,7 +6,7 @@ import torch
 import argparse
 from time import time
 
-from ..loss import ArcMarginProduct, DistMSELoss, EuclideanMAELoss, HyperbolicMAELoss
+from ..loss import ArcMarginProduct, EuclideanMAELoss, HyperbolicMAELoss, CondensedEuclideanMAELoss, CondensedHyperbolicMAELoss
 from .. import TIME_OFFSET
 
 class AbstractLit(LightningModule):
@@ -19,12 +19,22 @@ class AbstractLit(LightningModule):
 
     schedules = ('adam', 'cyclic', 'plateau', 'cosine', 'cosinewr', 'step' )
 
-    def __init__(self, hparams, lr=None):
+    def __init__(self, hparams, lr=None, distances=None):
         super().__init__()
         #self.hparams = self.check_hparams(hparams)
         self.save_hyperparameters(hparams)
         if self.hparams.manifold:
-            self._loss = HyperbolicMAELoss()
+            if self.hparams.condensed:
+                kwargs = dict(dmat=distances, batch_size=hparams.batch_size)
+                if self.hparams.hyperbolic:
+                    self._loss = CondensedHyperbolicMAELoss(**kwargs)
+                else:
+                    self._loss = CondensedEuclideanMAELoss(**kwargs)
+            else:
+                if self.hparams.hyperbolic:
+                    self._loss = HyperbolicMAELoss()
+                else:
+                    self._loss = EuclideanMAELoss()
         elif self.hparams.classify:
             if self.hparams.tgt_tax_lvl == 'all':
                 self._loss = HierarchicalLoss(hparams.n_taxa_all)

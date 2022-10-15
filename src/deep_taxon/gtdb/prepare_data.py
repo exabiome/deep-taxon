@@ -14,6 +14,8 @@ import skbio.io
 import os
 from functools import partial
 
+from scipy.spatial.distance import squareform
+
 
 def add_branches(node, mat, names):
     name = node.name
@@ -187,7 +189,7 @@ def prepare_data(argv=None):
             dat[k] = row[k]
         return pd.Series(data=dat)
 
-    taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[['accession', 'gtdb_taxonomy', 'gtdb_genome_representative', 'contig_count', 'checkm_completeness']]\
+    taxdf = pd.read_csv(args.metadata, header=0, sep='\t', usecols=['accession', 'gtdb_taxonomy', 'gtdb_genome_representative', 'contig_count', 'checkm_completeness'])\
                         .apply(func, axis=1)
 
     taxdf = taxdf.set_index('accession')
@@ -377,9 +379,10 @@ def prepare_data(argv=None):
         tree_str = bytes_io.getvalue()
         di_kwargs['tree'] = NewickString('tree', data=tree_str)
 
+        logger.info('generating patristic distance matrix')
         # get distances from tree if they are not provided
-        tt_dmat = root.tip_tip_distances().filter(rep_taxdf.index)
-        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=tt_dmat.data)
+        tt_dmat = squareform(root.tip_tip_distances().filter(rep_taxdf.index).data.astype(np.float32))
+        di_kwargs['distances'] = CondensedDistanceMatrix('distances', data=tt_dmat)
 
         adj, gt_indices = get_tree_graph(root, rep_taxdf)
         di_kwargs['tree_graph'] = TreeGraph(data=adj, leaves=gt_indices, table=genome_table, name='tree_graph')

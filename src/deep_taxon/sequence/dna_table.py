@@ -10,6 +10,7 @@ from tqdm import tqdm
 import torch
 import torch.nn.functional as F
 import sklearn.neighbors as skn
+from scipy.spatial.distance import squareform
 
 from hdmf.common import VectorIndex, VectorData, DynamicTable, CSRMatrix,\
                         DynamicTableRegion, register_class, EnumData
@@ -18,7 +19,7 @@ from hdmf.data_utils import DataIO
 from hdmf import Container, Data
 from hdmf.common import get_hdf5io
 
-from ..utils import balsplit
+from ..utils import balsplit, log
 
 
 __all__ = ['DeepIndexFile',
@@ -30,11 +31,6 @@ __all__ = ['DeepIndexFile',
            'chunk_sequence']
 
 NS = 'deep-index'
-
-
-def log(msg, print_msg=True):
-    if print_msg:
-        print(f'{datetime.now()} - {msg}', file=sys.stderr)
 
 
 class AbstractSequenceTable(DynamicTable, metaclass=ABCMeta):
@@ -715,9 +711,15 @@ class LazyWindowChunkedDIFile:
         self.classes = difile.get_label_classes()
         self.vocab = difile.get_vocab()
 
+
         self.distances = None
+        square = False
         if distances:
-            self.distances = difile.distances.data[:]
+            cond = difile.distances.data.ndim == 1
+            if (not cond and not square) or (cond and square):
+                self.distances = squareform(difile.distances.data)
+            else:
+                self.distances = difile.distances.data[:]
         self.node_ids = None
         self.tree_graph = None
         if tree_graph:

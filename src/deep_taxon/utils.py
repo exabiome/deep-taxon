@@ -10,6 +10,11 @@ import warnings
 import numpy as np
 
 
+
+def log(msg, print_msg=True):
+    if print_msg:
+        print(f'{datetime.now()} - {msg}', file=sys.stderr)
+
 @contextmanager
 def ccm(cond, cm):
     """
