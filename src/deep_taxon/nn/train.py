@@ -672,13 +672,24 @@ def get_model_info(argv=None):
     args = parser.parse_args(argv)
     process_config(args.config, args)
 
-    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+
+    io = get_hdf5io(args.input, 'r')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        difile = io.read()
+    difile.set_label_key(args.tgt_tax_lvl)
+
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True, difile=difile)
     args.input_nc = 136 if args.tnf else len(dataset.vocab)
     args.n_classes = dataset.n_classes
+
+    distances = None
     if args.classify:
         args.n_outputs = dataset.n_classes
+    elif args.manifold:
+        distances = torch.from_numpy(dataset.difile.distances)
 
-    model = process_model(args, taxa_table=dataset.difile.taxa_table)
+    model = process_model(args, taxa_table=difile.taxa_table, distances=distances)
 
     total_bytes = 0
     total_parameters = 0
