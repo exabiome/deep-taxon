@@ -433,6 +433,18 @@ class ResNeXt101_32x8d(ResNet):
         super().__init__(hparams, **kwargs)
 
 
+@model('resnext101_64x4d')
+class ResNeXt101_64x4d(ResNet):
+
+    def __init__(self, hparams, **kwargs):
+        hparams = self.check_hparams(hparams)
+        hparams.block = Bottleneck
+        hparams.layers = [3, 4, 23, 3]
+        hparams.groups = 64
+        hparams.width_per_group = 4
+        super().__init__(hparams, **kwargs)
+
+
 @model('wide_resnet50_2')
 class Wide_ResNet50_2(ResNet):
 
