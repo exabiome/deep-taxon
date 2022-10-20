@@ -233,7 +233,7 @@ class ConvNeXtTiny(ConvNeXt):
     def __init__(self, hparams, **kwargs):
         hparams.block_setting = _block_setting(96, 192, 384, 768, l3=9)
         hparams.stochastic_depth_prob = 0.1
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('convnext_small')
@@ -241,7 +241,7 @@ class ConvNeXtSmall(ConvNeXt):
     def __init__(self, hparams, **kwargs):
         hparams.block_setting = _block_setting(96, 192, 384, 768)
         hparams.stochastic_depth_prob = 0.4
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('convnext_base')
@@ -249,12 +249,12 @@ class ConvNeXtBase(ConvNeXt):
     def __init__(self, hparams, **kwargs):
         hparams.block_setting = _block_setting(128, 256, 512, 1024)
         hparams.stochastic_depth_prob = 0.5
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('convnext_large')
-class ConvNeXtLarge(ConvNeXt, **kwargs):
-    def __init__(self, hparams):
+class ConvNeXtLarge(ConvNeXt):
+    def __init__(self, hparams, **kwargs):
         hparams.block_setting = _block_setting(192, 384, 768, 1536)
         hparams.stochastic_depth_prob = 0.5
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
