@@ -907,7 +907,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         kwargs = self._loader_kwargs.copy()
         if self._val_sampler is None:
-            # set up the validation sampler - DO NOT shuffle for training
+            # set up the validation sampler - DO NOT shuffle for validation
             val_len = self.get_min(self.dataset.get_subset_len(validate=True), self.batch_size)
             s_kwargs = dict(n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
             if self.sanity:
