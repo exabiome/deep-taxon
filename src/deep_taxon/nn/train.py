@@ -217,7 +217,7 @@ def process_args(args=None):
         targs['accelerator'] = 'ipu'
         targs['devices'] = process_gpus(args.gpus)
     else:
-        targs['gpus'] = process_gpus(args.gpus)
+        gpus = process_gpus(args.gpus)
         targs['num_nodes'] = args.num_nodes
         if args.lsf:
             ##########################################################################################
@@ -232,6 +232,7 @@ def process_args(args=None):
         elif args.slurm:
             env = SLURMEnvironment()
 
+        local_rank = 0
         if env is not None:
             global RANK
             global SIZE
@@ -249,20 +250,22 @@ def process_args(args=None):
                 targs['local_rank'] = env.local_rank()
                 targs['global_rank'] = env.global_rank()
                 targs['world_size'] = env.world_size()
+            local_rank = env.local_rank()
         else:
             os.environ["MASTER_ADDR"] = "127.0.0.1"
             os.environ["MASTER_PORT"] = "12910"
             torch.distributed.init_process_group('nccl', rank=0, world_size=1)
+            local_rank = 0
 
-        if targs['gpus'] is not None:
+        if gpus is not None:
             targs['accelerator'] = 'gpu'
-            if targs['gpus'] == 1:
+            if gpus == 1:
                 targs['devices'] = 1
             else:
                 if env is None:
                     raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
                 torch.cuda.set_device(env.local_rank())
-                targs['devices'] = targs['gpus']
+                targs['devices'] = gpus
                 targs['strategy'] = DDPStrategy(find_unused_parameters=False,
                                                 cluster_environment=env)
             targs['precision'] = 16
@@ -334,8 +337,8 @@ def process_args(args=None):
     if args.manifold:
         if args.condensed:
             data_mod.dataset.difile.distances = torch.from_numpy(data_mod.dataset.difile.distances)
-            if targs['gpus'] is not None:
-                data_mod.dataset.difile.distances = data_mod.dataset.difile.distances.to(env.local_rank())
+            if gpus is not None:
+                data_mod.dataset.difile.distances = data_mod.dataset.difile.distances.to(local_rank)
             distances = data_mod.dataset.difile.distances
 
     model = process_model(args, taxa_table=difile.taxa_table, distances=distances)
@@ -345,7 +348,8 @@ def process_args(args=None):
 
     ret = [model, args, targs, data_mod]
 
-    io.close()
+    if args.load:
+        io.close()
 
     return tuple(ret)
 
@@ -447,11 +451,16 @@ def run_lightning(argv=None):
     import traceback
     import os
     import pprint
+    import warnings
+    warnings.filterwarnings(action='ignore', message='The dataloader, .*, does not have many workers.*')
 
 
     pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+
+    if args.sanity is not False:
+        warnings.filterwarnings(action='ignore', message='Checkpoint directory .* exists and is not empty.')
 
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
@@ -519,7 +528,7 @@ def run_lightning(argv=None):
             if isinstance(args.timed_checkpoint, str):
                 args.timed_checkpoint = int(args.timed_checkpoint)
             else:
-                args.timed_checkpoint = 10
+                args.timed_checkpoint = 60
 
             callbacks.append(ModelCheckpoint(dirpath=outdir,
                                              filename='t-{epoch}-{step}',
