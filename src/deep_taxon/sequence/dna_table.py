@@ -698,11 +698,14 @@ class LazyWindowChunkedDIFile:
         self.id = np.asarray(difile.seq_table['id'].data, dtype=int)
         log('setting labels', print_msg=rank==0)
         self.labels = np.asarray(difile._labels)
+        self.labels = torch.from_numpy(self.labels)
+
         log('setting seq_index', print_msg=rank==0)
         self.seq_index = np.asarray(difile.seq_table['sequence_index'].data, dtype=int)
         log('setting sequence', print_msg=rank==0)
         if load:
             self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
+            self.sequence = torch.from_numpy(self.sequence)
         else:
             self.sequence = difile.seq_table['sequence_index'].target.data
         log('done setting important data', print_msg=rank==0)
@@ -861,7 +864,7 @@ class LazyWindowChunkedDIFile:
         item['seq_idx'] = item['id']
 
         if rev:
-            item['seq'] = self.rcmap[item['seq'][l-e:l-s].astype(int)].flip(0)
+            item['seq'] = self.rcmap[item['seq'][l-e:l-s].long()].flip(0)
         else:
             item['seq'] = item['seq'][s:e]
         item['id'] = i
