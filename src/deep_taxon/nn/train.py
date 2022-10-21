@@ -17,6 +17,7 @@ from . import TIME_OFFSET
 from .no_lightning import Trainer
 from hdmf.utils import docval
 from hdmf.common import get_hdf5io
+from scipy.spatial.distance import squareform
 
 import argparse
 import logging
@@ -334,12 +335,18 @@ def process_args(args=None):
         args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
     distances = None
+    square = False
     if args.manifold:
         if args.condensed:
-            data_mod.dataset.difile.distances = torch.from_numpy(data_mod.dataset.difile.distances)
+            cond = difile.distances.data.ndim == 1
+            if (not cond and not square) or (cond and square):
+                distances = squareform(difile.distances.data)
+            else:
+                distances = difile.distances.data[:]
+
+            distances = torch.from_numpy(distances)
             if gpus is not None:
-                data_mod.dataset.difile.distances = data_mod.dataset.difile.distances.to(local_rank)
-            distances = data_mod.dataset.difile.distances
+                distances = distances.to(local_rank)
 
     model = process_model(args, taxa_table=difile.taxa_table, distances=distances)
 
