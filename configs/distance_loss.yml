@@ -1,10 +1,10 @@
 # This config file is for running with a distance-based loss.
 seed: 1111
 
-model: wide_resnet101_2
+model: convnext_small
 simple_clf: true
 bottleneck: false
-n_outputs: 128
+n_outputs: 64
 
 # sequence windows
 window: 1024
@@ -14,7 +14,7 @@ step: 128
 classify: false
 manifold: true
 condensed: true
-hyperbolic: true
+hyperbolic: false
 tgt_tax_lvl: species
 
 # optimizer configurations
@@ -22,7 +22,7 @@ optimizer: adamw
 lr: 0.01
 
 accumulate: 1
-batch_size: 256
+batch_size: 768
 
 # scheduler configurations
 lr_scheduler: step
