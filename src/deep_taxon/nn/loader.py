@@ -781,7 +781,8 @@ class fast_dataset(Dataset):
     def __len__(self):
         return len(self.x)
     def __getitem__(self,idx):
-        return None
+        return self.x[idx], self.y[idx]
+    
 
 class new_collate_fxn():
     def __init__(self, batch_size, sample_length):

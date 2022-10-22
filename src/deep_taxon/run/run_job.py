@@ -72,7 +72,9 @@ def run_train(argv=None):
 
     parser.add_argument('--theoretical_limit', action='store_true', default=False, 
                                                 help='use a fake dataloader to test fastest possible fwd pass')
-    
+    parser.add_argument('--no_logging', action='store_true', default=False, help='remove all logging and validation work')
+
+
     args = parser.parse_args(argv)
 
     job = get_job(args)
@@ -143,6 +145,9 @@ def run_train(argv=None):
         options += f' --theoretical_limit'
 
     chunks = f'chunks_W{conf["window"]}_S{conf["step"]}'
+
+    if args.no_logging:
+        options += f' --no_logging'
 
     L = None
     if conf.get('manifold', False):

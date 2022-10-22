@@ -177,7 +177,8 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-q', '--quiet', action='store_true', default=False, help='do not print arguments, model, etc.')
     parser.add_argument('--theoretical_limit', action='store_true', default=False, 
                                                 help='use a fake dataloader to test fastest possible fwd pass')
-    
+    parser.add_argument('--no_logging', action='store_true', default=False, help='remove all logging and validation work')
+
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -314,11 +315,12 @@ def process_args(args=None):
     if args.theoretical_limit:
         data_mod = FastDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
                                    rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
+        args.n_classes = 1
     else:
         data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
                                    rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
+        args.n_classes = data_mod.dataset.n_classes
 
-    args.n_classes = data_mod.dataset.n_classes
     if args.classify and not args.arc_margin:
         args.n_outputs = args.n_classes
 
@@ -328,6 +330,9 @@ def process_args(args=None):
     else:
         args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
+    if args.no_logging:
+        targs['log_every_n_steps'] = 1e12
+        targs['check_val_every_n_epoch'] = 20
 
     model = process_model(args, taxa_table=difile.taxa_table)
 
