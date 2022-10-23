@@ -9,7 +9,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
-import torch.multiprocessing as mp
+from multiprocessing.sharedctypes import RawArray
 import ctypes
 import sklearn.neighbors as skn
 
@@ -538,10 +538,11 @@ class DeepIndexFile(Container):
             self.seq_table['sequence_index'].transform(_load)
             if sequence:
                 if shmem:
-                    _load = lambda x: np.ctypeslib.as_array(mp.Array(ctypes.c_uint8, x, lock=False).get_obj())
+                    log('Loading data - loading sequences into shared memory', print_msg=verbose)
+                    _load = lambda x: np.ctypeslib.as_array(RawArray(ctypes.c_uint8, x))
                 else:
+                    log('Loading data - loading sequences', print_msg=verbose)
                     _load = lambda x: x[:]
-                log('Loading data - loading sequences', print_msg=verbose)
                 self.seq_table['sequence_index'].target.transform(_load)
             log('Loading data - done loading data', print_msg=verbose)
 
