@@ -50,7 +50,7 @@ def _check_hparams(args):
     del args.hparams
 
 
-def process_model(args, inference=False, taxa_table=None):
+def process_model(args, inference=False, taxa_table=None, distances=None):
     """
     Process a model argument
 
@@ -88,7 +88,7 @@ def process_model(args, inference=False, taxa_table=None):
             else:
                 raise e
     elif getattr(args, 'checkpoint', None) is not None:
-        model = model_cls.load_from_checkpoint(args.checkpoint, strict=False)
+        model = model_cls.load_from_checkpoint(args.checkpoint, strict=False, distances=distances)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
@@ -102,7 +102,7 @@ def process_model(args, inference=False, taxa_table=None):
                 n_taxa_all[key] = len(taxa_table[key].elements)
             n_taxa_all['species'] = len(taxa_table['species'])
             args.n_taxa_all = n_taxa_all
-        model = model_cls(args)
+        model = model_cls(args, distances=distances)
 
     return model
 

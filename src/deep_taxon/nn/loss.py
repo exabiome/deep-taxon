@@ -5,95 +5,123 @@ from torch.nn import Parameter
 import math
 
 
+class CondensedDistanceLoss(nn.Module):
+
+    def __init__(self, dmat, batch_size, similarity=True, slope=0.0, factor=2.0):
+        super().__init__()
+        self.dmat = dmat
+        if not isinstance(self.dmat, torch.Tensor):
+            raise ValueError(f"CondensedDistanceLoss requires a Tensor, got {type(self.dmat)}")
+        self.similarity = similarity
+        self.factor = factor
+        if self.similarity:
+            #self.dmat = torch.exp(-dmat)
+            self.dmat = 1 / (1 + dmat/self.factor)
+            self.zero = torch.tensor(1.0, dtype=torch.float32)
+        else:
+            self.dmat /= self.dmat.max()
+            self.zero = torch.tensor(0.0, dtype=torch.float32)
+
+        self.device = dmat.device
+        self.m = torch.tensor(int((1 + math.sqrt(1 + 8*len(dmat))) / 2), device=self.device)
+        self.indices = torch.triu_indices(batch_size, batch_size, offset=1, device=self.device)
+        self.batch_size = batch_size
+        self.slope = 0.0
+
+    def compute_distances(self, output):
+        raise NotImplemented
+
+    def forward(self, output, target_cls):
+        """
+        Computes the phylogenetic distance loss
+
+        Parameters
+        ----------
+        output
+            the output of a network
+
+        target
+            the square root of the patristic distances
+        """
+        indices = self.indices
+        if len(target_cls) != self.batch_size:
+            self.indices = torch.triu_indices(len(target_cls), len(target_cls), offset=1, device=self.device)
+
+        # get sub-distance matrix from condensed distance matrix
+        i, j = torch.sort(target_cls[indices], dim=0)[0]
+        target = self.m * i + j - torch.div(((i + 2) * (i + 1)), 2, rounding_mode='trunc')
+        target = self.dmat[target]
+        target[i == j] = self.zero
+
+        # compute distances and subset it to get condensed form
+        dist = self.compute_distances(output)
+        dist = dist[indices[0], indices[1]]
+
+        if self.similarity:
+            if self.factor != 1.0:
+                dist = 1 / (1 + dist/self.factor)
+            else:
+                dist = 1 / (1 + dist)
+            loss = dist - target
+            if self.training:
+                loss /= target
+            loss = loss.abs().mean()
+        else:
+            loss = dist - target
+            if self.training:
+                if self.slope == 0.0:
+                    loss = torch.maximum(loss, self.zero)
+                elif self.slope == 1.0:
+                    loss = loss.abs()
+                else:
+                    loss = F.leaky_relu(loss, negative_slope=self.slope).abs()
+            else:
+                loss = loss.abs()
+            loss = loss.mean()
+
+        return loss
+
+
+def euclidean_loss(output):
+    output = output.double()
+    x2 = output.pow(2).sum(axis=1)
+    xy = 2*output.mm(output.T)
+    dist = (((x2 - xy).T + x2))
+    return dist
+
+
+def hyperbolic_loss(output, tol=1e-6):
+    # compute hyperbolic distance
+    output = output.double()
+    s = torch.sqrt(1 + torch.sum(output ** 2, dim=1))
+    B = torch.outer(s, s)
+    B -= output.matmul(output.T)
+    B[(B - 1.0).abs() < tol] = 1.0
+    dist = torch.acosh(B)
+    return dist
+
+
+class CondensedEuclideanMAELoss(CondensedDistanceLoss):
+
+    def compute_distances(self, output):
+        return euclidean_loss(output)
+
+
+class CondensedHyperbolicMAELoss(CondensedDistanceLoss):
+
+    def __init__(self, dmat, batch_size, tol=1e-6, **kwargs):
+        super().__init__(dmat, batch_size, **kwargs)
+        self.tol = torch.tensor(tol, device=self.device)
+
+    def compute_distances(self, output):
+        return hyperbolic_loss(output, tol=self.tol)
+
+
 class EuclideanMAELoss(nn.Module):
 
-    def __init__(self):
-        super().__init__()
-
     def forward(self, output, target):
-        """
-        Computes the phylogenetic distance loss
-
-        Parameters
-        ----------
-        output
-            the output of a network
-
-        target
-            the square root of the patristic distances
-        """
-        x2 = output.pow(2).sum(axis=1)
-        xy = 2*output.mm(output.T)
-        dist = (((x2 - xy).T + x2))
-        n = output.shape[0]
-        loss = (dist - target).abs().tril(diagonal=-1).sum()/(n*(n-1))
-        return loss
-
-
-class DistMSELoss(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, output, target):
-        """
-        Computes the phylogenetic distance loss
-
-        Parameters
-        ----------
-        output
-            the output of a network
-
-        target
-            the square root of the patristic distances
-        """
-        x2 = output.pow(2).sum(axis=1)
-        xy = 2*output.mm(output.T)
-        dist = (((x2 - xy).T + x2))
-        n = output.shape[0]
-        loss = (dist - target).pow(2).sum()/(n*(n-1))
-        #loss = ((dist - target)/target.exp()).pow(2).sum()/(n*(n-1))
-        return loss
-
-
-# class HyperbolicDistortionLoss(nn.Module):
-#
-#     def __init__(self, tol=1e-6, k=5):
-#         super().__init__()
-#         self.tol = tol
-#         self.k = k
-#         self._mean = torch.tensor((k+1)/2)
-#
-#         self._var = torch.tensor((k + 1) * (2 * k + 1) / 6) - self._mean**2
-#
-#     def forward(self, output, target):
-#         """
-#         Computes the phylogenetic distance loss
-#
-#         Parameters
-#         ----------
-#         output
-#             the output of a network
-#
-#         target
-#             the square root of the patristic distances
-#         """
-#
-#         output = output.double()    # might not need this, since we just need it for kNN
-#         # compute hyperbolic distance
-#         s = torch.sqrt(1 + torch.sum(output ** 2, dim=1))
-#         B = torch.outer(s, s)
-#         B -= output.matmul(output.T)
-#         B[(B - 1.0).abs() < self.tol] = 1.0
-#         dist = torch.acosh(B)
-#
-#         # dev_o = dist.topk(self.k + 1, largest=False).indices[:, 1:] - self._mean
-#         # dev_t = target.topk(self.k + 1, largest=False).indices[:, 1:] - self._mean
-#         # pearson = ((dev_o * dev_t).sum()/self.k)/self._var
-#         # loss = pearson
-#
-#         loss = ((dist.topk(output.shape[0], largest=False).indices[:, 1:] - target.topk(output.shape[0], largest=False).indices[:, 1:])**2).float().mean()
-#         return loss
+        dist = euclidean_loss(output)
+        return (dist - target).abs().mean()
 
 
 class HyperbolicMAELoss(nn.Module):
@@ -103,30 +131,8 @@ class HyperbolicMAELoss(nn.Module):
         self.tol = tol
 
     def forward(self, output, target):
-        """
-        Computes the phylogenetic distance loss
-
-        Parameters
-        ----------
-        output
-            the output of a network
-
-        target
-            the square root of the patristic distances
-        """
-        # compute hyperbolic distance
-        output = output.double()
-        s = torch.sqrt(1 + torch.sum(output ** 2, dim=1))
-        B = torch.outer(s, s)
-        B -= output.matmul(output.T)
-        B[(B - 1.0).abs() < self.tol] = 1.0
-        dist = torch.acosh(B)
-
-        # compute mean absolute error
-        n = output.shape[0]
-        loss = (dist - target).abs().tril(diagonal=-1).sum()/(n*(n-1))
-        return loss
-
+        dist = hyperbolic_loss(output, tol=self.tol)
+        return (dist - target).abs().mean()
 
 
 class ArcMarginProduct(nn.Module):

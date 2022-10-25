@@ -9,6 +9,8 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
+import torch.multiprocessing as mp
+import ctypes
 import sklearn.neighbors as skn
 
 from hdmf.common import VectorIndex, VectorData, DynamicTable, CSRMatrix,\
@@ -18,7 +20,7 @@ from hdmf.data_utils import DataIO
 from hdmf import Container, Data
 from hdmf.common import get_hdf5io
 
-from ..utils import balsplit
+from ..utils import balsplit, log
 
 
 __all__ = ['DeepIndexFile',
@@ -30,11 +32,6 @@ __all__ = ['DeepIndexFile',
            'chunk_sequence']
 
 NS = 'deep-index'
-
-
-def log(msg, print_msg=True):
-    if print_msg:
-        print(f'{datetime.now()} - {msg}', file=sys.stderr)
 
 
 class AbstractSequenceTable(DynamicTable, metaclass=ABCMeta):
@@ -485,7 +482,7 @@ class DeepIndexFile(Container):
         self.__indices = indices
         self._labels = self._labels[self.__indices]
 
-    def load(self, sequence=False, device=None, verbose=True):
+    def load(self, sequence=False, device=None, verbose=True, shmem=True):
         indices = self.__indices
         self.__loaded = True
         if self.__indices is not None:
@@ -532,14 +529,18 @@ class DeepIndexFile(Container):
                 self.seq_table['sequence_index'].target.transform(lambda x: sequence_subset)
             log('Loading data subset - done loading data subset', print_msg=verbose)
         else:
-            _load = lambda x: x[:]
+            _load = lambda x: x.astype(int)[:]
             log('Loading data - loading IDs', print_msg=verbose)
             self.seq_table['id'].transform(_load)
             log('Loading data - loading sequence lengths', print_msg=verbose)
-            self.seq_table['length'].transform(lambda x: x.astype(int)[:])
+            self.seq_table['length'].transform(_load)
             log('Loading data - loading sequence index', print_msg=verbose)
             self.seq_table['sequence_index'].transform(_load)
             if sequence:
+                if shmem:
+                    _load = lambda x: np.ctypeslib.as_array(mp.Array(ctypes.c_uint8, x, lock=False).get_obj())
+                else:
+                    _load = lambda x: x[:]
                 log('Loading data - loading sequences', print_msg=verbose)
                 self.seq_table['sequence_index'].target.transform(_load)
             log('Loading data - done loading data', print_msg=verbose)
@@ -697,27 +698,24 @@ class LazyWindowChunkedDIFile:
             difile.set_sequence_subset(indices)
         difile.load(sequence=load, verbose=rank==0)
         log('setting lengths', print_msg=rank==0)
-        self.lengths = np.asarray(difile.seq_table['length'].data, dtype=int)
+        self.lengths = difile.seq_table['length'].data
         log('setting ids', print_msg=rank==0)
-        self.id = np.asarray(difile.seq_table['id'].data, dtype=int)
+        self.id = difile.seq_table['id'].data
         log('setting labels', print_msg=rank==0)
-        self.labels = np.asarray(difile._labels)
+        self.labels = torch.from_numpy(difile._labels)  # store as torch Tensor since this is used for loss calculations
+
         log('setting seq_index', print_msg=rank==0)
-        self.seq_index = np.asarray(difile.seq_table['sequence_index'].data, dtype=int)
+        self.seq_index = difile.seq_table['sequence_index'].data
         log('setting sequence', print_msg=rank==0)
         if load:
-            self.sequence = np.asarray(difile.seq_table['sequence_index'].target.data, dtype=np.uint8)
+            self.sequence = torch.from_numpy(difile.seq_table['sequence_index'].target.data)
         else:
             self.sequence = difile.seq_table['sequence_index'].target.data
         log('done setting important data', print_msg=rank==0)
 
         self.n_classes = difile.n_classes
-        self.classes = difile.get_label_classes()
         self.vocab = difile.get_vocab()
 
-        self.distances = None
-        if distances:
-            self.distances = difile.distances.data[:]
         self.node_ids = None
         self.tree_graph = None
         if tree_graph:
@@ -859,7 +857,7 @@ class LazyWindowChunkedDIFile:
         item['seq_idx'] = item['id']
 
         if rev:
-            item['seq'] = self.rcmap[item['seq'][l-e:l-s].astype(int)].flip(0)
+            item['seq'] = self.rcmap[item['seq'][l-e:l-s].long()].flip(0)
         else:
             item['seq'] = item['seq'][s:e]
         item['id'] = i

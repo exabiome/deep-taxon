@@ -17,6 +17,7 @@ from . import TIME_OFFSET
 from .no_lightning import Trainer
 from hdmf.utils import docval
 from hdmf.common import get_hdf5io
+from scipy.spatial.distance import squareform
 
 import argparse
 import logging
@@ -83,6 +84,8 @@ def get_conf_args():
         'classify': dict(action='store_true', help='run a classification problem', default=False),
         'arc_margin': dict(action='store_true', help='use arc_margin loss function', default=False),
         'manifold': dict(action='store_true', help='run a manifold learning problem', default=False),
+        'condensed': dict(action='store_true', help='used condensed form of distance matrix for manifold loss calculation', default=False),
+        'hyperbolic': dict(action='store_true', help='use hyperboloid distance instead of Euclidean for manifold learning', default=False),
         'bottleneck': dict(action='store_true', help='add bottleneck layer at the end of ResNet features', default=True),
         'tgt_tax_lvl': dict(choices=DeepIndexFile.taxonomic_levels, metavar='LEVEL', default='species',
                            help='the taxonomic level to predict. choices are phylum, class, order, family, genus, species'),
@@ -175,9 +178,9 @@ def parse_args(*addl_args, argv=None):
     dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     parser.add_argument('-q', '--quiet', action='store_true', default=False, help='do not print arguments, model, etc.')
-    parser.add_argument('--theoretical_limit', action='store_true', default=False, 
+    parser.add_argument('--theoretical_limit', action='store_true', default=False,
                                                 help='use a fake dataloader to test fastest possible fwd pass')
-    
+
 
     for a in addl_args:
         parser.add_argument(*a[0], **a[1])
@@ -215,7 +218,7 @@ def process_args(args=None):
         targs['accelerator'] = 'ipu'
         targs['devices'] = process_gpus(args.gpus)
     else:
-        targs['gpus'] = process_gpus(args.gpus)
+        gpus = process_gpus(args.gpus)
         targs['num_nodes'] = args.num_nodes
         if args.lsf:
             ##########################################################################################
@@ -230,6 +233,7 @@ def process_args(args=None):
         elif args.slurm:
             env = SLURMEnvironment()
 
+        local_rank = 0
         if env is not None:
             global RANK
             global SIZE
@@ -247,20 +251,22 @@ def process_args(args=None):
                 targs['local_rank'] = env.local_rank()
                 targs['global_rank'] = env.global_rank()
                 targs['world_size'] = env.world_size()
+            local_rank = env.local_rank()
         else:
             os.environ["MASTER_ADDR"] = "127.0.0.1"
             os.environ["MASTER_PORT"] = "12910"
             torch.distributed.init_process_group('nccl', rank=0, world_size=1)
+            local_rank = 0
 
-        if targs['gpus'] is not None:
+        if gpus is not None:
             targs['accelerator'] = 'gpu'
-            if targs['gpus'] == 1:
+            if gpus == 1:
                 targs['devices'] = 1
             else:
                 if env is None:
                     raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
                 torch.cuda.set_device(env.local_rank())
-                targs['devices'] = targs['gpus']
+                targs['devices'] = gpus
                 targs['strategy'] = DDPStrategy(find_unused_parameters=False,
                                                 cluster_environment=env)
             targs['precision'] = 16
@@ -328,15 +334,29 @@ def process_args(args=None):
     else:
         args.input_nc = 136 if args.tnf else len(data_mod.dataset.vocab)
 
+    distances = None
+    square = False
+    if args.manifold:
+        if args.condensed:
+            cond = difile.distances.data.ndim == 1
+            if (not cond and not square) or (cond and square):
+                distances = squareform(difile.distances.data)
+            else:
+                distances = difile.distances.data[:]
 
-    model = process_model(args, taxa_table=difile.taxa_table)
+            distances = torch.from_numpy(distances)
+            if gpus is not None:
+                distances = distances.to(local_rank)
+
+    model = process_model(args, taxa_table=difile.taxa_table, distances=distances)
 
     #if args.num_workers > 0:
     #    data_mod.dataset.close()
 
     ret = [model, args, targs, data_mod]
 
-    io.close()
+    if args.load:
+        io.close()
 
     return tuple(ret)
 
@@ -438,11 +458,16 @@ def run_lightning(argv=None):
     import traceback
     import os
     import pprint
+    import warnings
+    warnings.filterwarnings(action='ignore', message='The dataloader, .*, does not have many workers.*')
 
 
     pformat = pprint.PrettyPrinter(sort_dicts=False, width=100, indent=2).pformat
 
     model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+
+    if args.sanity is not False:
+        warnings.filterwarnings(action='ignore', message='Checkpoint directory .* exists and is not empty.')
 
     # output is a wrapper function for os.path.join(outdir, <FILE>)
     outdir, output = process_output(args)
@@ -510,7 +535,7 @@ def run_lightning(argv=None):
             if isinstance(args.timed_checkpoint, str):
                 args.timed_checkpoint = int(args.timed_checkpoint)
             else:
-                args.timed_checkpoint = 10
+                args.timed_checkpoint = 60
 
             callbacks.append(ModelCheckpoint(dirpath=outdir,
                                              filename='t-{epoch}-{step}',
@@ -663,13 +688,24 @@ def get_model_info(argv=None):
     args = parser.parse_args(argv)
     process_config(args.config, args)
 
-    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+
+    io = get_hdf5io(args.input, 'r')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        difile = io.read()
+    difile.set_label_key(args.tgt_tax_lvl)
+
+    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True, difile=difile)
     args.input_nc = 136 if args.tnf else len(dataset.vocab)
     args.n_classes = dataset.n_classes
+
+    distances = None
     if args.classify:
         args.n_outputs = dataset.n_classes
+    elif args.manifold:
+        distances = torch.from_numpy(dataset.difile.distances)
 
-    model = process_model(args, taxa_table=dataset.difile.taxa_table)
+    model = process_model(args, taxa_table=difile.taxa_table, distances=distances)
 
     total_bytes = 0
     total_parameters = 0

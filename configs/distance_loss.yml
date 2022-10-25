@@ -1,0 +1,35 @@
+# This config file is for running with a distance-based loss.
+seed: 1111
+
+model: convnext_small
+simple_clf: true
+bottleneck: false
+n_outputs: 64
+
+# sequence windows
+window: 1024
+step: 128
+
+# loss function configurations
+classify: false
+manifold: true
+condensed: true
+hyperbolic: false
+tgt_tax_lvl: species
+
+# optimizer configurations
+optimizer: adamw
+lr: 0.01
+
+accumulate: 1
+batch_size: 768
+
+# scheduler configurations
+lr_scheduler: step
+step_size: 3          # 07/25/22 - I changed this from 5 to 3. I think 5 might be unnecessarily long
+n_steps: 2
+step_factor: 0.1
+
+# stochastic weight averaging configurations
+swa_start: 15
+swa_anneal: 1          # 12/22/2021 - I have no reason to believe this is the optimal value, just setting to what I think has been used previously

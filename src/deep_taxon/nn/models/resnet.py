@@ -128,7 +128,7 @@ class FeatureReduction(nn.Module):
 
 class ResNet(AbstractLit):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         if not hasattr(hparams, 'zero_init_residual'):
             hparams.zero_init_residual = False
         if not hasattr(hparams, 'groups'):
@@ -146,7 +146,7 @@ class ResNet(AbstractLit):
         if not hasattr(hparams, 'dropout_clf'):
             hparams.dropout_clf = False
 
-        super(ResNet, self).__init__(hparams)
+        super(ResNet, self).__init__(hparams, **kwargs)
 
         replace_stride_with_dilation = hparams.replace_stride_with_dilation
         block = hparams.block
@@ -333,126 +333,138 @@ class ResNet(AbstractLit):
 @model('resnet9')
 class ResNet9(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = BasicBlock
         hparams.layers = [1, 1, 1, 1]
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('resnet18')
 class ResNet18(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = BasicBlock
         hparams.layers = [2, 2, 2, 2]
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 @model('resnet26')
 class ResNet26(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [2, 2, 2, 2]
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('resnet34')
 class ResNet34(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = BasicBlock
         hparams.layers = [3, 4, 6, 3]
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('resnet50')
 class ResNet50(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 6, 3]
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('resnet74')
 class ResNet74(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 14, 3]
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('resnet101')
 class ResNet101(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 23, 3]
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('resnet152')
 class ResNet152(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 8, 36, 3]
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('resnext50_32x4d')
 class ResNeXt50_32x4d(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 6, 3]
         hparams.groups = 32
         hparams.width_per_group = 4
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('resnext101_32x8d')
 class ResNeXt101_32x8d(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 23, 3]
         hparams.groups = 32
         hparams.width_per_group = 8
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
+
+
+@model('resnext101_64x4d')
+class ResNeXt101_64x4d(ResNet):
+
+    def __init__(self, hparams, **kwargs):
+        hparams = self.check_hparams(hparams)
+        hparams.block = Bottleneck
+        hparams.layers = [3, 4, 23, 3]
+        hparams.groups = 64
+        hparams.width_per_group = 4
+        super().__init__(hparams, **kwargs)
 
 
 @model('wide_resnet50_2')
 class Wide_ResNet50_2(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 6, 3]
         hparams.width_per_group = 128
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 @model('wide_resnet101_2')
 class Wide_ResNet101_2(ResNet):
 
-    def __init__(self, hparams):
+    def __init__(self, hparams, **kwargs):
         hparams = self.check_hparams(hparams)
         hparams.block = Bottleneck
         hparams.layers = [3, 4, 23, 3]
         hparams.width_per_group = 128
-        super().__init__(hparams)
+        super().__init__(hparams, **kwargs)
 
 
 class ResNetFeatures(nn.Module):
