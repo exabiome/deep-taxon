@@ -53,8 +53,8 @@ class UMAPLoss(nn.Module):
         target
             the square root of the patristic distances
         """
-        output_to, output_from = torch.chunk(output, 2)
-        cls_to, cls_from = torch.chunk(target_cls, 2)
+        output_to, output_from = output[::2], output[1::2]
+        cls_to, cls_from = target_cls[::2], target_cls[1::2]
         target_prob = self.graph[cls_to, cls_from]
 
         target = self.graph[target_cls][:, target_cls]
@@ -81,3 +81,38 @@ class EuclideanUMAPLoss(UMAPLoss):
 
     def compute_distances(self, output1, output2):
         return torch.pow(output1 - output2, 2).sum(axis=1)
+
+
+class GraphSampler:
+
+    def __init__(self, graph, seq_labels, n_chunks_per_seq):
+        self.graph = graph.tocoo()
+        self.edge_wor = WORSampler(len(self.graph.data))
+        self.queue = list()
+
+        counts = np.bincount(seq_labels, n_chunks_per_seq)
+        mask = counts > 0
+        self.labels = np.where(mask)[0]
+        self.n_chunks_per_label = counts[mask]
+        self.remaining = self.n_chunks_per_label.copy()
+
+        self.perm_index = np.cumsum(self.n_chunks_per_label)
+        self.permutation = np.arange(self.perm_index[-1])
+
+    def get_next(self, ):
+        if len(self.queue) == 0:
+            edge_id = next(self.edge_wor)
+            self.queue = [self.graph.row[edge_id], self.graph.col[edge_id]]
+        label = self.queue.pop()
+
+        start = 0 if label == 0 else self.perm_index[label - 1]
+        end = self.perm_index[label]
+        wor_length = self.remaining[label]
+
+        perm = self.permutation[start:end][:wor_length]
+
+        sample = rng.integers(wor_length)
+        chunk_i = perm[sample]
+        perm[[sample, -1]] = perm[[-1, sample]]
+
+        return chunk_i
