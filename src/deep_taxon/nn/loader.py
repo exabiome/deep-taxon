@@ -449,18 +449,16 @@ class DeepIndexDataModule(pl.LightningDataModule):
             self.dataset.close()
 
     def get_min(self, val, batch_size):
-        #from mpi4py import MPI
-        #comm = MPI.COMM_WORLD
-        #rank = comm.Get_rank()
-        #size = comm.Get_size()
-        #ret = comm.allreduce(val, op=MPI.MIN)
-        import torch.distributed as dist
-        ret = torch.tensor(val).cuda()
-        dist.all_reduce(ret, op=dist.ReduceOp.MIN)
-        ret = int(ret.cpu())
-        if (val - ret) < batch_size:
-            ret = val
-        return ret
+        if self.size > 1:
+            import torch.distributed as dist
+            ret = torch.tensor(val).cuda()
+            dist.all_reduce(ret, op=dist.ReduceOp.MIN)
+            ret = int(ret.cpu())
+            if (val - ret) < batch_size:
+                ret = val
+            return ret
+        else:
+            return val
 
     def train_dataloader(self):
         kwargs = self._loader_kwargs.copy()
