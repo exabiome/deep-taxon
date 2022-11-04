@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 from umap.umap_ import fuzzy_simplicial_set
 
-from .samplers import WORSampler
+from .samplers import DSSampler, WORSampler
 
 
-def get_graph(dmat, n_neightbors=15, random_state=None):
+def get_neighbor_graph(dmat, n_neightbors=15, random_state=None):
     if len(dmat.shape) == 1:
         dmat = squareform(dmat)
     graph, sigmas, rhos = fuzzy_simplicial_set(dmat,
@@ -90,16 +90,43 @@ class EuclideanUMAPLoss(UMAPLoss):
         return torch.pow(output1 - output2, 2).sum(axis=1)
 
 
-class NeighborGraphSampler:
+class ContinuousSampler(Sampler):
+
+    def __init__(self, sampler, n_samples):
+        self.sampler = sampler
+        self.n_samples = n_samples
+
+
+    def __iter__(self):
+        self.count = 0
+        self.it = iter(self.sampler)
+        return self
+
+    def __next__(self):
+        if count < self.n_samples:
+            try:
+                ret = next(self.it)
+            except StopIteration:
+                self.it = iter(self.sampler)
+                ret = next(self.it)
+            return ret
+        raise StopIteration
+
+
+class NeighborGraphSampler(Sampler):
     """
     Sample from a graph
 
     seq_labels/n_chunks_per_seq are assumed to be sorted by seq_label
     """
 
-    def __init__(self, graph, seq_labels, n_chunks_per_seq, n_batches=1e4, batch_size=512):
+    def __init__(self, graph, seq_labels, n_chunks_per_seq, n_batches=1e4, batch_size=512, wor=True):
         self.graph = graph.tocoo()
-        self.edge_wor = WORSampler(len(self.graph.data))
+        if wor:
+            self.edge_sampler = WORSampler(len(self.graph.data))
+        else:
+            self.edge_sampler = DSSampler(len(self.graph.data))
+        self.edge_sampler = ContinuousSampler(self.edge_sampler, n_batches)
 
         counts = np.bincount(seq_labels, n_chunks_per_seq)
         mask = counts > 0
@@ -138,7 +165,7 @@ class NeighborGraphSampler:
         ret = list()
         for batch_i in range(self.n_batches):
             for i in range(len(self.batch_size) // 2):
-                edge_id = next(self.edge_wor)
+                edge_id = next(self.edge_sampler)
                 ret.append(self.get_chunk(self.graph.row[edge_id]))
                 ret.append(self.get_chunk(self.graph.col[edge_id]))
             if len(ret) == self.batch_size:
@@ -148,13 +175,3 @@ class NeighborGraphSampler:
 
     def __len__(self):
         return self.n_batches
-
-def get_umap_stuff(difile, distances, n_neighbors=15, random_state=None, n_batches=1e4, batch_size=512, target_metric='hyperbolic'):
-    graph = get_graph(distances, n_neighbors=n_neighbors, random_state=random_state)
-    sampler = NeighborGraphSampler(graph, difile.labels, difile.get_counts(), n_batches=n_batches, batch_size=batch_size)
-    if target_metric == 'hyperbolic':
-        met_cls = HyperbolicUMAPLoss
-    elif target_metric == 'euclidean':
-        met_cls = EuclideanUMAPLoss
-    loss = met_cls(graph, min_dist=0.01)
-    return sampler, loss

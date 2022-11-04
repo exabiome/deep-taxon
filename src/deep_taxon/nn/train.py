@@ -73,6 +73,12 @@ def get_conf_args():
         'swa_start': dict(help='the epoch to start stochastic weight averaging', default=7),
         'swa_anneal': dict(help='the number of epochs to anneal for when using SWA', default=1),
 
+        # UMAP training arguments
+        'umap': dict(help='use UMAP style training', default=False),
+        'n_batches': dict(help='the number of batches per epoch', default=10000),
+        'n_neighbors': dict(help='the number of neigbors to use for building the nearest neighbors graph', default=15),
+        'min_dist': dict(help='The effective minimum distance between embedded points', default=0.1),
+
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
         'tnf': dict(help='input transform data to tetranucleotide frequency', default=False),
@@ -348,7 +354,10 @@ def process_args(args=None):
             if gpus is not None:
                 distances = distances.to(local_rank)
 
-    model = process_model(args, taxa_table=difile.taxa_table, distances=distances)
+    model = process_model(args,
+                         taxa_table=difile.taxa_table,
+                         distances=distances,
+                         neighbor_graph=data_mod.dataset.neighbor_graph)
 
     #if args.num_workers > 0:
     #    data_mod.dataset.close()

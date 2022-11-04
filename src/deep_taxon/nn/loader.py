@@ -18,6 +18,7 @@ from sklearn.utils import check_random_state
 
 from .collaters import get_collater
 from .samplers import DSSampler, WORSampler
+from .umap import NeighborGraphSampler
 from ..sequence import LazyWindowChunkedDIFile, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
 from ..utils import parse_seed, distsplit, balsplit, get_logger, log
 
@@ -411,6 +412,8 @@ class DeepIndexDataModule(pl.LightningDataModule):
         self.size = size
         self.n_partitions = hparams.n_partitions
         self.batch_size = hparams.batch_size
+        self.n_batches = hparams.n_batches
+        self.umap = hparams.umap
         self.sanity = hparams.sanity
 
         log("Creating LazySeqDataset", print_msg=rank==0)
@@ -467,7 +470,15 @@ class DeepIndexDataModule(pl.LightningDataModule):
             s_kwargs = dict(rng=self.seed, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
             if self.sanity:
                 s_kwargs['max_samples'] = self.batch_size * self.sanity
-            self._tr_sampler = WORSampler(train_len, **s_kwargs)
+            if args.umap:
+                self._tr_sampler = NeighborGraphSampler(self.dataset.graph,
+                                                        self.dataset.difile,
+                                                        self.dataset.difile.get_counts(),
+                                                        n_batches=self.n_batches,
+                                                        batch_size=self.batch_size
+                                                        edge_sampler=WORSampler)
+            else:
+                self._tr_sampler = WORSampler(train_len, **s_kwargs)
         kwargs['sampler'] = self._tr_sampler
         return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
@@ -479,7 +490,15 @@ class DeepIndexDataModule(pl.LightningDataModule):
             s_kwargs = dict(n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
             if self.sanity:
                 s_kwargs['max_samples'] = self.batch_size * self.sanity // 4
-            self._val_sampler = DSSampler(val_len, **s_kwargs)
+            if self.umap:
+                self._val_sampler = NeighborGraphSampler(self.dataset.graph,
+                                                         self.dataset.difile,
+                                                         self.dataset.difile.get_counts(),
+                                                         n_batches=self.n_batches,
+                                                         batch_size=self.batch_size
+                                                         edge_sampler=DSSampler)
+            else:
+                self._val_sampler = DSSampler(val_len, **s_kwargs)
         kwargs['sampler'] = self._val_sampler
         return SubsetDataLoader(self.dataset, validate=True, **kwargs)
 
@@ -611,6 +630,7 @@ class LazySeqDataset(Dataset):
 
         self.manifold = False
         self.graph = False
+        self.neighbor_graph = None
         self.tnf = hparams.tnf
         self.__ohe = hparams.ohe
 
@@ -631,6 +651,9 @@ class LazySeqDataset(Dataset):
             self.classify = True
             if hparams.weighted == 'phy':
                 distances = True
+        elif hparams.umap:
+            self.classify = True
+            self.neighbor_graph = get_neighbor_graph(difile.distances.data, n_neighbors=hparams.n_neighbors)
         else:
             self.classify = True
             if hparams.weighted == 'phy':
@@ -641,7 +664,7 @@ class LazySeqDataset(Dataset):
         self.difile = LazyWindowChunkedDIFile(difile, self.window, self.step,
                                               revcomp=self.revcomp,
                                               rank=self._global_rank, size=self._world_size,
-                                              distances=distances, tree_graph=tree_graph,
+                                              tree_graph=tree_graph,
                                               load=kwargs['load'])
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 

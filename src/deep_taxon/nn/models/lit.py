@@ -7,6 +7,7 @@ import argparse
 from time import time
 
 from ..loss import ArcMarginProduct, EuclideanMAELoss, HyperbolicMAELoss, CondensedEuclideanMAELoss, CondensedHyperbolicMAELoss
+from ..umap import EuclideanUMAPLoss, HyperbolicUMAPLoss
 from .. import TIME_OFFSET
 
 class AbstractLit(LightningModule):
@@ -19,7 +20,7 @@ class AbstractLit(LightningModule):
 
     schedules = ('adam', 'cyclic', 'plateau', 'cosine', 'cosinewr', 'step' )
 
-    def __init__(self, hparams, lr=None, distances=None):
+    def __init__(self, hparams, lr=None, distances=None, neighbor_graph=None):
         super().__init__()
         #self.hparams = self.check_hparams(hparams)
         self.save_hyperparameters(hparams)
@@ -40,6 +41,11 @@ class AbstractLit(LightningModule):
                 self._loss = HierarchicalLoss(hparams.n_taxa_all)
             else:
                 self._loss = nn.CrossEntropyLoss()
+        elif self.hparams.umap:
+            if self.hparams.hyperbolic:
+                self._loss = HyperbolicUMAPLoss(self.neighbor_graph, min_dist=hparams.min_dist)
+            else:
+                self._loss = EuclideanUMAPLoss(self.neighbor_graph, min_dist=hparams.min_dist)
         else:
             self._loss =  nn.MSELoss()
 

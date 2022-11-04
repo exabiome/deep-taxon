@@ -50,17 +50,21 @@ def _check_hparams(args):
     del args.hparams
 
 
-def process_model(args, inference=False, taxa_table=None, distances=None):
+def process_model(args, inference=False, taxa_table=None, distances=None, neighbor_graph=None):
     """
     Process a model argument
 
     Args:
         args (Namespace):       command-line arguments passed by parser
         inference (bool):       load data for inference
+        taxa_table:             the TaxaTable object from the DeepIndexFile
+        distances:              a phylogenetic distance matrix
+        neighbor_graph:         a UMAP nearest neighbor graph i.e. fuzzy simplicial set
     """
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
     model_cls = models._models[args.model]
+    model_kwargs = dict(distances=distances, neighbor_graph=neighbor_graph)
 
     if getattr(args, 'init', None) is not None:
         try:
@@ -88,7 +92,7 @@ def process_model(args, inference=False, taxa_table=None, distances=None):
             else:
                 raise e
     elif getattr(args, 'checkpoint', None) is not None:
-        model = model_cls.load_from_checkpoint(args.checkpoint, strict=False, distances=distances)
+        model = model_cls.load_from_checkpoint(args.checkpoint, strict=False, **model_kwargs)
     else:
         if not hasattr(args, 'classify'):
             raise ValueError('Parser must check for classify/regression/manifold '
@@ -102,7 +106,7 @@ def process_model(args, inference=False, taxa_table=None, distances=None):
                 n_taxa_all[key] = len(taxa_table[key].elements)
             n_taxa_all['species'] = len(taxa_table['species'])
             args.n_taxa_all = n_taxa_all
-        model = model_cls(args, distances=distances)
+        model = model_cls(args, **model_kwargs)
 
     return model
 
