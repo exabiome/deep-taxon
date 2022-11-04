@@ -4,14 +4,21 @@ import torch
 import torch.nn as nn
 from umap.umap_ import fuzzy_simplicial_set
 
+from .samplers import WORSampler
+
+
+def get_graph(dmat, n_neightbors=15, random_state=None):
+    if len(dmat.shape) == 1:
+        dmat = squareform(dmat)
+    graph, sigmas, rhos = fuzzy_simplicial_set(dmat,
+                                               n_neighbors,
+                                               random_state,
+                                               metric='precomputed')
+    return graph
 
 class UMAPLoss(nn.Module):
 
-    def __init__(self, dmat, n_neightbors=15, random_state=None, min_dist=0.01):
-        graph, sigmas, rhos = fuzzy_simplicial_set(squareform(dmat),
-                                                   n_neighbors,
-                                                   random_state,
-                                                   metric='precomputed')
+    def __init__(self, graph, min_dist=0.01):
         self.graph = graph
         self.a, self.b = self.find_ab_params(1.0, min_dist)
 
@@ -83,12 +90,16 @@ class EuclideanUMAPLoss(UMAPLoss):
         return torch.pow(output1 - output2, 2).sum(axis=1)
 
 
-class GraphSampler:
+class NeighborGraphSampler:
+    """
+    Sample from a graph
 
-    def __init__(self, graph, seq_labels, n_chunks_per_seq):
+    seq_labels/n_chunks_per_seq are assumed to be sorted by seq_label
+    """
+
+    def __init__(self, graph, seq_labels, n_chunks_per_seq, n_batches=1e4, batch_size=512):
         self.graph = graph.tocoo()
         self.edge_wor = WORSampler(len(self.graph.data))
-        self.queue = list()
 
         counts = np.bincount(seq_labels, n_chunks_per_seq)
         mask = counts > 0
@@ -96,23 +107,54 @@ class GraphSampler:
         self.n_chunks_per_label = counts[mask]
         self.remaining = self.n_chunks_per_label.copy()
 
+        # continuously permuted sequence indices
         self.perm_index = np.cumsum(self.n_chunks_per_label)
         self.permutation = np.arange(self.perm_index[-1])
 
-    def get_next(self, ):
-        if len(self.queue) == 0:
-            edge_id = next(self.edge_wor)
-            self.queue = [self.graph.row[edge_id], self.graph.col[edge_id]]
-        label = self.queue.pop()
+        self.n_batches = n_batches
+        self.batch_size = batch_size
 
-        start = 0 if label == 0 else self.perm_index[label - 1]
-        end = self.perm_index[label]
+    def get_chunk(self, label):
+        # get remaining number of samples
         wor_length = self.remaining[label]
+        if wor_length == 0:
+            wor_length = self.n_chunks_per_label[label]
+        self.remaining[label] = wor_length - 1
 
-        perm = self.permutation[start:end][:wor_length]
+        # get start/stop of remaining samples
+        start = 0 if label == 0 else self.perm_index[label - 1]
+        end = start + wor_length
 
+        # get remaining samples
+        perm = self.permutation[start:end]
+
+        # sample without replacement
         sample = rng.integers(wor_length)
-        chunk_i = perm[sample]
         perm[[sample, -1]] = perm[[-1, sample]]
 
-        return chunk_i
+        return perm[-1]
+
+    def __iter__(self):
+        ret = list()
+        for batch_i in range(self.n_batches):
+            for i in range(len(self.batch_size) // 2):
+                edge_id = next(self.edge_wor)
+                ret.append(self.get_chunk(self.graph.row[edge_id]))
+                ret.append(self.get_chunk(self.graph.col[edge_id]))
+            if len(ret) == self.batch_size:
+                yield ret
+                ret = list()
+        raise StopIteration
+
+    def __len__(self):
+        return self.n_batches
+
+def get_umap_stuff(difile, distances, n_neighbors=15, random_state=None, n_batches=1e4, batch_size=512, target_metric='hyperbolic'):
+    graph = get_graph(distances, n_neighbors=n_neighbors, random_state=random_state)
+    sampler = NeighborGraphSampler(graph, difile.labels, difile.get_counts(), n_batches=n_batches, batch_size=batch_size)
+    if target_metric == 'hyperbolic':
+        met_cls = HyperbolicUMAPLoss
+    elif target_metric == 'euclidean':
+        met_cls = EuclideanUMAPLoss
+    loss = met_cls(graph, min_dist=0.01)
+    return sampler, loss
