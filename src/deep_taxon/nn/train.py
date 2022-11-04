@@ -79,6 +79,8 @@ def get_conf_args():
         'n_neighbors': dict(help='the number of neigbors to use for building the nearest neighbors graph', default=15),
         'min_dist': dict(help='The effective minimum distance between embedded points', default=0.1),
 
+        'shmem': dict(help='load data into shared memory', default=False),
+
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
         'tnf': dict(help='input transform data to tetranucleotide frequency', default=False),
@@ -181,6 +183,7 @@ def parse_args(*addl_args, argv=None):
 
     dl_grp = parser.add_argument_group('Data loading')
     dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
+    dl_grp.add_argument('-S', '--shmem', action='store_true', default=False, help='load sequence data into shared memory')
     dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     parser.add_argument('-q', '--quiet', action='store_true', default=False, help='do not print arguments, model, etc.')
@@ -325,10 +328,12 @@ def process_args(args=None):
 
     if args.theoretical_limit:
         data_mod = FastDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
-                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
+                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits,
+                                   shmem=args.shmem)
     else:
         data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
-                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
+                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits,
+                                   shmem=args.shmem)
 
     args.n_classes = data_mod.dataset.n_classes
     if args.classify and not args.arc_margin:

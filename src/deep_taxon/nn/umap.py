@@ -2,6 +2,7 @@ from scipy.spatial.distance import squareform
 from scipy.optimize import curve_fit
 import torch
 import torch.nn as nn
+from torch.utils.data import Sampler
 from umap.umap_ import fuzzy_simplicial_set
 
 from .samplers import DSSampler, WORSampler
@@ -90,7 +91,7 @@ class EuclideanUMAPLoss(UMAPLoss):
         return torch.pow(output1 - output2, 2).sum(axis=1)
 
 
-class ContinuousSampler(Sampler):
+class ContinuousSampler:
 
     def __init__(self, sampler, n_samples):
         self.sampler = sampler

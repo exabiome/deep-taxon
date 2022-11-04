@@ -475,7 +475,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
                                                         self.dataset.difile,
                                                         self.dataset.difile.get_counts(),
                                                         n_batches=self.n_batches,
-                                                        batch_size=self.batch_size
+                                                        batch_size=self.batch_size,
                                                         edge_sampler=WORSampler)
             else:
                 self._tr_sampler = WORSampler(train_len, **s_kwargs)
@@ -495,7 +495,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
                                                          self.dataset.difile,
                                                          self.dataset.difile.get_counts(),
                                                          n_batches=self.n_batches,
-                                                         batch_size=self.batch_size
+                                                         batch_size=self.batch_size,
                                                          edge_sampler=DSSampler)
             else:
                 self._val_sampler = DSSampler(val_len, **s_kwargs)
@@ -665,7 +665,8 @@ class LazySeqDataset(Dataset):
                                               revcomp=self.revcomp,
                                               rank=self._global_rank, size=self._world_size,
                                               tree_graph=tree_graph,
-                                              load=kwargs['load'])
+                                              load=kwargs['load'],
+                                              shmem=kwargs['shmem'])
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
         self.__len = len(self.difile)
