@@ -50,7 +50,7 @@ def _check_hparams(args):
     del args.hparams
 
 
-def process_model(args, inference=False, taxa_table=None, distances=None, neighbor_graph=None):
+def process_model(args, inference=False, taxa_table=None, distances=None):
     """
     Process a model argument
 
@@ -59,12 +59,11 @@ def process_model(args, inference=False, taxa_table=None, distances=None, neighb
         inference (bool):       load data for inference
         taxa_table:             the TaxaTable object from the DeepIndexFile
         distances:              a phylogenetic distance matrix
-        neighbor_graph:         a UMAP nearest neighbor graph i.e. fuzzy simplicial set
     """
     # Next, build our model object so we can get
     # the parameters used if we were given a checkpoint
     model_cls = models._models[args.model]
-    model_kwargs = dict(distances=distances, neighbor_graph=neighbor_graph)
+    model_kwargs = dict(distances=distances)
 
     if getattr(args, 'init', None) is not None:
         try:

@@ -18,7 +18,7 @@ from sklearn.utils import check_random_state
 
 from .collaters import get_collater
 from .samplers import DSSampler, WORSampler
-from .umap import NeighborGraphSampler
+from .umap import get_neighbor_graph, NeighborGraphSampler, UMAPCollater
 from ..sequence import LazyWindowChunkedDIFile, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
 from ..utils import parse_seed, distsplit, balsplit, get_logger, log
 
@@ -48,13 +48,14 @@ def check_window(window, step):
 def add_dataset_arguments(parser):
     group = parser.add_argument_group("Dataset options")
 
-    group.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
-    group.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
+    group.add_argument('-W', '--window', type=int, default=1024, help='the window size to use to chunk sequences')
+    group.add_argument('-S', '--step', type=int, default=128, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
     group.add_argument('--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
     group.add_argument('--tnf', default=False, action='store_true', help='use tetranucleotide frequencies as inputs')
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
+    type_group.add_argument('-U', '--umap', action='store_true', help='run UMAP style training', default=False)
     choices = list(DeepIndexFile.taxonomic_levels) + ['all']
     group.add_argument('-t', '--tgt_tax_lvl', choices=choices, metavar='LEVEL', default='species',
                        help='the taxonomic level to predict. choices are domain, phylum, class, order, family, genus, species, all')
@@ -72,6 +73,8 @@ def dataset_stats(argv=None):
     parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
     parser.add_argument('--mpi', default=False, action='store_true', help='user MPI rank/size')
     parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
+    parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
+                        help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
     test_group.add_argument('--mem', default=False, action='store_true', help='print memory usage before and after loading')
@@ -81,7 +84,7 @@ def dataset_stats(argv=None):
     test_group.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     test_group.add_argument('-b', '--batch_size', type=int, help='the number of workers to load data with', default=1)
     test_group.add_argument('-N', '--num_batches', type=int, help='the number of batches to load when testing read', default=None)
-    test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
+    test_group.add_argument('--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
     test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
 
@@ -117,13 +120,20 @@ def dataset_stats(argv=None):
         difile = io.read()
     difile.set_label_key(args.tgt_tax_lvl)
 
+
+    if args.umap:
+        args.n_neighbors = 15
+        args.min_dist = 0.1
+        args.n_batches = 100
+
     if args.lightning:
         args.downsample = False
         args.loader_kwargs = dict()
         if args.mem:
             print_mem('before DeepIndexDataModule')
         before = time()
-        data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, rank=args.rank, size=args.size, comm=comm)
+        lsd_kwargs = dict(shmem=False)
+        data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, rank=args.rank, size=args.size, comm=comm, **lsd_kwargs)
         after = time()
         if args.mem:
             print_mem('after DeepIndexDataModule ')
@@ -135,7 +145,7 @@ def dataset_stats(argv=None):
         va_len = len(dataset)
         dataset.set_subset()
     else:
-        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True, difile=difile)
+        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True, difile=difile, shmem=False)
         if args.rank != None:
             kwargs['rank'] = args.rank
             kwargs['size'] = args.size
@@ -337,11 +347,12 @@ class SubsetDataLoader(DataLoader):
 
     def __init__(self, dataset, train=False, validate=False, test=False, **kwargs):
         if 'sampler' not in kwargs:
-            kwargs['sampler'] = DSSampler(dataset.get_subset_len(train=train, vaidate=validate, test=test))
+            kwargs['sampler'] = DSSampler(dataset.get_subset_len(train=train, validate=validate, test=test))
         super().__init__(dataset, **kwargs)
         self.train = train
         self.validate = validate
         self.test = test
+        log('done creating SubsetDataLoader')
 
     def __len__(self):
         return (len(self.sampler) - 1) // self.batch_size + 1
@@ -439,7 +450,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
             kwargs['persistent_workers'] = True
 
         log("Getting collater", print_msg=rank==0)
-        kwargs['collate_fn'] = get_collater(self.dataset, inference=inference, condensed=hparams.condensed)
+        if self.umap:
+            log("using UMAPCollater for UMAP style training")
+            kwargs['collate_fn'] = UMAPCollater(self.dataset.neighbor_graph, self.dataset.padval)
+        else:
+            kwargs['collate_fn'] = get_collater(self.dataset, inference=inference, condensed=hparams.condensed)
         kwargs['shuffle'] = False
 
         self._loader_kwargs = kwargs
@@ -468,13 +483,16 @@ class DeepIndexDataModule(pl.LightningDataModule):
             s_kwargs = dict(rng=self.seed, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
             if self.sanity:
                 s_kwargs['max_samples'] = self.batch_size * self.sanity
-            if args.umap:
-                self._tr_sampler = NeighborGraphSampler(self.dataset.graph,
-                                                        self.dataset.difile,
+            if self.umap:
+                log("using NeighborGraphSampler for UMAP style training")
+                # TODO -- self.dataset.difile.get_counts() does not account for reverse complementing
+                # this needs to be passed through somehow
+                self._tr_sampler = NeighborGraphSampler(self.dataset.neighbor_graph,
+                                                        self.dataset.difile.labels,
                                                         self.dataset.difile.get_counts(),
                                                         n_batches=self.n_batches,
                                                         batch_size=self.batch_size,
-                                                        edge_sampler=WORSampler)
+                                                        wor=True)
             else:
                 self._tr_sampler = WORSampler(train_len, **s_kwargs)
         kwargs['sampler'] = self._tr_sampler
@@ -489,12 +507,12 @@ class DeepIndexDataModule(pl.LightningDataModule):
             if self.sanity:
                 s_kwargs['max_samples'] = self.batch_size * self.sanity // 4
             if self.umap:
-                self._val_sampler = NeighborGraphSampler(self.dataset.graph,
+                self._val_sampler = NeighborGraphSampler(self.dataset.neighbor_graph,
                                                          self.dataset.difile,
                                                          self.dataset.difile.get_counts(),
                                                          n_batches=self.n_batches,
                                                          batch_size=self.batch_size,
-                                                         edge_sampler=DSSampler)
+                                                         wor=False)
             else:
                 self._val_sampler = DSSampler(val_len, **s_kwargs)
         kwargs['sampler'] = self._val_sampler
@@ -651,7 +669,10 @@ class LazySeqDataset(Dataset):
                 distances = True
         elif hparams.umap:
             self.classify = True
-            self.neighbor_graph = get_neighbor_graph(difile.distances.data, n_neighbors=hparams.n_neighbors)
+            labels = np.where(np.bincount(difile._labels))[0]
+            if len(labels) == len(difile.taxa_table):
+                labels = None
+            self.neighbor_graph = get_neighbor_graph(difile.distances.data, n_neighbors=hparams.n_neighbors, labels=labels)
         else:
             self.classify = True
             if hparams.weighted == 'phy':

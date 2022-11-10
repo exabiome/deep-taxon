@@ -1,3 +1,7 @@
+from warnings import warn
+
+import numpy as np
+from scipy.sparse import coo_matrix
 from scipy.spatial.distance import squareform
 from scipy.optimize import curve_fit
 import torch
@@ -6,21 +10,37 @@ from torch.utils.data import Sampler
 from umap.umap_ import fuzzy_simplicial_set
 
 from .samplers import DSSampler, WORSampler
+from ..utils import log
 
 
-def get_neighbor_graph(dmat, n_neightbors=15, random_state=None):
+def get_neighbor_graph(dmat, n_neighbors=15, random_state=None, labels=None):
     if len(dmat.shape) == 1:
         dmat = squareform(dmat)
+    n_taxa = dmat.shape[0]
+
+    if labels is not None:
+        dmat = dmat[labels][:, labels]
+
+    if n_neighbors > dmat.shape[0]:
+        msg=f"Found fewer labels ({dmat.shape[0]}) than n_neighbors ({n_neighbors}). Reducing n_neighbors to {dmat.shape[0] - 1}"
+        warn(msg)
+        n_neighbors = dmat.shape[0] - 1
+
     graph, sigmas, rhos = fuzzy_simplicial_set(dmat,
                                                n_neighbors,
                                                random_state,
                                                metric='precomputed')
+    if labels is not None:
+        coo = graph.tocoo()
+        graph = coo_matrix((coo.data, (labels[coo.row], labels[coo.col])),
+                           shape=(n_taxa, n_taxa)).tocsr()
+
     return graph
 
 class UMAPLoss(nn.Module):
 
-    def __init__(self, graph, min_dist=0.01):
-        self.graph = graph
+    def __init__(self, min_dist=0.01):
+        super().__init__()
         self.a, self.b = self.find_ab_params(1.0, min_dist)
 
     @staticmethod
@@ -43,13 +63,15 @@ class UMAPLoss(nn.Module):
 
     @staticmethod
     def umap_loss(p, q):
-        ce = (p * (torch.log(p/q)) + (1 - p) * (torch.log((1 - p)/(1 - q))))
-        return ce.sum() / n
+        p = torch.clamp(p, min=1e-4, max=1.0-1e-4)
+        q = torch.clamp(q, min=1e-4, max=1.0-1e-4)
+        ce = (p * (torch.torch.log(p/q)) + (1 - p) * (torch.log((1 - p)/(1 - q))))
+        return ce.mean()
 
     def compute_distances(self, output1, output2):
         raise NotImplemented
 
-    def forward(self, output, target_cls):
+    def forward(self, output, target_prob):
         """
         Computes the phylogenetic distance loss
 
@@ -61,17 +83,14 @@ class UMAPLoss(nn.Module):
         target
             the square root of the patristic distances
         """
-        output_to, output_from = output[::2], output[1::2]
-        cls_to, cls_from = target_cls[::2], target_cls[1::2]
-        target_prob = self.graph[cls_to, cls_from]
-
-        target = self.graph[target_cls][:, target_cls]
+        output_from, output_to = output[::2], output[1::2]
+        #cls_to, cls_from = target_cls[::2], target_cls[1::2]
 
         # compute distances - this will return the squareform
-        dist = self.compute_distances(output)
+        dist = self.compute_distances(output_from, output_to)
         prob = 1.0 / (1.0 + self.a * dist ** (2 * self.b))
 
-        return self.umap_loss(target, prob)
+        return self.umap_loss(target_prob, prob)
 
 
 class HyperbolicUMAPLoss(UMAPLoss):
@@ -96,20 +115,22 @@ class ContinuousSampler:
     def __init__(self, sampler, n_samples):
         self.sampler = sampler
         self.n_samples = n_samples
+        self._it = None
 
 
     def __iter__(self):
         self.count = 0
-        self.it = iter(self.sampler)
+        self._it = iter(self.sampler)
         return self
 
     def __next__(self):
-        if count < self.n_samples:
+        if self.count < self.n_samples:
             try:
-                ret = next(self.it)
+                ret = next(self._it)
             except StopIteration:
-                self.it = iter(self.sampler)
-                ret = next(self.it)
+                self._it = iter(self.sampler)
+                ret = next(self._it)
+            self.count += 1
             return ret
         raise StopIteration
 
@@ -121,29 +142,38 @@ class NeighborGraphSampler(Sampler):
     seq_labels/n_chunks_per_seq are assumed to be sorted by seq_label
     """
 
-    def __init__(self, graph, seq_labels, n_chunks_per_seq, n_batches=1e4, batch_size=512, wor=True):
+    def __init__(self, graph, seq_labels, n_chunks_per_seq, n_batches=1e4, batch_size=512, wor=True, rng=None):
         self.graph = graph.tocoo()
         if wor:
             self.edge_sampler = WORSampler(len(self.graph.data))
         else:
             self.edge_sampler = DSSampler(len(self.graph.data))
-        self.edge_sampler = ContinuousSampler(self.edge_sampler, n_batches)
+        self.__len = n_batches * batch_size // 2
+        self.edge_sampler = ContinuousSampler(self.edge_sampler, self.__len)
 
-        counts = np.bincount(seq_labels, n_chunks_per_seq)
+        n_chunks_per_seq = 2 * n_chunks_per_seq
+        counts = np.bincount(seq_labels, n_chunks_per_seq, minlength=graph.shape[0]).astype(int)
         mask = counts > 0
         self.labels = np.where(mask)[0]
         self.n_chunks_per_label = counts[mask]
         self.remaining = self.n_chunks_per_label.copy()
 
+        # an index to get local label ID from a global ID
+        self.inv_tax_map = -1 * np.ones(graph.shape[0], dtype=int)
+        self.inv_tax_map[self.labels] = np.arange(len(self.labels))
+
         # continuously permuted sequence indices
         self.perm_index = np.cumsum(self.n_chunks_per_label)
         self.permutation = np.arange(self.perm_index[-1])
 
-        self.n_batches = n_batches
-        self.batch_size = batch_size
+        self.rng = np.random.default_rng(rng)
+
+        self._edges = None
+        self._edge_id = None
 
     def get_chunk(self, label):
         # get remaining number of samples
+        label = self.inv_tax_map[label]
         wor_length = self.remaining[label]
         if wor_length == 0:
             wor_length = self.n_chunks_per_label[label]
@@ -157,22 +187,53 @@ class NeighborGraphSampler(Sampler):
         perm = self.permutation[start:end]
 
         # sample without replacement
-        sample = rng.integers(wor_length)
+        sample = self.rng.integers(wor_length)
         perm[[sample, -1]] = perm[[-1, sample]]
 
         return perm[-1]
 
     def __iter__(self):
-        ret = list()
-        for batch_i in range(self.n_batches):
-            for i in range(len(self.batch_size) // 2):
-                edge_id = next(self.edge_sampler)
-                ret.append(self.get_chunk(self.graph.row[edge_id]))
-                ret.append(self.get_chunk(self.graph.col[edge_id]))
-            if len(ret) == self.batch_size:
-                yield ret
-                ret = list()
-        raise StopIteration
+        log("making iter from NeighborGraphSampler")
+        self._edges = iter(self.edge_sampler)
+        self._edge_id = None
+        return self
+
+    def __next__(self):
+        if self._edge_id is None:
+            self._edge_id = next(self._edges)
+            ret = self.graph.row[self._edge_id]
+        else:
+            ret = self.graph.col[self._edge_id]
+            self._edge_id = None
+        label = ret
+        ret = self.get_chunk(ret)
+        return ret
 
     def __len__(self):
-        return self.n_batches
+        return self.__len
+
+
+class UMAPCollater:
+
+    def __init__(self, graph, padval, seq_dtype=torch.uint8):
+        self.graph = graph
+        self.padval = padval
+        self.seq_dtype = seq_dtype
+
+    def __call__(self, samples):
+        if isinstance(samples, tuple):
+            samples = [samples]
+        X_ret, y_ret = list(), list()
+        idx_from, idx_to = list(), list()
+        is_from = True
+        for i, X, y, seq_id in samples:
+            X_ret.append(X)
+            y_ret.append(y)
+            if is_from:
+                idx_from.append(y)
+            else:
+                idx_to.append(y)
+            is_from = not is_from
+        X_ret = torch.stack(X_ret, out=torch.zeros(len(X_ret), len(X_ret[0]), dtype=self.seq_dtype))
+        y_ret = torch.from_numpy(self.graph[idx_from, idx_to].getA()[0])
+        return (X_ret, y_ret)

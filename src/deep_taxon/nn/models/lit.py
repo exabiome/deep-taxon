@@ -20,7 +20,7 @@ class AbstractLit(LightningModule):
 
     schedules = ('adam', 'cyclic', 'plateau', 'cosine', 'cosinewr', 'step' )
 
-    def __init__(self, hparams, lr=None, distances=None, neighbor_graph=None):
+    def __init__(self, hparams, lr=None, distances=None):
         super().__init__()
         #self.hparams = self.check_hparams(hparams)
         self.save_hyperparameters(hparams)
@@ -43,9 +43,9 @@ class AbstractLit(LightningModule):
                 self._loss = nn.CrossEntropyLoss()
         elif self.hparams.umap:
             if self.hparams.hyperbolic:
-                self._loss = HyperbolicUMAPLoss(self.neighbor_graph, min_dist=hparams.min_dist)
+                self._loss = HyperbolicUMAPLoss(min_dist=hparams.min_dist)
             else:
-                self._loss = EuclideanUMAPLoss(self.neighbor_graph, min_dist=hparams.min_dist)
+                self._loss = EuclideanUMAPLoss(min_dist=hparams.min_dist)
         else:
             self._loss =  nn.MSELoss()
 

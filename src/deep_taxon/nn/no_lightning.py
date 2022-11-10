@@ -69,7 +69,7 @@ class Trainer:
         self.output_dir = output_dir
 
         if os.path.exists(self.snapshot_path):
-            print(f"Loading snapshot from {self.snapshot_path}")
+            log(f"Loading snapshot from {self.snapshot_path}")
             self._load_snapshot(self.snapshot_path)
 
         self._n_loss_samples = 100
@@ -83,13 +83,13 @@ class Trainer:
         self.optimizer = snapshot["OPTIMIZER"]
         self.step = snapshot['STEP']
         self.scheduler = snapshot.get("SCHEDULER", None)
-        print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
+        log(f"Resuming training from snapshot at Epoch {self.epochs_run}")
 
     def _run_batch(self, source, targets):
         if torch.is_grad_enabled():
             self.optimizer.zero_grad()
         output = self.model(source)
-        loss = self.loss(output, targets.long())
+        loss = self.loss(output, targets)
         if torch.is_grad_enabled():
             loss.backward()
             self.optimizer.step()

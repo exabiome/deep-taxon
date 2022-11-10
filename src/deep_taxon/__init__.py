@@ -24,10 +24,10 @@ def main():
             'count-sequence': Command('gtdb.prepare_data.count_sequence', 'Count the length of total sequence length for a set of accessions'),
             'sample-nonrep': Command('gtdb.sample.sample_nonrep', 'Get test strain genomes'),
             'sample-gtdb': Command('gtdb.sample.sample_tree', 'Sample taxa from a tree'),
-            'test-loaders': Command('nn.loader.check_loaded_sequences', 'load data and test that it is correct'),
         },
         'Training and models': {
             'train': Command('nn.train.run_lightning', 'Run training with PyTorch Lightning'),
+            'test-loader': Command('nn.train.test_loader', 'Get loader from PTL DataModule and iterate over it'),
             'train-job': Command('run.run_job.run_train', 'Run an training job'),
             'train-conf': Command('nn.train.print_config_options', 'Print the available options for a config file'),
             'conf-tmpl': Command('nn.train.print_config_templ', 'Print an empty config file'),

@@ -125,7 +125,7 @@ def process_config(conf_path, args=None):
         setattr(args, k, conf_val)
 
     # classify by default
-    if args.manifold == args.classify == False:
+    if args.manifold == args.classify == args.umap == False:
         args.classify = True
 
     return args
@@ -361,8 +361,7 @@ def process_args(args=None):
 
     model = process_model(args,
                          taxa_table=difile.taxa_table,
-                         distances=distances,
-                         neighbor_graph=data_mod.dataset.neighbor_graph)
+                         distances=distances)
 
     #if args.num_workers > 0:
     #    data_mod.dataset.close()
@@ -607,6 +606,25 @@ def run_lightning(argv=None):
 
     print0("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
     print0("Total seconds:", td.total_seconds(), file=sys.stderr)
+
+
+def test_loader(argv=None):
+    '''Run training with PyTorch Lightning'''
+    global RANK
+    import numpy as np
+    import traceback
+    import os
+    import pprint
+    import warnings
+    warnings.filterwarnings(action='ignore', message='The dataloader, .*, does not have many workers.*')
+
+    model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+
+    train_loader = data_mod.train_dataloader()
+
+    for i in tqdm(train_loader):
+        pass
+
 
 
 def lightning_lr_find(argv=None):

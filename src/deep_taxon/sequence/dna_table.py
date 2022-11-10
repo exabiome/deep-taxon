@@ -716,6 +716,12 @@ class LazyWindowChunkedDIFile:
 
         self.n_classes = difile.n_classes
         self.vocab = difile.get_vocab()
+        idx = np.where(self.vocab == 'N')[0]
+        if len(idx) > 0:
+            self.padval = idx[0]
+        else:
+            warnings.warn("Could not find null value for DNA sequences. Looking for 'N'. Padding with %s" % self.vocab[0])
+            self.padval = 0
 
         self.node_ids = None
         self.tree_graph = None
@@ -857,10 +863,12 @@ class LazyWindowChunkedDIFile:
         item = self.__get_helper(seq_i)
         item['seq_idx'] = item['id']
 
+        seq = torch.full((self.window,), self.padval, dtype=item['seq'].dtype)
         if rev:
-            item['seq'] = self.rcmap[item['seq'][l-e:l-s].long()].flip(0)
+            seq[:e-s] = self.rcmap[item['seq'][l-e:l-s].long()].flip(0)
         else:
-            item['seq'] = item['seq'][s:e]
+            seq[:e-s] = item['seq'][s:e]
+        item['seq'] = seq
         item['id'] = i
         item['length'] = e - s
         return item
