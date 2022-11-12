@@ -37,6 +37,31 @@ def get_neighbor_graph(dmat, n_neighbors=15, random_state=None, labels=None):
 
     return graph
 
+
+def get_neighbor_graph_np(dmat, n_neighbors=15, labels=None):
+    nn = np.argpartition(dmat, n_neighbors+1)[:, :n_neighbors+1]
+    nn_dist = np.take_along_axis(dmat, nn, axis=1)
+    nn_dist = np.argsort(nn_dist, axis=1)
+    nn = np.take_along_axis(nn, nn_dist, axis=1)[:, 1:]
+
+    rows = np.arange(dmat.shape[0])
+
+    rho = dmat[rows, nn[:, 0]]
+    sigma = dmat[rows, nn[:, -1]]
+
+    row = np.repeat(rows, n_neighbors)
+    col = nn.reshape(-1)
+
+    graph = dok_matrix(dmat.shape)
+    for i, j in zip(row, col):
+        pij = np.exp((rho[i] - dmat[i, j]) / sigma[i])
+        pji = np.exp((rho[j] - dmat[j, i]) / sigma[j])
+        graph[i, j] = (pij + pji) - pij*pji
+
+    graph = graph.tocsr()
+    return graph
+
+
 class UMAPLoss(nn.Module):
 
     def __init__(self, min_dist=0.01):
