@@ -38,6 +38,33 @@ def get_neighbor_graph(dmat, n_neighbors=15, random_state=None, labels=None):
     return graph
 
 
+def partition_neighbor_graph(graph, genome_sizes, size):
+    ### TODO: This needs to be cleaned up to ensure it always returns
+    ### *size* number of subgraphs
+
+    # This is how to calcualte genome_sizes, but it should be passed in
+    # instead of calculated here
+    # genome_sizes = np.bincount(genome, weights=lengths)
+    mean_size = genome_sizes.sum() / size
+    queries = (np.arange(size)+1) * mean_size
+
+    n_cc, components = connected_components(umap_graph)
+    genomes = list()
+    for i in range(n_cc):
+        mask = components == i
+        start_node = np.where(mask)[0][0]
+        order, predecessor = breadth_first_order(umap_graph, start_node)
+        cumsum = genome_sizes[order].cumsum()
+        insertions = np.searchsorted(cumsum, queries)
+        last_genome = np.where(insertions == len(cumsum))[0][1]
+        insertions
+        s = 0
+        for j in range(last_genome):
+            e = insertions[j]
+            genomes.append(order[s:e])
+            s = e
+        queries = queries[last_genome:]
+
 def get_neighbor_graph_np(dmat, n_neighbors=15, labels=None):
     nn = np.argpartition(dmat, n_neighbors+1)[:, :n_neighbors+1]
     nn_dist = np.take_along_axis(dmat, nn, axis=1)
