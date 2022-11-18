@@ -691,10 +691,11 @@ class LazyWindowChunkedDIFile:
     }
 
 
-    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, tree_graph=False, load=True, shmem=False):
+    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, tree_graph=False, load=True, shmem=False, indices=None):
         counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
-        if size > 1:
+        if size > 1 and indices is None:
             indices = balsplit(counts, size, rank)
+        if indices is not None:
             counts = counts[indices]
             difile.set_sequence_subset(indices)
         difile.load(sequence=load, verbose=rank==0, shmem=shmem)

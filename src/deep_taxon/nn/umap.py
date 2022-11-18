@@ -2,6 +2,7 @@ from warnings import warn
 
 import numpy as np
 from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import breadth_first_order, connected_components
 from scipy.spatial.distance import squareform
 from scipy.optimize import curve_fit
 import torch
@@ -14,6 +15,8 @@ from ..utils import log
 
 
 def get_neighbor_graph(dmat, n_neighbors=15, random_state=None, labels=None):
+    """Build the UMAP graph from the phylogenetic distance matrix.
+    """
     if len(dmat.shape) == 1:
         dmat = squareform(dmat)
     n_taxa = dmat.shape[0]
@@ -38,9 +41,22 @@ def get_neighbor_graph(dmat, n_neighbors=15, random_state=None, labels=None):
     return graph
 
 
-    # genome_sizes = np.bincount(genome, weights=lengths)
-def partition_neighbor_graph(graph, genome_sizes, size, rank):
+def partition_neighbor_graph(graph, seq_labels, seq_lengths, rank, size):
+    """Partition sequences according to the UMAP graph with *nodes* weighted by
+       genome size. The goal is to partition the UMAP graph so as to distribute
+       genome sequences across `size` ranks as equally as possible.
+    """
 
+    # First compute total genome size from sequence lengths/labels
+    genome_sizes = np.bincount(seq_labels, weights=seq_lengths, minlength=graph.shape[0])
+
+    # the original graph will need to be subsetting for calculating connected components
+    # this will be a map for retrieving the original node IDs
+    labels = np.where(genome_sizes > 0)[0]
+    orig_graph = graph
+    graph = graph[labels][:, labels]
+
+    # Calculate the connected components
     n_cc, components = connected_components(graph)
 
     genomes = list()
@@ -48,8 +64,12 @@ def partition_neighbor_graph(graph, genome_sizes, size, rank):
     ordered_lengths = list()
     for i in range(n_cc):
         mask = components == i
+        #if mask.sum() == 1:
+        #    continue
         start_node = np.where(mask)[0][0]
-        order, predecessor = breadth_first_order(umap_graph, start_node)
+        order, predecessor = breadth_first_order(graph, start_node)
+
+        order = labels[order]
         orders.append(order)
         ordered_lengths.append(genome_sizes[order])
 
@@ -66,7 +86,18 @@ def partition_neighbor_graph(graph, genome_sizes, size, rank):
     e = ins_idx[rank]
     s = 0 if rank == 0 else ins_idx[rank - 1]
 
-    return orders[s:e]
+    node_ids = orders[s:e]
+
+    #seqs = np.where(np.isin(seq_labels, node_ids[0]))[0]
+    seqs = np.where(np.isin(seq_labels, node_ids))[0]
+
+    subgraph = orig_graph[node_ids][:, node_ids]
+
+    coo = subgraph.tocoo()
+    subgraph = coo_matrix((coo.data, (labels[coo.row], labels[coo.col])), shape=orig_graph.shape).tocsr()
+
+    return subgraph, seqs
+
 
 def get_neighbor_graph_np(dmat, n_neighbors=15, labels=None):
     nn = np.argpartition(dmat, n_neighbors+1)[:, :n_neighbors+1]
@@ -121,6 +152,9 @@ class UMAPLoss(nn.Module):
         p = torch.clamp(p, min=1e-4, max=1.0-1e-4)
         q = torch.clamp(q, min=1e-4, max=1.0-1e-4)
         ce = (p * (torch.torch.log(p/q)) + (1 - p) * (torch.log((1 - p)/(1 - q))))
+        if torch.any(torch.isnan(ce)):
+            import sys
+            print("p", p, "q", q, file=sys.stderr)
         return ce.mean()
 
     def compute_distances(self, output1, output2):
@@ -155,7 +189,7 @@ class HyperbolicUMAPLoss(UMAPLoss):
     	s2 = torch.sqrt(1 + torch.sum(output2 ** 2, dim=1))
     	B = s1 * s2
     	B -= torch.sum(output1 * output2 , dim=1)
-    	B = torch.clamp(B, min=1.0 + 1e-8)
+    	B = torch.clamp(B, min=1.0 + 1e-4)
     	return torch.acosh(B)
 
 
@@ -248,7 +282,6 @@ class NeighborGraphSampler(Sampler):
         return perm[-1]
 
     def __iter__(self):
-        log("making iter from NeighborGraphSampler")
         self._edges = iter(self.edge_sampler)
         self._edge_id = None
         return self

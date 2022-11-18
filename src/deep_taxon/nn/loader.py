@@ -18,7 +18,7 @@ from sklearn.utils import check_random_state
 
 from .collaters import get_collater
 from .samplers import DSSampler, WORSampler
-from .umap import get_neighbor_graph, NeighborGraphSampler, UMAPCollater
+from .umap import get_neighbor_graph, NeighborGraphSampler, UMAPCollater, partition_neighbor_graph
 from ..sequence import LazyWindowChunkedDIFile, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
 from ..utils import parse_seed, distsplit, balsplit, get_logger, log
 
@@ -352,7 +352,6 @@ class SubsetDataLoader(DataLoader):
         self.train = train
         self.validate = validate
         self.test = test
-        log('done creating SubsetDataLoader')
 
     def __len__(self):
         return (len(self.sampler) - 1) // self.batch_size + 1
@@ -427,7 +426,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
         self.umap = hparams.umap
         self.sanity = hparams.sanity
 
-        log("Creating LazySeqDataset", print_msg=rank==0)
+        log("Creating LazySeqDataset", print_msg=not rank)
         if inference:
             hparams.manifold = False
             hparams.graph = False
@@ -449,9 +448,9 @@ class DeepIndexDataModule(pl.LightningDataModule):
             #kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
-        log("Getting collater", print_msg=rank==0)
+        log("Getting collater", print_msg=not rank)
         if self.umap:
-            log("using UMAPCollater for UMAP style training")
+            log("using UMAPCollater for UMAP style training", print_msg=not rank)
             kwargs['collate_fn'] = UMAPCollater(self.dataset.neighbor_graph, self.dataset.padval)
         else:
             kwargs['collate_fn'] = get_collater(self.dataset, inference=inference, condensed=hparams.condensed)
@@ -484,7 +483,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
             if self.sanity:
                 s_kwargs['max_samples'] = self.batch_size * self.sanity
             if self.umap:
-                log("using NeighborGraphSampler for UMAP style training")
+                log("using NeighborGraphSampler for UMAP style training", print_msg=not self.rank)
                 # TODO -- self.dataset.difile.get_counts() does not account for reverse complementing
                 # this needs to be passed through somehow
                 self._tr_sampler = NeighborGraphSampler(self.dataset.neighbor_graph,
@@ -652,6 +651,7 @@ class LazySeqDataset(Dataset):
 
         distances = False
         tree_graph = False
+        seq_indices = None
 
         if hparams.manifold:
             self.manifold = True
@@ -672,7 +672,13 @@ class LazySeqDataset(Dataset):
             labels = np.where(np.bincount(difile._labels))[0]
             if len(labels) == len(difile.taxa_table):
                 labels = None
+
             self.neighbor_graph = get_neighbor_graph(difile.distances.data, n_neighbors=hparams.n_neighbors, labels=labels)
+
+            rank = 0
+            size = 2
+            if size > 1:
+                self.neighbor_graph, seq_indices = partition_neighbor_graph(self.neighbor_graph, difile._labels, difile.seq_table['length'].data[:], rank, size)
         else:
             self.classify = True
             if hparams.weighted == 'phy':
@@ -685,7 +691,8 @@ class LazySeqDataset(Dataset):
                                               rank=self._global_rank, size=self._world_size,
                                               tree_graph=tree_graph,
                                               load=kwargs['load'],
-                                              shmem=kwargs['shmem'])
+                                              shmem=kwargs['shmem'],
+                                              indices=seq_indices)
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
         self.__len = len(self.difile)
