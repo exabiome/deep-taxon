@@ -507,7 +507,7 @@ class DeepIndexDataModule(pl.LightningDataModule):
                 s_kwargs['max_samples'] = self.batch_size * self.sanity // 4
             if self.umap:
                 self._val_sampler = NeighborGraphSampler(self.dataset.neighbor_graph,
-                                                         self.dataset.difile,
+                                                        self.dataset.difile.labels,
                                                          self.dataset.difile.get_counts(),
                                                          n_batches=self.n_batches,
                                                          batch_size=self.batch_size,
@@ -675,8 +675,6 @@ class LazySeqDataset(Dataset):
 
             self.neighbor_graph = get_neighbor_graph(difile.distances.data, n_neighbors=hparams.n_neighbors, labels=labels)
 
-            rank = 0
-            size = 2
             if size > 1:
                 self.neighbor_graph, seq_indices = partition_neighbor_graph(self.neighbor_graph, difile._labels, difile.seq_table['length'].data[:], rank, size)
         else:

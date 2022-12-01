@@ -237,8 +237,8 @@ class NeighborGraphSampler(Sampler):
             self.edge_sampler = WORSampler(len(self.graph.data))
         else:
             self.edge_sampler = DSSampler(len(self.graph.data))
-        self.__len = n_batches * batch_size // 2
-        self.edge_sampler = ContinuousSampler(self.edge_sampler, self.__len)
+        self.__len = n_batches * batch_size
+        self.edge_sampler = ContinuousSampler(self.edge_sampler, self.__len // 2)
 
         n_chunks_per_seq = 2 * n_chunks_per_seq
         counts = np.bincount(seq_labels, n_chunks_per_seq, minlength=graph.shape[0]).astype(int)
@@ -253,7 +253,7 @@ class NeighborGraphSampler(Sampler):
 
         # continuously permuted sequence indices
         self.perm_index = np.cumsum(self.n_chunks_per_label)
-        self.permutation = np.arange(self.perm_index[-1])
+        self.permutation = np.arange(self.perm_index[-1], dtype=np.uint32)
 
         self.rng = np.random.default_rng(rng)
 
@@ -280,6 +280,7 @@ class NeighborGraphSampler(Sampler):
         perm[[sample, -1]] = perm[[-1, sample]]
 
         return perm[-1]
+
 
     def __iter__(self):
         self._edges = iter(self.edge_sampler)

@@ -510,6 +510,7 @@ class DeepIndexFile(Container):
             ## read one sequence at a time
             it = zip(starts, ends)
             log('Loading data subset - loading sequences from subset', print_msg=verbose)
+            log(f'Reading in {len(sequence_subset)/1024**3} Gb')
             if verbose:
                 it = tqdm(it, total=len(starts))
             for s_src, e_src in it:
@@ -698,6 +699,7 @@ class LazyWindowChunkedDIFile:
         if indices is not None:
             counts = counts[indices]
             difile.set_sequence_subset(indices)
+        log(f'{rank} / {size} - {indices}')
         difile.load(sequence=load, verbose=rank==0, shmem=shmem)
         log('setting lengths', print_msg=rank==0)
         self.lengths = difile.seq_table['length'].data

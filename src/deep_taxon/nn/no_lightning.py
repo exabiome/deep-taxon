@@ -9,6 +9,8 @@ import torch.distributed as dist
 
 from tqdm import tqdm
 
+from ..utils import log
+
 class RunningAverage:
 
     def __init__(self, max_samples=None):
@@ -119,8 +121,6 @@ class Trainer:
     def _run_train(self, epoch):
         if self.train_data is None:
             self.train_data = self.data_mod.train_dataloader()
-        b_sz = len(next(iter(self.train_data))[0])
-        print(f"[GPU{self.global_rank}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         it = self.train_data
         if self.global_rank == 0:
             it = tqdm(self.train_data, desc=f"Epoch {epoch}") #, leave=False)

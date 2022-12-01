@@ -532,7 +532,7 @@ def run_lightning(argv=None):
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
-    monitor, mode = (AbstractLit.val_loss, 'min') if args.manifold else (AbstractLit.val_acc, 'max')
+    monitor, mode = (AbstractLit.val_loss, 'min') if (args.manifold or args.umap) else (AbstractLit.val_acc, 'max')
     callbacks = [
         LearningRateMonitor(logging_interval='epoch'),
         TQDMProgressBar(refresh_rate=50)
