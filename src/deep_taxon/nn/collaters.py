@@ -114,7 +114,7 @@ class TrainingSeqCollater:
             X_ret.append(X_)
             y_ret.append(y)
         X_ret = torch.stack(X_ret, out=torch.zeros(len(X_ret), len(X_ret[0]), dtype=self.seq_dtype))
-        y_ret = torch.stack(y_ret, out=torch.zeros(len(X_ret), dtype=torch.int32))
+        y_ret = torch.stack(y_ret, out=torch.zeros(len(X_ret), dtype=torch.int64))
         return (X_ret, y_ret)
 
 
