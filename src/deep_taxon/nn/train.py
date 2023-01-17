@@ -549,7 +549,7 @@ def run_lightning(argv=None):
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
 
     if args.swa:
-        callbacks.append(StochasticWeightAveraging(swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
+        callbacks.append(StochasticWeightAveraging(swa_lrs=1e-2, swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
 
     targs = dict(
         enable_checkpointing=True,
