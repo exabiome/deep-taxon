@@ -482,7 +482,7 @@ class DeepIndexFile(Container):
         self.__indices = indices
         self._labels = self._labels[self.__indices]
 
-    def load(self, sequence=False, device=None, verbose=True, shmem=True):
+    def load(self, sequence=False, device=None, verbose=True, shm=True):
         indices = self.__indices
         self.__loaded = True
         if self.__indices is not None:
@@ -538,7 +538,7 @@ class DeepIndexFile(Container):
             log('Loading data - loading sequence index', print_msg=verbose)
             self.seq_table['sequence_index'].transform(_load)
             if sequence:
-                if shmem:
+                if shm:
                     log('Loading data - loading sequences into shared memory', print_msg=verbose)
                     _load = lambda x: np.ctypeslib.as_array(RawArray(ctypes.c_uint8, x))
                 else:
@@ -692,7 +692,7 @@ class LazyWindowChunkedDIFile:
     }
 
 
-    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, tree_graph=False, load=True, shmem=False, indices=None):
+    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, tree_graph=False, load=True, shm=False, indices=None):
         counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
         if size > 1 and indices is None:
             indices = balsplit(counts, size, rank)
@@ -700,7 +700,7 @@ class LazyWindowChunkedDIFile:
             counts = counts[indices]
             difile.set_sequence_subset(indices)
         log(f'{rank} / {size} - {indices}')
-        difile.load(sequence=load, verbose=rank==0, shmem=shmem)
+        difile.load(sequence=load, verbose=rank==0, shm=shm)
         log('setting lengths', print_msg=rank==0)
         self.lengths = difile.seq_table['length'].data
         log('setting ids', print_msg=rank==0)

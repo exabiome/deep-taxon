@@ -132,7 +132,7 @@ def dataset_stats(argv=None):
         if args.mem:
             print_mem('before DeepIndexDataModule')
         before = time()
-        lsd_kwargs = dict(shmem=False)
+        lsd_kwargs = dict(shm=False)
         data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, rank=args.rank, size=args.size, comm=comm, **lsd_kwargs)
         after = time()
         if args.mem:
@@ -145,7 +145,7 @@ def dataset_stats(argv=None):
         va_len = len(dataset)
         dataset.set_subset()
     else:
-        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True, difile=difile, shmem=False)
+        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True, difile=difile, shm=False)
         if args.rank != None:
             kwargs['rank'] = args.rank
             kwargs['size'] = args.size
@@ -689,7 +689,7 @@ class LazySeqDataset(Dataset):
                                               rank=self._global_rank, size=self._world_size,
                                               tree_graph=tree_graph,
                                               load=kwargs['load'],
-                                              shmem=kwargs['shmem'],
+                                              shm=kwargs['shm'],
                                               indices=seq_indices)
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
