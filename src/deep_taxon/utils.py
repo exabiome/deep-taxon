@@ -13,7 +13,9 @@ import numpy as np
 
 def log(msg, print_msg=True):
     if print_msg:
-        print(f'{datetime.now()} - {msg}', file=sys.stderr)
+        prefix = f'{datetime.now()} - '
+        msg = msg.replace('\n', '\n' + (' ' * len(prefix)))
+        print(f'{prefix}{msg}', file=sys.stderr)
 
 @contextmanager
 def ccm(cond, cm):
