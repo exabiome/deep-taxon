@@ -127,7 +127,7 @@ def prepare_data(argv=None):
     from deep_taxon.sequence.dna_table import AATable, DNATable, SequenceTable, TaxaTable, DeepIndexFile, NewickString, CondensedDistanceMatrix, GenomeTable, TreeGraph
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('fadir', type=str, help='directory with NCBI sequence files')
+    parser.add_argument('fadir', type=str, help='directory with NCBI sequence files. This is the directory that contains the \'all\' directory')
     parser.add_argument('metadata', type=str, help='metadata file from GTDB')
     parser.add_argument('out', type=str, help='output HDF5')
     parser.add_argument('-T', '--tree', type=str, help='a Newick file with a tree of representative taxa', default=None)
@@ -139,9 +139,11 @@ def prepare_data(argv=None):
     parser.add_argument('-L', '--total_seq_len', type=int, default=None, help='the total sequence length')
     parser.add_argument('-t', '--tmpdir', type=str, default=None, help='a temporary directory to store sequences')
     parser.add_argument('-N', '--n_seqs', type=int, default=None, help='the total number of sequences')
+    parser.add_argument('--print-accessions', action='store_true', default=False, help='print accessions and exit')
     rep_grp = parser.add_mutually_exclusive_group()
     rep_grp.add_argument('-n', '--nonrep', action='store_true', default=False, help='keep non-representative genomes only. keep both by default')
     rep_grp.add_argument('-r', '--rep', action='store_true', default=False, help='keep representative genomes only. keep both by default')
+    parser.add_argument('--nontest', action='store_true', default=False, help='get non-test non-representatives. Ignored when --all is used')
     parser.add_argument('-a', '--all', action='store_true', default=False,
                         help='keep all non-representative genomes. By default, only non-reps with the highest and lowest contig count are kept')
     grp = parser.add_mutually_exclusive_group()
@@ -159,6 +161,9 @@ def prepare_data(argv=None):
 
     args = parser.parse_args(args=argv)
 
+    if not os.path.exists(args.fadir):
+        print(f"Fasta directory {args.fadir} does not exist", file=sys.stderr)
+        exit(1)
 
     if args.total_seq_len is not None:
         if args.n_seqs is None:
@@ -192,6 +197,8 @@ def prepare_data(argv=None):
     taxdf = pd.read_csv(args.metadata, header=0, sep='\t', usecols=['accession', 'gtdb_taxonomy', 'gtdb_genome_representative', 'contig_count', 'checkm_completeness'])\
                         .apply(func, axis=1)
 
+    logger.info('Setting accession as index')
+
     taxdf = taxdf.set_index('accession')
     dflen = len(taxdf)
     logger.info('Found %d total genomes' % dflen)
@@ -219,14 +226,30 @@ def prepare_data(argv=None):
             min_ctgs = groups.idxmin()['contig_count']
             max_ctgs = groups.idxmax()['contig_count']
             accessions = np.unique(np.concatenate([min_ctgs, max_ctgs]))
-            taxdf = taxdf.filter(accessions, axis=0)
-            logger.info('Discarded %d extra non-representative genomes' % (dflen - len(taxdf)))
+            if args.nontest:
+                dflen = len(taxdf)
+                taxdf = taxdf.drop(accessions, axis=0)
+                groups = taxdf[['gtdb_genome_representative', 'contig_count']].groupby('gtdb_genome_representative')
+                min_ctgs = groups.idxmin()['contig_count']
+                max_ctgs = groups.idxmax()['contig_count']
+                accessions = np.unique(np.concatenate([min_ctgs, max_ctgs]))
+                taxdf = taxdf.filter(accessions, axis=0)
+                logger.info('Discarded %d non-test non-representative genomes' % (dflen - len(taxdf)))
+            else:
+                taxdf = taxdf.filter(accessions, axis=0)
+                logger.info('Discarded %d extra non-representative genomes' % (dflen - len(taxdf)))
     elif args.rep:
         taxdf = taxdf[taxdf.index == taxdf['gtdb_genome_representative']]
         logger.info('Discarded %d non-representative genomes' % (dflen - len(taxdf)))
 
     dflen = len(taxdf)
     logger.info('%d remaining genomes' % dflen)
+
+    if args.print_accessions:
+        logger.info('printing accessions and exiting')
+        for tid in taxdf.index.values:
+            print(tid)
+        exit(0)
 
 
     ###############################
