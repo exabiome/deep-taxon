@@ -140,7 +140,7 @@ class ResNet(AbstractLit):
         if not hasattr(hparams, 'norm_layer'):
             hparams.norm_layer = nn.BatchNorm1d
         if not hasattr(hparams, 'bottleneck'):
-            hparams.bottleneck = True
+            hparams.bottleneck = False
         if not hasattr(hparams, 'simple_clf'):
             hparams.simple_clf = False
         if not hasattr(hparams, 'dropout_clf'):
@@ -184,8 +184,12 @@ class ResNet(AbstractLit):
 
         n_output_channels = 512 * block.expansion
         if hparams.bottleneck:
-            self.bottleneck = FeatureReduction(n_output_channels, 64 * block.expansion)
-            n_output_channels = 64 * block.expansion
+            if isinstance(hparams.bottleneck, int):
+                tmp = hparams.bottleneck
+            else:
+                tmp = 64 * block.expansion
+            self.bottleneck = FeatureReduction(n_output_channels, tmp)
+            n_output_channels = tmp
         else:
             self.bottleneck = None
 
