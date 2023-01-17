@@ -92,13 +92,14 @@ class Trainer:
             self.optimizer.zero_grad()
         output = self.model(source)
         loss = self.loss(output, targets)
+        print(f'{self.local_rank} - {loss}')
         if torch.is_grad_enabled():
             loss.backward()
             self.optimizer.step()
         return loss
 
-    def _run_loop(self, epoch, it):
-        avg = RunningAverage(self._n_loss_samples)
+    def _run_loop(self, epoch, it, n_loss_samples=None):
+        avg = RunningAverage(n_loss_samples)
         time_avg = RunningAverage(self._n_loss_samples)
         s = time()
         for i, (source, targets) in enumerate(it):
@@ -163,6 +164,10 @@ class Trainer:
 
     def train(self, max_epochs: int):
         dist.init_process_group(backend="nccl", rank=self.global_rank, world_size=self.world_size)
+        log('Running DDP training')
+        log('Model:\n' + str(self.model))
+        log('Optimizer:\n' + str(self.optimizer))
+        log('Scheduler:\n' + str(self.scheduler))
         self.model = DDP(self.model, device_ids=[self.local_rank])
         if self.global_rank == 0:
             if os.path.exists(self.metrics_path):
