@@ -37,7 +37,10 @@ def run_inference(argv=None):
     grp.add_argument('--perlmutter',  help='make script for running on NERSC Perlmutter',  action='store_true', default=False)
     grp.add_argument('--summit',      help='make script for running on OLCF Summit', action='store_true', default=False)
 
-    parser.add_argument('--nonrep', action='store_true', default=False, help='the dataset is nonrepresentative species')
+    dset_grp = parser.add_mutually_exclusive_group()
+    dset_grp.add_argument('--nonrep', action='store_true', default=False, help='the dataset is nonrepresentative species')
+    dset_grp.add_argument('--calib', action='store_true', default=False, help='the dataset is calibration species')
+
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
     parser.add_argument('-M', '--in_memory', default=False, action='store_true', help='collect all batches in memory before writing to disk')
@@ -58,7 +61,13 @@ def run_inference(argv=None):
 
     job = get_job(args)
 
-    outdir = os.path.splitext(args.checkpoint)[0] + ('.nonrep' if args.nonrep else '.rep')
+    ext = '.rep'
+    if args.nonrep:
+        ext = '.nonrep'
+    elif args.calib:
+        ext = '.calib'
+
+    outdir = os.path.splitext(args.checkpoint)[0] + ext
     if not os.path.exists(outdir):
         os.mkdir(outdir)
 
@@ -140,6 +149,10 @@ def run_inference(argv=None):
 
     job.add_command('echo "==== Computing taxonomic accuracy ====" >> $LOG')
     job.add_command('deep-taxon tax-acc $OUTPUT $INPUT $OUTDIR/tax_acc.csv >> $LOG 2>&1')
+
+    for i in range(len(argv)):
+        if " " in argv[i]:
+            argv[i] = f'"{argv[i]}"'
 
     def submit(job, shell, message):
         job_id = job.submit_job(shell, conda_env=args.conda_env)
