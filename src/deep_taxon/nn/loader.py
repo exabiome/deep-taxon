@@ -732,14 +732,14 @@ class LazySeqDataset(Dataset):
     def rank(self):
         return self._global_rank
 
-    def worker_init(self, worker_id):
-        # September 15, 2021, ajtritt
-        # This print statement is necessary to avoid processings from hanging when they are started
-        # after a Summit maintenance, processes would hang. I was able to track it down to line 62
-        # of multiprocessing/popen_spawn_posix.py. I still do not know the real cause of the problem
-        # but it it appears that writing to standard error after starting a multiprocessing.Process
-        # keeps thing moving along.
-        self.open()
+    #def worker_init(self, worker_id):
+    #    # September 15, 2021, ajtritt
+    #    # This print statement is necessary to avoid processings from hanging when they are started
+    #    # after a Summit maintenance, processes would hang. I was able to track it down to line 62
+    #    # of multiprocessing/popen_spawn_posix.py. I still do not know the real cause of the problem
+    #    # but it it appears that writing to standard error after starting a multiprocessing.Process
+    #    # keeps thing moving along.
+    #    self.open()
 
     def get_subset_len(self, train=False, validate=False, test=False):
         rc = 2 if self.revcomp else 1
