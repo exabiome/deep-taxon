@@ -161,6 +161,8 @@ def process_args(args, comm=None):
 
     args.difile.set_label_key(args.tgt_tax_lvl)
 
+    args.total_seqs = len(args.difile)
+
     if not args.overlap:
         model.hparams.step = model.hparams.window
 
@@ -227,7 +229,8 @@ def run_inference(argv=None):
 
 def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
-    n_samples = dataset.difile.n_seqs
+    n_samples = args.total_seqs
+    args.logger.debug(f"rank {dataset.rank} - n_samples = {n_samples}")
     all_seq_ids = dataset.difile.id #get_sequence_subset()
     seq_lengths  = dataset.difile.lengths #get_seq_lengths()
 
@@ -235,19 +238,27 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
     outputs_dset = None
     if args.save_chunks:
         outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+    args.logger.debug(f"rank {dataset.rank} - making labels")
     labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
     labels_dset.attrs['n_classes'] = args.n_outputs
 
     maxprob_dset = None
     if args.maxprob > 0 :
+        args.logger.debug(f"rank {dataset.rank} - making maxprob")
         maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
 
+    args.logger.debug(f"rank {dataset.rank} - making preds")
     preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
+    args.logger.debug(f"rank {dataset.rank} - making lengths")
     seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
     if all_seq_ids is None:
         seqlen_dset[:] = seq_lengths
     else:
-        seqlen_dset[all_seq_ids] = seq_lengths
+        args.logger.debug(f"rank {dataset.rank} - writing seq_lengths")
+        # iterate over indices individually - passing this off to h5py takes prohibitively long
+        for i in range(len(seq_lengths)):
+            seqlen_dset[all_seq_ids[i]] = seq_lengths[i]
+
 
     # to-write queues - we use those so we're not doing I/O at every iteration
     outputs_q = list()
@@ -260,9 +271,11 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
         args.n_seqs = 500
 
     # send model to GPU
+    args.logger.debug(f"rank {dataset.rank} - sending model to args.device")
     model.to(args.device)
 
     uniq_labels = set()
+    args.logger.debug(f"rank {dataset.rank} - reading and processing")
     for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0):
 
         seqs, counts = np.unique(_seq_ids, return_counts=True)
