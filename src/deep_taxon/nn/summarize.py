@@ -495,8 +495,6 @@ def get_profile_data(argv=None):
                         continue
                     if line.startswith('Total'):
                         ar = re_delim.split(line)
-                        #if len(ar) < time_col:
-                        #    breakpoint()
                         data['total'] = ar[time_col].strip()
                     else:
                         ar = re_delim.split(line)

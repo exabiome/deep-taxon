@@ -12,12 +12,16 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, Sampler, Subset, SequentialSampler
+from torch.utils.data import DataLoader, Dataset, Subset
 from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 
+from .collaters import get_collater
+from .samplers import DSSampler, WORSampler
+from .umap import get_neighbor_graph, NeighborGraphSampler, UMAPCollater, partition_neighbor_graph
 from ..sequence import LazyWindowChunkedDIFile, DeepIndexFile, chunk_sequence, lazy_chunk_sequence
 from ..utils import parse_seed, distsplit, balsplit, get_logger, log
+
 
 def print_mem(msg=None):
     pid = os.getpid()
@@ -44,13 +48,14 @@ def check_window(window, step):
 def add_dataset_arguments(parser):
     group = parser.add_argument_group("Dataset options")
 
-    group.add_argument('-W', '--window', type=int, default=None, help='the window size to use to chunk sequences')
-    group.add_argument('-S', '--step', type=int, default=None, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
+    group.add_argument('-W', '--window', type=int, default=1024, help='the window size to use to chunk sequences')
+    group.add_argument('-S', '--step', type=int, default=128, help='the step between windows. default is to use window size (i.e. non-overlapping chunks)')
     group.add_argument('--fwd_only', default=False, action='store_true', help='use forward strand of sequences only')
     group.add_argument('--tnf', default=False, action='store_true', help='use tetranucleotide frequencies as inputs')
     type_group = group.add_mutually_exclusive_group()
     type_group.add_argument('-C', '--classify', action='store_true', help='run a classification problem', default=False)
     type_group.add_argument('-M', '--manifold', action='store_true', help='run a manifold learning problem', default=False)
+    type_group.add_argument('-U', '--umap', action='store_true', help='run UMAP style training', default=False)
     choices = list(DeepIndexFile.taxonomic_levels) + ['all']
     group.add_argument('-t', '--tgt_tax_lvl', choices=choices, metavar='LEVEL', default='species',
                        help='the taxonomic level to predict. choices are domain, phylum, class, order, family, genus, species, all')
@@ -68,6 +73,8 @@ def dataset_stats(argv=None):
     parser.add_argument('--size', type=int, help='subset the sequences based on world size and rank', default=None)
     parser.add_argument('--mpi', default=False, action='store_true', help='user MPI rank/size')
     parser.add_argument('-P', '--n_partitions', type=int, help='the number of partitions to use', default=1)
+    parser.add_argument('-s', '--sanity', metavar='NBAT', nargs='?', const=True, default=False,
+                        help='run NBAT batches for training and NBAT//4 batches for validation. By default, NBAT=4000')
     test_group = parser.add_argument_group('Test reading')
     test_group.add_argument('-T', '--test_read', default=False, action='store_true', help='test reading an element')
     test_group.add_argument('--mem', default=False, action='store_true', help='print memory usage before and after loading')
@@ -77,7 +84,7 @@ def dataset_stats(argv=None):
     test_group.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     test_group.add_argument('-b', '--batch_size', type=int, help='the number of workers to load data with', default=1)
     test_group.add_argument('-N', '--num_batches', type=int, help='the number of batches to load when testing read', default=None)
-    test_group.add_argument('-s', '--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
+    test_group.add_argument('--seed', type=parse_seed, default='', help='seed for an 80/10/10 split before reading an element')
     test_group.add_argument('-l', '--load', action='store_true', default=False, help='load data into memory before running training loop')
     test_group.add_argument('-m', '--output_map', nargs=2, type=str, help='print the outputs map from one taxonomic level to another', default=None)
 
@@ -113,13 +120,20 @@ def dataset_stats(argv=None):
         difile = io.read()
     difile.set_label_key(args.tgt_tax_lvl)
 
+
+    if args.umap:
+        args.n_neighbors = 15
+        args.min_dist = 0.1
+        args.n_batches = 100
+
     if args.lightning:
         args.downsample = False
         args.loader_kwargs = dict()
         if args.mem:
             print_mem('before DeepIndexDataModule')
         before = time()
-        data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, rank=args.rank, size=args.size, comm=comm)
+        lsd_kwargs = dict(shm=False)
+        data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, rank=args.rank, size=args.size, comm=comm, **lsd_kwargs)
         after = time()
         if args.mem:
             print_mem('after DeepIndexDataModule ')
@@ -131,7 +145,7 @@ def dataset_stats(argv=None):
         va_len = len(dataset)
         dataset.set_subset()
     else:
-        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True, difile=difile)
+        kwargs = dict(path=args.input, hparams=args, keep_open=True, lazy_chunk=True, difile=difile, shm=False)
         if args.rank != None:
             kwargs['rank'] = args.rank
             kwargs['size'] = args.size
@@ -306,305 +320,6 @@ def check_loaded_sequences(argv=None):
     logger.info(f"{correct} ({rc} revcomped) samples of {n_samples} existed in the respective genomes returned by the loader")
 
 
-class SplitCollater:
-
-    def __init__(self, padval, freq=1.0, factors=[2, 4, 8]):
-        self.padval = padval
-        self.freq = freq
-        self.factors = factors
-
-    def __call__(self, samples):
-        maxlen = 0
-        l_idx = -1
-        if isinstance(samples, tuple):
-            samples = [samples]
-        for i, X, y, seq_id in samples:
-            if maxlen < X.shape[l_idx]:
-                maxlen = X.shape[l_idx]
-        X_ret = list()
-        y_ret = list()
-        idx_ret = list()
-        size_ret = list()
-        seq_id_ret = list()
-        for i, X, y, seq_id in samples:
-            dif = maxlen - X.shape[l_idx]
-            X_ = X
-            if dif > 0:
-                X_ = F.pad(X, (0, dif), value=self.padval)
-            X_ret.append(X_)
-            y_ret.append(y)
-            size_ret.append(X.shape[l_idx])
-            idx_ret.append(i)
-            seq_id_ret.append(seq_id)
-        X_ret = torch.stack(X_ret)
-        y_ret = torch.stack(y_ret)
-        size_ret = torch.tensor(size_ret)
-        idx_ret = torch.tensor(idx_ret)
-        seq_id_ret = torch.tensor(seq_id_ret)
-
-        if self.freq == 1.0 or rs.rand() < self.freq:
-            f = factors[rs.randint(len(factors))]
-            y_ret = y_ret.repeat_interleave(f)
-            seq_id_ret = seq_id_ret.repeat_interleave(f)
-            idx_ret = idx_ret.repeat_interleave(f)
-            X_ret = X_ret.reshape((X_ret.shape[0] * f, X_ret.shape[0] // f))
-
-            q = lens // f
-            r = lens // f
-            n_bad_chunks = b.shape[-1]//f - q
-            bad_chunk_pos = torch.where(n_bad_chunks > 0)[0]
-            start_bad_chunks = bad_chunk_pos + q[bad_chunk_pos]
-
-        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
-
-
-class SeqCollater:
-
-    def __init__(self, padval):
-        self.padval = padval
-
-    def __call__(self, samples):
-        maxlen = 0
-        l_idx = -1
-        if isinstance(samples, tuple):
-            samples = [samples]
-        for i, X, y, seq_id in samples:
-            if maxlen < X.shape[l_idx]:
-                maxlen = X.shape[l_idx]
-        X_ret = list()
-        y_ret = list()
-        idx_ret = list()
-        size_ret = list()
-        seq_id_ret = list()
-        for i, X, y, seq_id in samples:
-            dif = maxlen - X.shape[l_idx]
-            X_ = X
-            if dif > 0:
-                X_ = F.pad(X, (0, dif), value=self.padval)
-            X_ret.append(X_)
-            y_ret.append(y)
-            size_ret.append(X.shape[l_idx])
-            idx_ret.append(int(i))
-            seq_id_ret.append(int(seq_id))
-        X_ret = torch.stack(X_ret)
-        y_ret = torch.stack(y_ret)
-        size_ret = torch.tensor(size_ret)
-        idx_ret = torch.tensor(idx_ret)
-        seq_id_ret = torch.tensor(seq_id_ret)
-        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
-
-
-class TrainingSeqCollater:
-
-    def __init__(self, padval, seq_dtype=torch.uint8):
-        self.padval = padval
-        self.seq_dtype = seq_dtype
-
-    def __call__(self, samples):
-        maxlen = 0
-        l_idx = -1
-        if isinstance(samples, tuple):
-            samples = [samples]
-        for i, X, y, seq_id in samples:
-            if maxlen < X.shape[l_idx]:
-                maxlen = X.shape[l_idx]
-        X_ret = list()
-        y_ret = list()
-        for i, X, y, seq_id in samples:
-            dif = maxlen - X.shape[l_idx]
-            X_ = X
-            if dif > 0:
-                X_ = F.pad(X, (0, dif), value=self.padval)
-            X_ret.append(X_)
-            y_ret.append(y)
-        X_ret = torch.stack(X_ret, out=torch.zeros(len(X_ret), len(X_ret[0]), dtype=self.seq_dtype))
-        y_ret = torch.stack(y_ret, out=torch.zeros(len(X_ret), dtype=torch.int32))
-        return (X_ret, y_ret)
-
-
-def _check_collater(padval, seq_collater):
-    if seq_collater is not None:
-        return seq_collater
-    elif padval is not None:
-        return SeqCollater(padval)
-    else:
-        raise ValueError("must specify padval or seq_collater")
-
-class GraphCollater:
-
-    def __init__(self, node_ids, padval=None, seq_collater=None):
-        self.collater = _check_collater(padval, seq_collater)
-        self.node_ids = torch.as_tensor(node_ids, dtype=torch.long)
-
-    def __call__(self, samples):
-        """
-        A function to collate samples and return a sub-distance matrix
-        """
-        idx_ret, X_ret, y_idx, size_ret, seq_id_ret = self.collater(samples)
-
-        # Get distances
-        y_ret = self.node_ids[y_idx]
-        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
-
-
-class DistanceCollater:
-
-    def __init__(self, dmat, padval=None, seq_collater=None):
-        self.collater = _check_collater(padval, seq_collater)
-        if len(dmat.shape) == 1:
-            from scipy.spatial.distance import squareform
-            dmat = squareform(dmat)
-        #self.dmat = torch.as_tensor(dmat, dtype=torch.float).pow(2)
-        #self.dmat = torch.as_tensor(dmat, dtype=torch.float).sqrt()
-        self.dmat = dmat
-        if not isinstance(self.dmat, torch.Tensor):
-            self.dmat = torch.from_numpy(self.dmat)
-
-        self.dmat /= self.dmat.max()
-
-
-    def __call__(self, samples):
-        """
-        A function to collate samples and return a sub-distance matrix
-        """
-        X_ret, y_idx = self.collater(samples)
-
-        # Get distances
-        y_idx = y_idx.long()
-        y_ret = self.dmat[y_idx][:, y_idx]
-        return X_ret, y_ret
-
-
-class TnfCollater:
-    def __init__(self, vocab):
-        self.bases = 4**torch.arange(4)
-        rcmap = torch.tensor([3, 2, 1, 0])
-        canonical = list()
-        noncanonical = list()
-        palindromes = list()
-        seen = torch.zeros(256, dtype=bool)
-        for i in range(256):
-            if seen[i]:
-                continue
-            ar = torch.zeros(4, dtype=int)
-            ar[3], r = divmod(i, 64)
-            ar[2], r = divmod(r, 16)
-            ar[1], ar[0] = divmod(r, 4)
-            rc = rcmap[ar.flip(0)]
-            rc_i = rc.matmul(self.bases)
-            if i < rc_i:
-                canonical.append(i)
-                noncanonical.append(rc_i)
-            elif rc_i < i:
-                canonical.append(rc_i)
-                noncanonical.append(i)
-            else:
-                palindromes.append(i)
-            seen[i] = True
-            seen[rc_i] = True
-        self.canonical = torch.tensor(canonical)
-        self.noncanonical = torch.tensor(noncanonical)
-        self.palindromes = torch.tensor(palindromes)
-
-        # calculate a map to convert DNA characters into 0-4 encoding
-        self.cmap = torch.zeros(128, dtype=int) - 1
-        count = 0
-        self.padval = None
-        for i, c in enumerate(vocab):
-            if c == 'A':
-                self.cmap[i] = 0            # A
-                count += 1
-            elif c == 'T':
-                self.cmap[i] = 3            # T
-                count += 1
-            elif c == 'C':
-                self.cmap[i] = 1            # C
-                count += 1
-            elif c == 'G':
-                self.cmap[i] = 2            # G
-                count += 1
-            elif c == 'N':
-                self.padval = i
-                count += 1
-            if count == 5:
-                break
-        if self.padval is None:
-            raise ValueError("Could not find 'N' character in vocab -- this is needed to pad sequences")
-
-
-    def __call__(self, samples):
-        l_idx = -1
-        if isinstance(samples, tuple):
-            samples = [samples]
-
-        maxlen = 0
-        for i, X, y, seq_id in samples:
-            if maxlen < X.shape[l_idx]:
-                maxlen = X.shape[l_idx]
-
-        X_ret = list()
-        y_ret = list()
-        idx_ret = list()
-        size_ret = list()
-        seq_id_ret = list()
-        for i, X, y, seq_id in samples:
-            dif = maxlen - X.shape[l_idx]
-            X_ = X
-            if dif > 0:
-                X_ = F.pad(X, (0, dif), value=self.padval)
-            X_ret.append(X_)
-            y_ret.append(y)
-            size_ret.append(X.shape[l_idx])
-            idx_ret.append(i)
-            seq_id_ret.append(seq_id)
-
-        # calculate tetranucleotide frequency
-        chunks = torch.stack(X_ret)
-
-        ## 1. hash 4-mers
-        __seq = self.cmap[chunks]
-        i4mers = torch.stack([__seq[:, 0:-3], __seq[:, 1:-2], __seq[:, 2:-1], __seq[:, 3:]], axis=2)
-        mask = torch.any(i4mers < 0, axis=2)
-        h4mers = i4mers.matmul(self.bases)       # hashed 4-mers
-        h4mers[mask] = 256    # use 257 to mark any 4-mers that had ambiguous nucleotides
-
-        ## 2. count hashed 4-mers i.e. count integers from between 0-257 inclusive
-        tnf = torch.zeros((32, 257), dtype=float)
-        for i in range(tnf.shape[0]):
-            counts = torch.bincount(h4mers[i], minlength=257)
-            tnf[i] = counts/i4mers.shape[1]
-
-        ## 3. merge canonical 4-mers
-        canon_tnf = torch.zeros((32, 136))
-        canon_tnf[:, :len(self.canonical)] = tnf[:, self.canonical] + tnf[:, self.noncanonical]
-        canon_tnf[:, len(self.canonical):] = tnf[:, self.palindromes]
-
-        X_ret = canon_tnf
-        y_ret = torch.stack(y_ret)
-        size_ret = torch.tensor(size_ret)
-        idx_ret = torch.tensor(idx_ret)
-        seq_id_ret = torch.tensor(seq_id_ret)
-
-        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
-
-
-def get_collater(dataset, inference=False, condensed=False):
-    if dataset.tnf:
-        return TnfCollater(dataset.vocab)
-    elif dataset.manifold:
-        if condensed:
-            return TrainingSeqCollater(dataset.padval)
-        else:
-            return DistanceCollater(dataset.difile.distances, seq_collater=TrainingSeqCollater(dataset.padval))
-    elif dataset.graph:
-        return GraphCollater(dataset.difile.node_ids, seq_collater=TrainingSeqCollater(dataset.padval))
-    else:
-        if inference:
-            return SeqCollater(dataset.padval)
-        else:
-            return TrainingSeqCollater(dataset.padval)
-
-
 def get_loader(dataset, inference=False, **kwargs):
     """
     Return a DataLoader that loads data from the given Dataset
@@ -628,145 +343,11 @@ def get_loader(dataset, inference=False, **kwargs):
     return DataLoader(orig_dataset, collate_fn=collater, **kwargs)
 
 
-def check_rng(rng):
-    if rng is None:
-        return np.random.default_rng()
-    elif isinstance(rng, (int, np.integer)):
-        return np.random.default_rng(rng)
-    return rng
-
-
-class WORHelper:
-
-    def __init__(self, length, rng=None):
-        self.period = length
-        self.rng = check_rng(rng)
-        self.indices = np.arange(length)
-        self.curr_max = length - 1
-
-    def sample(self):
-        idx = self.rng.integers(self.curr_max + 1)
-        ret = self.indices[idx]
-        end = self.curr_max
-        self.indices[end], self.indices[idx] = self.indices[idx], self.indices[end]
-        self.curr_max = (self.curr_max - 1) % self.period
-        return ret
-
-
-class WORSampler(Sampler):
-    """Without Replacement Sampler"""
-
-    def __init__(self, length, rng=None, n_partitions=1, part_smplr_rng=None, max_samples=None):
-        """
-        Args:
-            n_partitions :          number of deterministic partitions to break up dataset into
-            part_smplr_rng :        Partition Sampler RNG
-        """
-        super().__init__(None)
-        self.rng = check_rng(rng)
-        dtype = np.uint32
-        if length > (2**32 - 1):
-            dtype = np.uint64
-
-
-        # trim will clip extra samples (i.e. length % size) so that each
-        # rank has the same number of samples.
-        # Use this later if we decide we don't want to trim tail.
-        self.indices = np.arange(length, dtype=dtype)
-
-        self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
-
-        # set an initial value for curr_part (i.e. current partition)
-        # so we can calculate lenght in __len__
-        self.curr_part = self.part_sampler.sample()
-
-        self.__len = (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1
-        if max_samples is not None:
-            self.__len = min(self.__len, max_samples)
-        self.max_samples = max_samples
-        self.i = self.__len
-
-        self.curr_len = 0
-
-    def __iter__(self):
-        self.curr_len = (len(self.indices) - self.curr_part - 1) // self.part_sampler.period + 1 # len(self)
-        if self.max_samples is not None:
-            self.i = 0
-        return self
-
-    def __len__(self):
-        return self.__len
-
-    def __next__(self):
-        if self.max_samples is not None:
-            if self.i < self.__len:
-                self.i += 1
-            else:
-                raise StopIteration
-
-        if self.curr_len == 0:
-            self.curr_part = self.part_sampler.sample()
-            raise StopIteration
-
-        idx = self.rng.integers(self.curr_len) * self.part_sampler.period + self.curr_part
-        end = (self.curr_len - 1) * self.part_sampler.period + self.curr_part
-        ret = self.indices[idx]
-        self.indices[end], self.indices[idx] = self.indices[idx], self.indices[end]
-        self.curr_len -= 1
-        return ret
-
-
-class DSSampler(SequentialSampler):
-    """Distributed Sequential Sampler"""
-
-    def __init__(self, length, n_partitions=1, part_smplr_rng=None, max_samples=None):
-        """
-        Args:
-            n_partitions :          number of deterministic partitions to break up dataset into
-            part_smplr_rng :        Partition Sampler RNG
-        """
-        super().__init__(None)
-        self.part_sampler = WORHelper(n_partitions, rng=part_smplr_rng)
-
-        # set an initial value for curr_part (i.e. current partition)
-        # so we can calculate lenght in __len__
-        self.curr_part = self.part_sampler.sample()
-        self.start = 0
-        self.end = length
-        self.__len = (self.end - self.start - self.curr_part - 1) // self.part_sampler.period + 1
-        if max_samples is not None:
-            self.__len = min(self.__len, max_samples)
-        self.max_samples = max_samples
-        self.i = self.__len
-
-
-    def __iter__(self):
-        self.__it = iter(range(self.start + self.curr_part, self.end, self.part_sampler.period))
-        if self.max_samples is not None:
-            self.i = 0
-        return self
-
-    def __len__(self):
-        return self.__len
-
-    def __next__(self):
-        try:
-            if self.max_samples is not None:
-                if self.i < self.__len:
-                    self.i += 1
-                else:
-                    raise StopIteration
-            return next(self.__it)
-        except StopIteration:
-            self.curr_part = self.part_sampler.sample()
-            raise StopIteration
-
-
 class SubsetDataLoader(DataLoader):
 
     def __init__(self, dataset, train=False, validate=False, test=False, **kwargs):
         if 'sampler' not in kwargs:
-            kwargs['sampler'] = DSSampler(dataset.get_subset_len(train=train, vaidate=validate, test=test))
+            kwargs['sampler'] = DSSampler(dataset.get_subset_len(train=train, validate=validate, test=test))
         super().__init__(dataset, **kwargs)
         self.train = train
         self.validate = validate
@@ -779,9 +360,6 @@ class SubsetDataLoader(DataLoader):
         self.dataset.set_subset(train=self.train, validate=self.validate, test=self.test)
         return super().__iter__()
 
-
-from torch.utils.data import Dataset, DataLoader
-import torch
 
 class fast_dataset(Dataset):
     def __init__(self, num_samples, sample_length):
@@ -844,9 +422,11 @@ class DeepIndexDataModule(pl.LightningDataModule):
         self.size = size
         self.n_partitions = hparams.n_partitions
         self.batch_size = hparams.batch_size
+        self.n_batches = hparams.n_batches
+        self.umap = hparams.umap
         self.sanity = hparams.sanity
 
-        log("Creating LazySeqDataset", print_msg=rank==0)
+        log("Creating LazySeqDataset", print_msg=not rank)
         if inference:
             hparams.manifold = False
             hparams.graph = False
@@ -868,8 +448,12 @@ class DeepIndexDataModule(pl.LightningDataModule):
             #kwargs['worker_init_fn'] = self.dataset.worker_init
             kwargs['persistent_workers'] = True
 
-        log("Getting collater", print_msg=rank==0)
-        kwargs['collate_fn'] = get_collater(self.dataset, inference=inference, condensed=hparams.condensed)
+        log("Getting collater", print_msg=not rank)
+        if self.umap:
+            log("using UMAPCollater for UMAP style training", print_msg=not rank)
+            kwargs['collate_fn'] = UMAPCollater(self.dataset.neighbor_graph, self.dataset.padval)
+        else:
+            kwargs['collate_fn'] = get_collater(self.dataset, inference=inference, condensed=hparams.condensed)
         kwargs['shuffle'] = False
 
         self._loader_kwargs = kwargs
@@ -898,7 +482,18 @@ class DeepIndexDataModule(pl.LightningDataModule):
             s_kwargs = dict(rng=self.seed, n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
             if self.sanity:
                 s_kwargs['max_samples'] = self.batch_size * self.sanity
-            self._tr_sampler = WORSampler(train_len, **s_kwargs)
+            if self.umap:
+                log("using NeighborGraphSampler for UMAP style training", print_msg=not self.rank)
+                # TODO -- self.dataset.difile.get_counts() does not account for reverse complementing
+                # this needs to be passed through somehow
+                self._tr_sampler = NeighborGraphSampler(self.dataset.neighbor_graph,
+                                                        self.dataset.difile.labels,
+                                                        self.dataset.difile.get_counts(),
+                                                        n_batches=self.n_batches,
+                                                        batch_size=self.batch_size,
+                                                        wor=True)
+            else:
+                self._tr_sampler = WORSampler(train_len, **s_kwargs)
         kwargs['sampler'] = self._tr_sampler
         return SubsetDataLoader(self.dataset, train=True, **kwargs)
 
@@ -910,7 +505,15 @@ class DeepIndexDataModule(pl.LightningDataModule):
             s_kwargs = dict(n_partitions=self.n_partitions, part_smplr_rng=self.seed+self.rank)
             if self.sanity:
                 s_kwargs['max_samples'] = self.batch_size * self.sanity // 4
-            self._val_sampler = DSSampler(val_len, **s_kwargs)
+            if self.umap:
+                self._val_sampler = NeighborGraphSampler(self.dataset.neighbor_graph,
+                                                        self.dataset.difile.labels,
+                                                         self.dataset.difile.get_counts(),
+                                                         n_batches=self.n_batches,
+                                                         batch_size=self.batch_size,
+                                                         wor=False)
+            else:
+                self._val_sampler = DSSampler(val_len, **s_kwargs)
         kwargs['sampler'] = self._val_sampler
         return SubsetDataLoader(self.dataset, validate=True, **kwargs)
 
@@ -1042,11 +645,13 @@ class LazySeqDataset(Dataset):
 
         self.manifold = False
         self.graph = False
+        self.neighbor_graph = None
         self.tnf = hparams.tnf
         self.__ohe = hparams.ohe
 
         distances = False
         tree_graph = False
+        seq_indices = None
 
         if hparams.manifold:
             self.manifold = True
@@ -1062,6 +667,16 @@ class LazySeqDataset(Dataset):
             self.classify = True
             if hparams.weighted == 'phy':
                 distances = True
+        elif hparams.umap:
+            self.classify = True
+            labels = np.where(np.bincount(difile._labels))[0]
+            if len(labels) == len(difile.taxa_table):
+                labels = None
+
+            self.neighbor_graph = get_neighbor_graph(difile.distances.data, n_neighbors=hparams.n_neighbors, labels=labels)
+
+            if size > 1:
+                self.neighbor_graph, seq_indices = partition_neighbor_graph(self.neighbor_graph, difile._labels, difile.seq_table['length'].data[:], rank, size)
         else:
             self.classify = True
             if hparams.weighted == 'phy':
@@ -1072,8 +687,10 @@ class LazySeqDataset(Dataset):
         self.difile = LazyWindowChunkedDIFile(difile, self.window, self.step,
                                               revcomp=self.revcomp,
                                               rank=self._global_rank, size=self._world_size,
-                                              distances=distances, tree_graph=tree_graph,
-                                              load=kwargs['load'])
+                                              tree_graph=tree_graph,
+                                              load=kwargs['load'],
+                                              shm=kwargs['shm'],
+                                              indices=seq_indices)
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
         self.__len = len(self.difile)
@@ -1115,14 +732,14 @@ class LazySeqDataset(Dataset):
     def rank(self):
         return self._global_rank
 
-    def worker_init(self, worker_id):
-        # September 15, 2021, ajtritt
-        # This print statement is necessary to avoid processings from hanging when they are started
-        # after a Summit maintenance, processes would hang. I was able to track it down to line 62
-        # of multiprocessing/popen_spawn_posix.py. I still do not know the real cause of the problem
-        # but it it appears that writing to standard error after starting a multiprocessing.Process
-        # keeps thing moving along.
-        self.open()
+    #def worker_init(self, worker_id):
+    #    # September 15, 2021, ajtritt
+    #    # This print statement is necessary to avoid processings from hanging when they are started
+    #    # after a Summit maintenance, processes would hang. I was able to track it down to line 62
+    #    # of multiprocessing/popen_spawn_posix.py. I still do not know the real cause of the problem
+    #    # but it it appears that writing to standard error after starting a multiprocessing.Process
+    #    # keeps thing moving along.
+    #    self.open()
 
     def get_subset_len(self, train=False, validate=False, test=False):
         rc = 2 if self.revcomp else 1

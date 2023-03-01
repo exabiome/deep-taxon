@@ -13,7 +13,9 @@ import numpy as np
 
 def log(msg, print_msg=True):
     if print_msg:
-        print(f'{datetime.now()} - {msg}', file=sys.stderr)
+        prefix = f'{datetime.now()} - '
+        msg = msg.replace('\n', '\n' + (' ' * len(prefix)))
+        print(f'{prefix}{msg}', file=sys.stderr)
 
 @contextmanager
 def ccm(cond, cm):
@@ -164,13 +166,13 @@ def distsplit(dset_len, size, rank, arange=True):
     else:
         return b, b+q
 
-def balsplit(weights, size, rank):
+def balsplit(weights, size, rank=None):
     """
     Get a balanced partition from weighted data
     for rank *rank* when world size is *size*
     """
     from queue import PriorityQueue
-    if rank >= size:
+    if rank is not None and rank >= size:
         raise ValueError(f"rank must be less than size - given rank={rank} size={size}")
     srt = np.argsort(weights)[::-1]
     queue = PriorityQueue(maxsize=size + 1)
@@ -185,4 +187,7 @@ def balsplit(weights, size, rank):
         queue.put((least_load + weights[item], least_rank))
         ids[least_rank].append(item)
 
-    return np.array(np.sort(ids[rank]))
+    if rank is not None:
+        return np.array(np.sort(ids[rank]))
+    else:
+        return [np.array(np.sort(ids[i])) for i in range(size)]

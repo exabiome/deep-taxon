@@ -7,6 +7,7 @@ import argparse
 from time import time
 
 from ..loss import ArcMarginProduct, EuclideanMAELoss, HyperbolicMAELoss, CondensedEuclideanMAELoss, CondensedHyperbolicMAELoss
+from ..umap import EuclideanUMAPLoss, HyperbolicUMAPLoss
 from .. import TIME_OFFSET
 
 class AbstractLit(LightningModule):
@@ -40,6 +41,11 @@ class AbstractLit(LightningModule):
                 self._loss = HierarchicalLoss(hparams.n_taxa_all)
             else:
                 self._loss = nn.CrossEntropyLoss()
+        elif self.hparams.umap:
+            if self.hparams.hyperbolic:
+                self._loss = HyperbolicUMAPLoss(min_dist=hparams.min_dist)
+            else:
+                self._loss = EuclideanUMAPLoss(min_dist=hparams.min_dist)
         else:
             self._loss =  nn.MSELoss()
 

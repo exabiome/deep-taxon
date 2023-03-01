@@ -73,6 +73,13 @@ def get_conf_args():
         'swa_start': dict(help='the epoch to start stochastic weight averaging', default=7),
         'swa_anneal': dict(help='the number of epochs to anneal for when using SWA', default=1),
 
+        # UMAP training arguments
+        'umap': dict(help='use UMAP style training', default=False),
+        'n_batches': dict(help='the number of batches per epoch', default=10000),
+        'n_neighbors': dict(help='the number of neigbors to use for building the nearest neighbors graph', default=15),
+        'min_dist': dict(help='The effective minimum distance between embedded points', default=0.1),
+
+
         'hparams': dict(help='additional hparams for the model. this should be a JSON string', default=None),
         'protein': dict(help='input contains protein sequences', default=False),
         'tnf': dict(help='input transform data to tetranucleotide frequency', default=False),
@@ -117,7 +124,7 @@ def process_config(conf_path, args=None):
         setattr(args, k, conf_val)
 
     # classify by default
-    if args.manifold == args.classify == False:
+    if args.manifold == args.classify == args.umap == False:
         args.classify = True
 
     return args
@@ -175,6 +182,7 @@ def parse_args(*addl_args, argv=None):
 
     dl_grp = parser.add_argument_group('Data loading')
     dl_grp.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=0)
+    dl_grp.add_argument('-S', '--shm', action='store_true', default=False, help='load sequence data into shared memory')
     dl_grp.add_argument('-y', '--pin_memory', action='store_true', default=False, help='pin memory when loading data')
     dl_grp.add_argument('-f', '--shuffle', action='store_true', default=False, help='shuffle batches when training')
     parser.add_argument('-q', '--quiet', action='store_true', default=False, help='do not print arguments, model, etc.')
@@ -265,7 +273,7 @@ def process_args(args=None):
             else:
                 if env is None:
                     raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
-                torch.cuda.set_device(env.local_rank())
+                #torch.cuda.set_device(env.local_rank())
                 targs['devices'] = gpus
                 targs['strategy'] = DDPStrategy(find_unused_parameters=False,
                                                 cluster_environment=env)
@@ -319,10 +327,12 @@ def process_args(args=None):
 
     if args.theoretical_limit:
         data_mod = FastDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
-                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
+                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits,
+                                   shm=args.shm)
     else:
         data_mod = DeepIndexDataModule(difile=difile, hparams=args, keep_open=True, seed=args.seed+RANK,
-                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits)
+                                   rank=RANK, size=SIZE if args.n_splits is None else args.n_splits,
+                                   shm=args.shm)
 
     args.n_classes = data_mod.dataset.n_classes
     if args.classify and not args.arc_margin:
@@ -348,7 +358,9 @@ def process_args(args=None):
             if gpus is not None:
                 distances = distances.to(local_rank)
 
-    model = process_model(args, taxa_table=difile.taxa_table, distances=distances)
+    model = process_model(args,
+                         taxa_table=difile.taxa_table,
+                         distances=distances)
 
     #if args.num_workers > 0:
     #    data_mod.dataset.close()
@@ -519,7 +531,7 @@ def run_lightning(argv=None):
     # get dataset so we can set model parameters that are
     # dependent on the dataset, such as final number of outputs
 
-    monitor, mode = (AbstractLit.val_loss, 'min') if args.manifold else (AbstractLit.val_acc, 'max')
+    monitor, mode = (AbstractLit.val_loss, 'min') if (args.manifold or args.umap) else (AbstractLit.val_acc, 'max')
     callbacks = [
         LearningRateMonitor(logging_interval='epoch'),
         TQDMProgressBar(refresh_rate=50)
@@ -549,7 +561,7 @@ def run_lightning(argv=None):
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
 
     if args.swa:
-        callbacks.append(StochasticWeightAveraging(swa_lrs=1e-2, swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
+        callbacks.append(StochasticWeightAveraging(swa_lrs=0.0001, swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
 
     targs = dict(
         enable_checkpointing=True,
@@ -593,6 +605,25 @@ def run_lightning(argv=None):
 
     print0("Took %02d:%02d:%02d.%d" % (hours,minutes,seconds,td.microseconds), file=sys.stderr)
     print0("Total seconds:", td.total_seconds(), file=sys.stderr)
+
+
+def test_loader(argv=None):
+    '''Run training with PyTorch Lightning'''
+    global RANK
+    import numpy as np
+    import traceback
+    import os
+    import pprint
+    import warnings
+    warnings.filterwarnings(action='ignore', message='The dataloader, .*, does not have many workers.*')
+
+    model, args, addl_targs, data_mod = process_args(parse_args(argv=argv))
+
+    train_loader = data_mod.train_dataloader()
+
+    for i in tqdm(train_loader):
+        pass
+
 
 
 def lightning_lr_find(argv=None):
@@ -843,7 +874,7 @@ def filter_metrics(argv=None):
         mask = np.logical_not(df[mask_col].isna())
         df = df.filter(columns, axis=1)[mask]
 
-        df = df.drop('step', axis=1)
+        #df = df.drop('step', axis=1)
         if lrdf is not None:
             df = df.set_index('epoch').merge(lrdf.set_index('epoch'), left_index=True, right_index=True)
         if time_df is not None:

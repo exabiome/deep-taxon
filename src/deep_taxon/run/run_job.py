@@ -36,6 +36,7 @@ def run_train(argv=None):
     rsc_grp.add_argument('-N', '--jobname',    help="the name of the job", default=None)
     rsc_grp.add_argument('-q', '--queue',      help="the queue to submit to", default=None)
     rsc_grp.add_argument('-P', '--project',    help="the project/account to submit under", default=None)
+    rsc_grp.add_argument('-M', '--highmem',    help="submit to high memory queue", default=False, action='store_true')
 
     system_grp = parser.add_argument_group('Compute system')
     grp = system_grp.add_mutually_exclusive_group()
@@ -63,19 +64,22 @@ def run_train(argv=None):
     parser.add_argument('--swa', action='store_true', default=False, help='use stochastic weight averaging')
     parser.add_argument('--csv', action='store_true', default=False, help='log to a CSV file instead of WandB')
     parser.add_argument('--apex', action='store_true', default=False, help='use Apex fused optimizers')
-    parser.add_argument('--shm', action='store_true', default=False, help='copy input to shared memory before training')
     parser.add_argument('-l', '--load',         help="load dataset into memory", action='store_true', default=False)
+    parser.add_argument('-S', '--shm', action='store_true', default=False, help='copy input to shared memory before training')
     parser.add_argument('-C', '--conda_env',    help=("the conda environment to use. use 'none' "
                                                       "if no environment loading is desired"), default=None)
     parser.add_argument('-W', '--wandb_id', type=str, help='the WandB ID. Use this to resume previous runs', default=hex(hash(time.time()))[2:10])
-    parser.add_argument('-S', '--shifter', type=str, help='the Docker container to use', default=None)
+    parser.add_argument('-I', '--image', type=str, help='the Docker image to use', default=None)
 
-    parser.add_argument('--theoretical_limit', action='store_true', default=False, 
+    parser.add_argument('--theoretical_limit', action='store_true', default=False,
                                                 help='use a fake dataloader to test fastest possible fwd pass')
-    
+
     args = parser.parse_args(argv)
 
     job = get_job(args)
+
+    if args.highmem:
+        job.add_addl_jobflag('C', 'gpu&hbm80g')
 
     if not os.path.exists(args.config):
         print(f"ERROR - Config file {args.config} does not exist", file=sys.stderr)
@@ -169,6 +173,9 @@ def run_train(argv=None):
     if args.load:
         options += f' -l'
 
+    if args.shm:
+        options += f' -S'
+
     if conf.get('lr_scheduler', None) is not None:
         exp += f'_{conf["lr_scheduler"]}'
 
@@ -201,7 +208,7 @@ def run_train(argv=None):
     if args.experiment:
         exp = args.experiment
 
-    options += f' -E {exp}'
+    options += f' -E {exp}.$JOB'
 
 
 
@@ -229,7 +236,7 @@ def run_train(argv=None):
 
     input_var = 'INPUT'
 
-    if args.shifter:
+    if args.image:
         exe = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'bin/deep-taxon.py'))
         if not os.path.exists(exe):
             print(f'Cannot find executable needed to run with shifter. Expected here: {exe}', file=sys.stderr)
@@ -256,10 +263,6 @@ def run_train(argv=None):
             job.add_command('cp $INPUT $BB_INPUT') #, run=f'srun -n {args.nodes} -r 1 -a 1')
             job.add_command('ls /tmp') #, run='jsrun -n 1')
             job.add_command('ls $BB_INPUT') #, run='jsrun -n 1')
-        elif args.shm:
-            job.set_env_var('SHM_INPUT', '/dev/shm/`basename $INPUT`')
-            input_var = 'SHM_INPUT'
-            job.add_command(f"srun --ntasks {args.nodes} --ntasks-per-node 1 cp $INPUT $SHM_INPUT")
 
 
     train_cmd += f' $OPTIONS $CONF ${input_var} $OUTDIR'
@@ -298,12 +301,13 @@ def run_train(argv=None):
 
         srun = f'srun -n {job.nodes}'
 
-        if args.shifter:
-            job.add_addl_jobflag('-image', args.shifter)
-            srun += ' shifter'
+        if args.image:
+            job.add_addl_jobflag('-image', args.image)
+            srun += ' image'
 
         if args.cuda_profile:
-            srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
+            duration = (int(args.time) - 10) * 60
+            srun += f' nsys profile -d {duration} -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
 
     for i in range(len(argv)):
@@ -354,11 +358,11 @@ def run_train(argv=None):
                 if args.summit:
                     job_dep = f'ended({job_dep})'
                 job.add_addl_jobflag(job.wait_flag, job_dep)
-                job.set_env_var('CKPT', os.path.join(jobdir, 'last.ckpt'))
+                job.set_env_var('CKPT', f"`ls -t {os.path.join(jobdir, 'last*.ckpt')} | head -n 1`")
                 if '-i' in options:
                     i = options.find('-i')
                     options = options[:i+1] + 'c' + options[i+2:]
-                if '-c' not in options:
+                if '-c $CKPT' not in options:
                     job.set_env_var('OPTIONS', options + ' -c $CKPT')
                 job.set_env_var('CMD', train_cmd)
                 args.message = args.message[:args.message.find("resume")].strip().strip(',')

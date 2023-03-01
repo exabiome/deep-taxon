@@ -1,4 +1,5 @@
 import sys
+import warnings
 import numpy as np
 import os
 from time import time
@@ -7,6 +8,8 @@ from ..utils import check_argv, parse_logger, ccm, distsplit
 from .utils import process_gpus, process_model, process_output
 from .train import process_config
 from .loader import LazySeqDataset, get_loader, DeepIndexDataModule
+
+from hdmf.common import get_hdf5io
 
 from .lsf_environment import LSFEnvironment
 from pytorch_lightning.plugins.environments import SLURMEnvironment
@@ -52,6 +55,8 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
                         help='store the top TOPN probablities of each output. By default, TOPN=1')
     parser.add_argument('-c', '--save_chunks', action='store_true', help='do store network outputs for each chunk', default=False)
+    parser.add_argument('-O', '--overlap', action='store_true',  default=False,
+                        help='overlap with step size used during training. default is to use nonoverlapping windows')
 
     env_grp = parser.add_argument_group("Resource Manager").add_mutually_exclusive_group()
     env_grp.add_argument("--lsf", default=False, action='store_true', help='running in an LSF environment')
@@ -149,12 +154,24 @@ def process_args(args, comm=None):
         model = ResNetFeatures(model)
         args.features = True
 
-    if size > 1:
-        dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
-    else:
-        dataset = LazySeqDataset(path=args.input, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+    io = get_hdf5io(args.input, 'r')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        args.difile = io.read()
 
-    tot_bases = dataset.orig_difile.get_seq_lengths().sum()
+    args.difile.set_label_key(args.tgt_tax_lvl)
+
+    args.total_seqs = len(args.difile)
+
+    if not args.overlap:
+        model.hparams.step = model.hparams.window
+
+    if size > 1:
+        dataset = LazySeqDataset(difile=args.difile, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
+    else:
+        dataset = LazySeqDataset(difile=args.difile, hparams=argparse.Namespace(**model.hparams), keep_open=True)
+
+    tot_bases = dataset.difile.get_seq_lengths().sum()
     args.logger.info(f'rank {rank} - processing {tot_bases} bases across {len(dataset)} samples')
 
     tmp_dset = dataset
@@ -163,11 +180,9 @@ def process_args(args, comm=None):
     if args.num_workers > 0:
         kwargs['num_workers'] = args.num_workers
         kwargs['multiprocessing_context'] = 'spawn'
-        kwargs['worker_init_fn'] = dataset.worker_init
+        #kwargs['worker_init_fn'] = dataset.worker_init
         kwargs['persistent_workers'] = True
     loader = get_loader(tmp_dset, inference=True, **kwargs)
-
-    args.difile = dataset.difile
 
     # return the model, any arguments, and Lighting Trainer args just in case
     # we want to use them down the line when we figure out how to use Lightning for
@@ -214,27 +229,36 @@ def run_inference(argv=None):
 
 def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
-    n_samples = len(dataset.orig_difile.seq_table)
-    all_seq_ids = dataset.orig_difile.get_sequence_subset()
-    seq_lengths  = dataset.orig_difile.get_seq_lengths()
+    n_samples = args.total_seqs
+    args.logger.debug(f"rank {dataset.rank} - n_samples = {n_samples}")
+    all_seq_ids = dataset.difile.id #get_sequence_subset()
+    seq_lengths  = dataset.difile.lengths #get_seq_lengths()
 
     f = h5py.File(args.output, 'w', **fkwargs)
     outputs_dset = None
     if args.save_chunks:
         outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+    args.logger.debug(f"rank {dataset.rank} - making labels")
     labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
     labels_dset.attrs['n_classes'] = args.n_outputs
 
     maxprob_dset = None
     if args.maxprob > 0 :
+        args.logger.debug(f"rank {dataset.rank} - making maxprob")
         maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
 
+    args.logger.debug(f"rank {dataset.rank} - making preds")
     preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
+    args.logger.debug(f"rank {dataset.rank} - making lengths")
     seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
     if all_seq_ids is None:
         seqlen_dset[:] = seq_lengths
     else:
-        seqlen_dset[all_seq_ids] = seq_lengths
+        args.logger.debug(f"rank {dataset.rank} - writing seq_lengths")
+        # iterate over indices individually - passing this off to h5py takes prohibitively long
+        for i in range(len(seq_lengths)):
+            seqlen_dset[all_seq_ids[i]] = seq_lengths[i]
+
 
     # to-write queues - we use those so we're not doing I/O at every iteration
     outputs_q = list()
@@ -246,13 +270,12 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
     if not hasattr(args, 'n_seqs'):
         args.n_seqs = 500
 
-    # ensure that dataset is closed before we start up the DataLoader
-    dataset.close()
-
     # send model to GPU
+    args.logger.debug(f"rank {dataset.rank} - sending model to args.device")
     model.to(args.device)
 
     uniq_labels = set()
+    args.logger.debug(f"rank {dataset.rank} - reading and processing")
     for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0):
 
         seqs, counts = np.unique(_seq_ids, return_counts=True)

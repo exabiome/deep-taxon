@@ -1,6 +1,8 @@
-hdmf
+hdmf==3.5.1
 pytorch_lightning
 wandb
 torch_optimizer
-torch
 git+https://github.com/ajtritt/scikit-bio@fde9179b56eef7f46e01eb2496eb24b7f04b9205
+umap-learn
+matplotlib
+scikit-learn

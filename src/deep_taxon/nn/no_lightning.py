@@ -9,6 +9,8 @@ import torch.distributed as dist
 
 from tqdm import tqdm
 
+from ..utils import log
+
 class RunningAverage:
 
     def __init__(self, max_samples=None):
@@ -69,7 +71,7 @@ class Trainer:
         self.output_dir = output_dir
 
         if os.path.exists(self.snapshot_path):
-            print(f"Loading snapshot from {self.snapshot_path}")
+            log(f"Loading snapshot from {self.snapshot_path}")
             self._load_snapshot(self.snapshot_path)
 
         self._n_loss_samples = 100
@@ -83,20 +85,21 @@ class Trainer:
         self.optimizer = snapshot["OPTIMIZER"]
         self.step = snapshot['STEP']
         self.scheduler = snapshot.get("SCHEDULER", None)
-        print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
+        log(f"Resuming training from snapshot at Epoch {self.epochs_run}")
 
     def _run_batch(self, source, targets):
         if torch.is_grad_enabled():
             self.optimizer.zero_grad()
         output = self.model(source)
-        loss = self.loss(output, targets.long())
+        loss = self.loss(output, targets)
+        print(f'{self.local_rank} - {loss}')
         if torch.is_grad_enabled():
             loss.backward()
             self.optimizer.step()
         return loss
 
-    def _run_loop(self, epoch, it):
-        avg = RunningAverage(self._n_loss_samples)
+    def _run_loop(self, epoch, it, n_loss_samples=None):
+        avg = RunningAverage(n_loss_samples)
         time_avg = RunningAverage(self._n_loss_samples)
         s = time()
         for i, (source, targets) in enumerate(it):
@@ -119,8 +122,6 @@ class Trainer:
     def _run_train(self, epoch):
         if self.train_data is None:
             self.train_data = self.data_mod.train_dataloader()
-        b_sz = len(next(iter(self.train_data))[0])
-        print(f"[GPU{self.global_rank}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         it = self.train_data
         if self.global_rank == 0:
             it = tqdm(self.train_data, desc=f"Epoch {epoch}") #, leave=False)
@@ -163,6 +164,10 @@ class Trainer:
 
     def train(self, max_epochs: int):
         dist.init_process_group(backend="nccl", rank=self.global_rank, world_size=self.world_size)
+        log('Running DDP training')
+        log('Model:\n' + str(self.model))
+        log('Optimizer:\n' + str(self.optimizer))
+        log('Scheduler:\n' + str(self.scheduler))
         self.model = DDP(self.model, device_ids=[self.local_rank])
         if self.global_rank == 0:
             if os.path.exists(self.metrics_path):

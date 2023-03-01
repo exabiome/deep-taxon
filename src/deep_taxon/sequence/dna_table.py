@@ -482,7 +482,7 @@ class DeepIndexFile(Container):
         self.__indices = indices
         self._labels = self._labels[self.__indices]
 
-    def load(self, sequence=False, device=None, verbose=True, shmem=True):
+    def load(self, sequence=False, device=None, verbose=True, shm=True):
         indices = self.__indices
         self.__loaded = True
         if self.__indices is not None:
@@ -510,6 +510,7 @@ class DeepIndexFile(Container):
             ## read one sequence at a time
             it = zip(starts, ends)
             log('Loading data subset - loading sequences from subset', print_msg=verbose)
+            log(f'Reading in {len(sequence_subset)/1024**3} Gb')
             if verbose:
                 it = tqdm(it, total=len(starts))
             for s_src, e_src in it:
@@ -537,7 +538,7 @@ class DeepIndexFile(Container):
             log('Loading data - loading sequence index', print_msg=verbose)
             self.seq_table['sequence_index'].transform(_load)
             if sequence:
-                if shmem:
+                if shm:
                     log('Loading data - loading sequences into shared memory', print_msg=verbose)
                     _load = lambda x: np.ctypeslib.as_array(RawArray(ctypes.c_uint8, x))
                 else:
@@ -691,13 +692,15 @@ class LazyWindowChunkedDIFile:
     }
 
 
-    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, distances=False, tree_graph=False, load=True):
+    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, tree_graph=False, load=True, shm=False, indices=None):
         counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
-        if size > 1:
+        if size > 1 and indices is None:
             indices = balsplit(counts, size, rank)
+        if indices is not None:
             counts = counts[indices]
             difile.set_sequence_subset(indices)
-        difile.load(sequence=load, verbose=rank==0)
+        log(f'{rank} / {size} - {indices}')
+        difile.load(sequence=load, verbose=rank==0, shm=shm)
         log('setting lengths', print_msg=rank==0)
         self.lengths = difile.seq_table['length'].data
         log('setting ids', print_msg=rank==0)
@@ -716,6 +719,12 @@ class LazyWindowChunkedDIFile:
 
         self.n_classes = difile.n_classes
         self.vocab = difile.get_vocab()
+        idx = np.where(self.vocab == 'N')[0]
+        if len(idx) > 0:
+            self.padval = idx[0]
+        else:
+            warnings.warn("Could not find null value for DNA sequences. Looking for 'N'. Padding with %s" % self.vocab[0])
+            self.padval = 0
 
         self.node_ids = None
         self.tree_graph = None
@@ -778,7 +787,7 @@ class LazyWindowChunkedDIFile:
         return self._classes
 
     def get_seq_lengths(self):
-        self.lengths.copy()
+        return self.lengths.copy()
 
     def get_counts(self, orig=False):
         """
@@ -857,10 +866,12 @@ class LazyWindowChunkedDIFile:
         item = self.__get_helper(seq_i)
         item['seq_idx'] = item['id']
 
+        seq = torch.full((self.window,), self.padval, dtype=item['seq'].dtype)
         if rev:
-            item['seq'] = self.rcmap[item['seq'][l-e:l-s].long()].flip(0)
+            seq[:e-s] = self.rcmap[item['seq'][l-e:l-s].long()].flip(0)
         else:
-            item['seq'] = item['seq'][s:e]
+            seq[:e-s] = item['seq'][s:e]
+        item['seq'] = seq
         item['id'] = i
         item['length'] = e - s
         return item
