@@ -138,6 +138,7 @@ def prepare_data(argv=None):
     parser.add_argument('-p', '--num_procs', type=int, default=1, help='the number of processes to use for counting total sequence size')
     parser.add_argument('-L', '--total_seq_len', type=int, default=None, help='the total sequence length')
     parser.add_argument('-t', '--tmpdir', type=str, default=None, help='a temporary directory to store sequences')
+    parser.add_argument('-H', '--tmp_h5', type=str, default=None, help='the temporary HDF5 file with with sequences')
     parser.add_argument('-N', '--n_seqs', type=int, default=None, help='the total number of sequences')
     parser.add_argument('--print-accessions', action='store_true', default=False, help='print accessions and exit')
     rep_grp = parser.add_mutually_exclusive_group()
@@ -327,54 +328,72 @@ def prepare_data(argv=None):
     if not args.protein:
         np.testing.assert_array_equal(vocab, list('ACYWSKDVNTGRMHB'))
 
-    if args.total_seq_len is None:
-        logger.info('counting total number of sqeuences')
-        n_seqs, total_seq_len = np.array(list(zip(*tqdm(map_func(seqlen, fapaths), total=len(fapaths))))).sum(axis=1)
-        logger.info(f'found {total_seq_len} bases across {n_seqs} sequences')
+
+    if args.tmp_h5 is not None:
+        tmp_h5_file = h5py.File(args.tmp_h5, 'r')
+        sequence = tmp_h5_file['sequences']
+        seqindex = tmp_h5_file['sequences_index']
+        n_seqs, total_seq_len = seqindex.shape[0], sequence.shape[0]
+        genomes = tmp_h5_file['genomes']
+        seqlens = tmp_h5_file['seqlens']
+        names = tmp_h5_file['seqnames']
+        ids = tmp_h5_file['ids']
+
+        taxa = np.zeros(len(fapaths), dtype=int)
+
+        for genome_i, fa in tqdm(enumerate(fapaths), total=len(fapaths)):
+            taxid = taxa_ids[genome_i]
+            rep_taxid = taxdf['gtdb_genome_representative'][genome_i]
+            taxa[genome_i] = np.where(rep_taxdf.index == rep_taxid)[0][0]
     else:
-        n_seqs, total_seq_len = args.n_seqs, args.total_seq_len
-        logger.info(f'As specified, there are {total_seq_len} bases across {n_seqs} sequences')
+        if args.total_seq_len is None:
+            logger.info('counting total number of sqeuences')
+            n_seqs, total_seq_len = np.array(list(zip(*tqdm(map_func(seqlen, fapaths), total=len(fapaths))))).sum(axis=1)
+            logger.info(f'found {total_seq_len} bases across {n_seqs} sequences')
+        else:
+            n_seqs, total_seq_len = args.n_seqs, args.total_seq_len
+            logger.info(f'As specified, there are {total_seq_len} bases across {n_seqs} sequences')
 
-    logger.info(f'allocating uint8 array of length {total_seq_len} for sequences')
+        logger.info(f'allocating uint8 array of length {total_seq_len} for sequences')
 
-    if args.tmpdir is not None:
-        if not os.path.exists(args.tmpdir):
-            os.mkdir(args.tmpdir)
-        tmpdir = tempfile.mkdtemp(dir=args.tmpdir)
-    else:
-        tmpdir = tempfile.mkdtemp()
+        if args.tmpdir is not None:
+            if not os.path.exists(args.tmpdir):
+                os.mkdir(args.tmpdir)
+            tmpdir = tempfile.mkdtemp(dir=args.tmpdir)
+        else:
+            tmpdir = tempfile.mkdtemp()
 
-    comp = 'gzip' if args.gzip else None
-    tmp_h5_filename = os.path.join(tmpdir, 'sequences.h5')
-    logger.info(f'writing temporary sequence data to {tmp_h5_filename}')
-    tmp_h5_file = h5py.File(tmp_h5_filename, 'w')
-    sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression=comp)
-    seqindex = tmp_h5_file.create_dataset('sequences_index', shape=(n_seqs,), dtype=np.uint64, compression=comp)
-    genomes = tmp_h5_file.create_dataset('genomes', shape=(n_seqs,), dtype=np.uint64, compression=comp)
-    seqlens = tmp_h5_file.create_dataset('seqlens', shape=(n_seqs,), dtype=np.uint64, compression=comp)
-    names = tmp_h5_file.create_dataset('seqnames', shape=(n_seqs,), dtype=h5py.special_dtype(vlen=str), compression=comp)
+        comp = 'gzip' if args.gzip else None
+        tmp_h5_filename = os.path.join(tmpdir, 'sequences.h5')
+        logger.info(f'writing temporary sequence data to {tmp_h5_filename}')
+        tmp_h5_file = h5py.File(tmp_h5_filename, 'w')
+        sequence = tmp_h5_file.create_dataset('sequences', shape=(total_seq_len,), dtype=np.uint8, compression=comp)
+        seqindex = tmp_h5_file.create_dataset('sequences_index', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+        genomes = tmp_h5_file.create_dataset('genomes', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+        seqlens = tmp_h5_file.create_dataset('seqlens', shape=(n_seqs,), dtype=np.uint64, compression=comp)
+        names = tmp_h5_file.create_dataset('seqnames', shape=(n_seqs,), dtype=h5py.special_dtype(vlen=str), compression=comp)
 
-    taxa = np.zeros(len(fapaths), dtype=int)
+        taxa = np.zeros(len(fapaths), dtype=int)
 
-    seq_i = 0
-    b = 0
-    for genome_i, fa in tqdm(enumerate(fapaths), total=len(fapaths)):
-        kwargs = {'format': 'fasta', 'constructor': skbio_cls, 'validate': False}
-        taxid = taxa_ids[genome_i]
-        rep_taxid = taxdf['gtdb_genome_representative'][genome_i]
-        taxa[genome_i] = np.where(rep_taxdf.index == rep_taxid)[0][0]
-        for seq in skbio.io.read(fa, **kwargs):
-            enc_seq = vocab_it.encode(seq)
-            e = b + len(enc_seq)
-            sequence[b:e] = enc_seq
-            seqindex[seq_i] = e
-            genomes[seq_i] = genome_i
-            seqlens[seq_i] = len(enc_seq)
-            names[seq_i] = vocab_it.get_seqname(seq)
-            b = e
-            seq_i += 1
-    ids = tmp_h5_file.create_dataset('ids', data=np.arange(n_seqs), dtype=int)
-    tmp_h5_file.flush()
+        seq_i = 0
+        b = 0
+        for genome_i, fa in tqdm(enumerate(fapaths), total=len(fapaths)):
+            kwargs = {'format': 'fasta', 'constructor': skbio_cls, 'validate': False}
+            taxid = taxa_ids[genome_i]
+            rep_taxid = taxdf['gtdb_genome_representative'][genome_i]
+            taxa[genome_i] = np.where(rep_taxdf.index == rep_taxid)[0][0]
+            for seq in skbio.io.read(fa, **kwargs):
+                enc_seq = vocab_it.encode(seq)
+                e = b + len(enc_seq)
+                sequence[b:e] = enc_seq
+                seqindex[seq_i] = e
+                genomes[seq_i] = genome_i
+                seqlens[seq_i] = len(enc_seq)
+                names[seq_i] = vocab_it.get_seqname(seq)
+                b = e
+                seq_i += 1
+        ids = tmp_h5_file.create_dataset('ids', data=np.arange(n_seqs), dtype=int)
+        tmp_h5_file.flush()
 
     io = get_hdf5io(h5path, 'w')
 
