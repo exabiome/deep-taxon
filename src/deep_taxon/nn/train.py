@@ -273,7 +273,7 @@ def process_args(args=None):
             else:
                 if env is None:
                     raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
-                torch.cuda.set_device(env.local_rank())
+                #torch.cuda.set_device(env.local_rank())
                 targs['devices'] = gpus
                 targs['strategy'] = DDPStrategy(find_unused_parameters=False,
                                                 cluster_environment=env)
@@ -561,7 +561,7 @@ def run_lightning(argv=None):
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))
 
     if args.swa:
-        callbacks.append(StochasticWeightAveraging(swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
+        callbacks.append(StochasticWeightAveraging(swa_lrs=0.0001, swa_epoch_start=args.swa_start, annealing_epochs=args.swa_anneal))
 
     targs = dict(
         enable_checkpointing=True,
