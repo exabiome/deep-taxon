@@ -208,7 +208,7 @@ def run_train(argv=None):
     if args.experiment:
         exp = args.experiment
 
-    options += f' -E {exp}'
+    options += f' -E {exp}.$JOB'
 
 
 
@@ -306,7 +306,8 @@ def run_train(argv=None):
             srun += ' image'
 
         if args.cuda_profile:
-            srun += ' nsys profile -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
+            duration = (int(args.time) - 10) * 60
+            srun += f' nsys profile -d {duration} -t cuda,cudnn,nvtx,osrt --output=$OUTDIR/nsys_report.%h.%p --stats=true'
         job.add_command('$CMD >> $LOG 2>&1', run=srun)
 
     for i in range(len(argv)):
@@ -357,7 +358,7 @@ def run_train(argv=None):
                 if args.summit:
                     job_dep = f'ended({job_dep})'
                 job.add_addl_jobflag(job.wait_flag, job_dep)
-                job.set_env_var('CKPT', os.path.join(jobdir, 'last.ckpt'))
+                job.set_env_var('CKPT', f"`ls -t {os.path.join(jobdir, 'last*.ckpt')} | head -n 1`")
                 if '-i' in options:
                     i = options.find('-i')
                     options = options[:i+1] + 'c' + options[i+2:]
