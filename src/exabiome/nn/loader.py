@@ -825,7 +825,7 @@ class LazySeqDataset(Dataset):
 
         self.manifold = False
         self.graph = False
-        self.tnf = hparams.tnf
+        self.tnf = getattr(hparams, 'tnf', None)
         self.distances = None
         self.node_ids = None
 
