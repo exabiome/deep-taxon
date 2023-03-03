@@ -6,10 +6,19 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 
-from torchvision.ops.misc import ConvNormActivation, Permute
+try:
+    from torchvision.ops.misc import ConvNormActivation, Permute
+except:
+    from torchvision.ops.misc import ConvNormActivation
+    class Permute(nn.Module):
+        def __init__(self, dims: List[int]):
+            super().__init__()
+            self.dims = dims
+
+        def forward(self, x):
+            return torch.permute(x, self.dims)
+
 from torchvision.ops.stochastic_depth import StochasticDepth
-from torchvision.transforms._presets import ImageClassification
-from torchvision.models._api import Weights, WeightsEnum
 
 from . import model, AbstractLit
 

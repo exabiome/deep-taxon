@@ -1,3 +1,5 @@
+import os
+
 from .summit import LSFJob
 from .nersc import SlurmJob
 
