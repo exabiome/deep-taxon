@@ -29,7 +29,12 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, Stochast
 from pytorch_lightning.profiler import PyTorchProfiler
 
 from pytorch_lightning.plugins.environments import SLURMEnvironment, LSFEnvironment
-from pytorch_lightning.strategies import DDPStrategy
+try:
+    from pytorch_lightning.strategies import DDPStrategy
+except:
+    from pytorch_lightning.plugins import DDPPlugin
+    DDPStrategy = DDPPlugin
+
 
 import torch
 try:
@@ -275,6 +280,7 @@ def process_args(args=None):
                     raise ValueError('Please specify environment (--lsf or --slurm) if using more than one GPU')
                 #torch.cuda.set_device(env.local_rank())
                 targs['devices'] = gpus
+
                 targs['strategy'] = DDPStrategy(find_unused_parameters=False,
                                                 cluster_environment=env)
             targs['precision'] = 16
