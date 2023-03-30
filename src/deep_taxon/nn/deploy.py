@@ -163,7 +163,7 @@ def build_deployment_pkg(argv=None):
     path = lambda x: os.path.join(tmpdir, os.path.basename(x))
 
     manifest = {
-        'taxa_table': os.path.join(tmpdir, "taxa_table.csv"),
+        'taxa_table': path("taxa_table.csv"),
         'nn_model': path(args.nn_model),
         'conf_model': path(args.conf_model),
         'training_config': path(args.config),
@@ -179,13 +179,25 @@ def build_deployment_pkg(argv=None):
     logger.info(f"copying {args.config} to {manifest['training_config']}")
     shutil.copyfile(args.config, manifest['training_config'])
 
+
+
+    wd = os.path.dirname(tmpdir)
+    zipdir = os.path.basename(tmpdir)
+
+    for k in ('taxa_table', 'nn_model', 'conf_model', 'training_config'):
+        manifest[k] = os.path.join(zipdir, os.path.basename(manifest[k]))
+
     with open(os.path.join(tmpdir, 'manifest.json'), 'w') as f:
         json.dump(manifest, f, indent=4)
 
+    ret_wd = os.getcwd()
+    os.chdir(wd)
 
-    zip_path = args.output_dir + ".zip"
+    zip_path = zipdir + ".zip"
     zipf = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED)
-    for root, dirs, files in os.walk(tmpdir):
+
+
+    for root, dirs, files in os.walk(zipdir):
         for file in files:
             path = os.path.join(root, file)
             logger.info(f'adding {path} to {zip_path}')
@@ -193,8 +205,12 @@ def build_deployment_pkg(argv=None):
 
     zipf.close()
 
+    os.chdir(ret_wd)
+
     logger.info(f'removing {tmpdir}')
     shutil.rmtree(tmpdir)
+
+    logger.info(f'deployment package saved to {tmpdir}.zip')
 
 
 def run_onnx_inference(argv=None):
