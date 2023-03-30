@@ -999,19 +999,22 @@ def train_confidence_model(argv=None):
     import pickle
 
     from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+    import sklearn.metrics as skmet
+    from sklearn.model_selection import cross_val_predict
     from sklearn.preprocessing import MaxAbsScaler
     from ..utils import get_logger
 
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=str, help="the path to save the model to")
     parser.add_argument("-s", "--summary", type=str, help='the summarized sequence NN outputs')
-    parser.add_argument('-O', '--onnx', metavar='PATH', nargs='?', const=True, default=False, type=str,
-                        help='Save data in ONNX format. If an argument is passed, it is assumed to be the path to a pickled model to convert to ONNX format')
+    parser.add_argument('-O', '--onnx', default=False, action='store_true', help='Save data in ONNX format')
     parser.add_argument("-k", "--topk", metavar="TOPK", type=int, help="use the TOPK probabilities for building confidence model", default=None)
     parser.add_argument('-j', '--n_jobs', metavar='NJOBS', nargs='?', const=True, default=None, type=int,
                         help='the number of jobs to use for cross-validation. if NJOBS is not specified, use the number of folds i.e. 5')
     parser.add_argument('-c', '--cvs', metavar='NFOLDS', default=5, type=int,
                         help='the number of cross-validation folds to use. default is 5')
+    parser.add_argument("-e", "--eval", action='store_true', help='evaluate the train confidence model', default=False)
+    parser.add_argument("-f", "--force", action='store_true', help='force training i.e. do not use output if it exists', default=False)
 
     args = parser.parse_args(argv)
 
@@ -1020,12 +1023,9 @@ def train_confidence_model(argv=None):
 
     logger = get_logger()
 
-    if isinstance(args.onnx, str):
-        # just convert the given model to ONNX
-        with open(args.output, 'rb') as f:
-            lr = pickle.load(f)
-        args.output = args.onnx
-    else:
+    X, y = None, None
+
+    if args.summary:
         # train a new model
         logger.info(f"reading outputs summary data from {args.summary}")
         f = h5py.File(args.summary, 'r')
@@ -1042,6 +1042,11 @@ def train_confidence_model(argv=None):
         X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1)
         y = (true == pred).astype(int)
 
+    if os.path.exists(args.output) and not args.force:
+        # just convert the given model to ONNX
+        with open(args.output, 'rb') as f:
+            lr = pickle.load(f)
+    else:
         scaler = MaxAbsScaler()
         scaler.fit(X)
 
@@ -1068,6 +1073,48 @@ def train_confidence_model(argv=None):
         logger.info(f"pickling {lr} to {args.output}")
         with open(args.output, 'wb') as f:
             pickle.dump(lr, f)
+
+    if args.eval:
+        if X is not None:
+            logger.info(f"Evaluating model found in {args.output}")
+            y_prob = lr.predict_proba(X)[:, 1] #cross_val_predict(lr, X, cv=args.cvs)
+
+            base = os.path.splitext(args.output)[0]
+
+            metrics = dict()
+
+            fpr, tpr, _ = skmet.roc_curve(y, y_prob)
+            auc = skmet.auc(fpr, tpr)
+            metrics['auc'] = auc
+
+            skmet.RocCurveDisplay(fpr=fpr, tpr=tpr).plot()
+            plt.title(f"AUC = {auc:0.4f}")
+            plt.savefig(f'{base}.roc.png')
+
+            prec, rec, _ = skmet.precision_recall_curve(y, y_prob)
+            auc = skmet.auc(rec, prec)
+            metrics['aupr'] = auc
+
+            skmet.PrecisionRecallDisplay(precision=prec, recall=rec).plot()
+            plt.title(f"AUPR = {auc:0.4f}")
+            plt.savefig(f'{base}.pr.png')
+
+            y_pred = (y_prob > 0.5).astype(int)
+
+            metrics['acc'] = skmet.accuracy_score(y, y_pred)
+            metrics['prec'] = skmet.precision_score(y, y_pred, average='macro')
+            metrics['prec_w'] = skmet.precision_score(y, y_pred, average='weighted')
+            metrics['rec'] = skmet.recall_score(y, y_pred, average='macro')
+            metrics['rec_w'] = skmet.recall_score(y, y_pred, average='weighted')
+            metrics['f1'] = skmet.f1_score(y, y_pred, average='macro')
+            metrics['f1_w'] = skmet.f1_score(y, y_pred, average='weighted')
+
+            print(pd.Series(data=metrics))
+
+        else:
+            logger.info("cannot evaluate calibration model without data")
+
+
 
 
 if __name__ == '__main__':
