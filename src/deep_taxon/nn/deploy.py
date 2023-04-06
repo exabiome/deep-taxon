@@ -2,7 +2,9 @@ import argparse
 import logging
 import os
 import sys
+import warnings
 
+from hdmf.common import get_hdf5io
 import torch
 import torch.nn as nn
 import torch.onnx
@@ -70,14 +72,19 @@ def to_onnx(argv=None):
         sys.exit(1)
 
 
+    io = get_hdf5io(args.input, 'r')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        difile = io.read()
 
     logger.info(f'loading sample input from {args.input}')
-    dataset = LazySeqDataset(path=args.input, hparams=args, keep_open=True)
+    size = len(difile.seq_table.sequence) // 10000000
+    dataset = LazySeqDataset(difile=difile, hparams=args, keep_open=True, size=size, rank=0, load=True)
     input_sample = torch.stack([dataset[i][1] for i in range(16)])
 
     # load the model and override batch size
     logger.info(f'loading model from {args.input} using config {args.config}')
-    model = process_model(args, inference=True, taxa_table=dataset.difile.taxa_table)
+    model = process_model(args, inference=True, taxa_table=difile.taxa_table)
 
     if args.softmax:
         logger.info(f'adding softmax to {model.__class__.__name__} model')
@@ -150,18 +157,6 @@ def build_deployment_pkg(argv=None):
     logger.info(f'Using temporary directory {tmpdir}')
     logger.info(f'loading sample input from {args.input}')
 
-    io = get_hdf5io(args.input, 'r')
-    difile = io.read()
-    tt = difile.taxa_table
-    vocab = difile.seq_table.sequence.elements.data[:].tolist()
-    _load = lambda x: x[:]
-    for col in tt.columns:
-        col.transform(_load)
-    tt_df = tt.to_dataframe().set_index('taxon_id')
-    io.close()
-
-    path = lambda x: os.path.join(tmpdir, os.path.basename(x))
-
     manifest = {
         'taxa_table': path("taxa_table.csv"),
         'nn_model': path(args.nn_model),
@@ -170,8 +165,26 @@ def build_deployment_pkg(argv=None):
         'vocabulary': vocab,
     }
 
+    io = get_hdf5io(args.input, 'r')
+    difile = io.read()
+    tt = difile.taxa_table
+    vocab = difile.seq_table.sequence.elements.data[:].tolist()
+    _load = lambda x: x[:]
+    for col in tt.columns:
+        col.transform(_load)
+    tt = tt.to_dataframe(index=True).set_index('taxon_id')
+    elements = dict()
+    for lvl in tt.columns[:-1]:
+        elements[lvl] = tt[lvl].elements.data[:].tolist()
+    elements['species'] = tt['species'].values
+    tt['species'] = np.arange(len(tt), dtype=int)
+    manifest['taxa_elements'] = elements
+    io.close()
+
+    path = lambda x: os.path.join(tmpdir, os.path.basename(x))
+
     logger.info(f"exporting taxa table CSV to {manifest['taxa_table']}")
-    tt_df.to_csv(manifest['taxa_table'])
+    tt.to_csv(manifest['taxa_table'])
     logger.info(f"copying {args.nn_model} to {manifest['nn_model']}")
     shutil.copyfile(args.nn_model, manifest['nn_model'])
     logger.info(f"copying {args.conf_model} to {manifest['conf_model']}")
@@ -185,7 +198,7 @@ def build_deployment_pkg(argv=None):
     zipdir = os.path.basename(tmpdir)
 
     for k in ('taxa_table', 'nn_model', 'conf_model', 'training_config'):
-        manifest[k] = os.path.join(zipdir, os.path.basename(manifest[k]))
+        manifest[k] = os.path.basename(manifest[k])
 
     with open(os.path.join(tmpdir, 'manifest.json'), 'w') as f:
         json.dump(manifest, f, indent=4)
