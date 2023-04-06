@@ -612,6 +612,7 @@ class LazySeqDataset(Dataset):
         kwargs.setdefault('ohe', False)
         kwargs.setdefault('tnf', False)
         kwargs.setdefault('weighted', None)
+        kwargs.setdefault('shm', False)
 
         self.comm = kwargs.pop('comm', None)
 
