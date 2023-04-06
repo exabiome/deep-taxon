@@ -12,6 +12,14 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, precision_recall_curve
 import scipy.stats as stats
+from skl2onnx import convert_sklearn
+from skl2onnx.common.data_types import FloatTensorType
+import pickle
+
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.preprocessing import MaxAbsScaler
+import sklearn.metrics as skmet
+
 
 from ..utils import parse_logger, ccm
 
@@ -995,18 +1003,55 @@ def aggregate_seqs(argv=None):
     outf.close()
     f.close()
 
-def train_confidence_model(argv=None):
-    import pickle
 
-    from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-    import sklearn.metrics as skmet
-    from sklearn.model_selection import cross_val_predict
-    from sklearn.preprocessing import MaxAbsScaler
+def _fit_model(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
+    X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1)
+    y = (true == pred).astype(int)
+
+    scaler = MaxAbsScaler()
+    scaler.fit(X)
+
+    lrcv = LogisticRegressionCV(penalty='elasticnet', solver='saga', l1_ratios=[.1, .5, .7, .9, .95, .99, 1], n_jobs=n_jobs, cv=cvs)
+
+    if debug:
+        logger.info(f"Skipping training")
+        lrcv.coef_ = np.ones(X.shape[1]).reshape(1, -1)
+        lrcv.intercept_ = np.ones(1)
+        lrcv.classes_ = np.arange(2)
+    else:
+        logger.info(f"Building confidence model with \n{lrcv}")
+        lrcv.fit(scaler.transform(X), y)
+
+    lr = LogisticRegression()
+    lr.coef_ = scaler.transform(lrcv.coef_)
+    lr.intercept_ = lrcv.intercept_
+    lr.classes_ = lrcv.classes_
+    return lr, X, y
+
+
+def _write_model(model, basename, outdir, onnx, logger):
+    if onnx:
+        output_path = os.path.join(outdir, f'{basename}.onnx')
+        logger.info(f"Saving {model} to ONNX file {output_path}")
+        initial_type = [('float_input', FloatTensorType([None, model.coef_.shape[1]]))]
+        onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
+        with open(output_path, "wb") as f:
+            f.write(onx.SerializeToString())
+    else:
+        output_path = os.path.join(outdir, f'{basename}.pkl')
+        logger.info(f"Pickling {model} to {output_path}")
+        with open(output_path, 'wb') as f:
+            pickle.dump(model, f)
+
+    return output_path
+
+
+def train_confidence_model(argv=None):
     from ..utils import get_logger
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("output", type=str, help="the path to save the model to")
-    parser.add_argument("-s", "--summary", type=str, help='the summarized sequence NN outputs')
+    parser.add_argument("output_dir", type=str, help="the directory to save models to")
+    parser.add_argument("summary", type=str, help='the summarized sequence NN outputs', nargs='?')
     parser.add_argument('-O', '--onnx', default=False, action='store_true', help='Save data in ONNX format')
     parser.add_argument("-k", "--topk", metavar="TOPK", type=int, help="use the TOPK probabilities for building confidence model", default=None)
     parser.add_argument('-j', '--n_jobs', metavar='NJOBS', nargs='?', const=True, default=None, type=int,
@@ -1015,6 +1060,7 @@ def train_confidence_model(argv=None):
                         help='the number of cross-validation folds to use. default is 5')
     parser.add_argument("-e", "--eval", action='store_true', help='evaluate the train confidence model', default=False)
     parser.add_argument("-f", "--force", action='store_true', help='force training i.e. do not use output if it exists', default=False)
+    parser.add_argument("-d", "--debug", action='store_true', help='Run workflow without training models', default=False)
 
     args = parser.parse_args(argv)
 
@@ -1024,80 +1070,81 @@ def train_confidence_model(argv=None):
     logger = get_logger()
 
     X, y = None, None
+    levels = None
 
     if args.summary:
         # train a new model
-        logger.info(f"reading outputs summary data from {args.summary}")
+        logger.info(f"Reading outputs summary data from {args.summary}")
         f = h5py.File(args.summary, 'r')
+
+        levels = f['levels'].asstr()[:]
 
         true = f['labels'][:]
         pred = f['preds'][:]
 
         # the top-k probabilities, in descending order
-        maxprobs = f['maxprob'][:, :args.topk]
+        maxprobs = f['maxprob'][:, :, :args.topk]
         lengths = f['lengths'][:]
 
         f.close()
 
-        X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1)
-        y = (true == pred).astype(int)
+    Xs = list()
+    ys = list()
+    models = dict()
 
-    if os.path.exists(args.output) and not args.force:
-        # just convert the given model to ONNX
-        with open(args.output, 'rb') as f:
-            lr = pickle.load(f)
+    if os.path.exists(args.output_dir) and not args.force:
+        for pkl in glob.glob(f"{args.output_dir}/*.pkl"):
+            with open(pkl, 'rb') as f:
+                lr = pickle.load(f)
+            lvl = os.path.splitext(os.path.basename(pkl))[0]
+            models[lvl] = lr
+            if args.onnx:
+                logger.info(f"Converting {lvl}-level model found in {pkl} to ONNX format")
+                _write_model(lr, lvl, args.output_dir, True, logger)
+
     else:
-        scaler = MaxAbsScaler()
-        scaler.fit(X)
-
-        lrcv = LogisticRegressionCV(penalty='elasticnet', solver='saga', l1_ratios=[.1, .5, .7, .9, .95, .99, 1], n_jobs=args.n_jobs, cv=args.cvs)
-        logger.info(f"building confidence model with \n{lrcv}")
-
-        lrcv.fit(scaler.transform(X), y)
-
-        lr = LogisticRegression()
-        lr.coef_ = scaler.transform(lrcv.coef_)
-        lr.intercept_ = lrcv.intercept_
-        lr.classes_ = lrcv.classes_
-
-    if args.onnx:
-        from skl2onnx import convert_sklearn
-        from skl2onnx.common.data_types import FloatTensorType
-
-        logger.info(f"saving {lr} to ONNX file {args.output}")
-        initial_type = [('float_input', FloatTensorType([None, lr.coef_.shape[1]]))]
-        onx = convert_sklearn(lr, target_opset=12, initial_types=initial_type, options={type(lr): {'zipmap': False}})
-        with open(args.output, "wb") as f:
-            f.write(onx.SerializeToString())
-    else:
-        logger.info(f"pickling {lr} to {args.output}")
-        with open(args.output, 'wb') as f:
-            pickle.dump(lr, f)
+        os.makedirs(args.output_dir, exist_ok=args.force)
+        for lvl_i in range(len(levels)):
+            logger.info(f"Building confidence model for {levels[lvl_i]}")
+            lr, X, y = _fit_model(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
+            models[levels[lvl_i]] = lr
+            Xs.append(X)
+            ys.append(y)
+            outpath = _write_model(lr, levels[lvl_i], args.output_dir, args.onnx, logger)
 
     if args.eval:
-        if X is not None:
-            logger.info(f"Evaluating model found in {args.output}")
-            y_prob = lr.predict_proba(X)[:, 1] #cross_val_predict(lr, X, cv=args.cvs)
+        if X is None:
+            logger.info(f"Cannot evaluate models without summary data. Failing")
+            exit(-1)
 
-            base = os.path.splitext(args.output)[0]
+        models = [models[k] for k in levels]
+
+        all_metrics = list()
+        roc_fig = plt.figure()
+        pr_fig = plt.figure()
+
+        roc_ax = roc_fig.gca()
+        pr_ax = pr_fig.gca()
+
+
+        for lvl, model, x, y in zip(levels, models, Xs, ys):
+            logger.info(f"Evaluating {lvl}-level model")
+            y_prob = model.predict_proba(X)[:, 1]
 
             metrics = dict()
 
-            fpr, tpr, _ = skmet.roc_curve(y, y_prob)
+            fpr, tpr, thresh = skmet.roc_curve(y, y_prob)
+            pd.DataFrame(data={'fpr': fpr, 'tpr': tpr, 'thresh': thresh}).to_csv(os.path.join(args.output_dir, f'{lvl}.roc.csv'))
             auc = skmet.auc(fpr, tpr)
             metrics['auc'] = auc
 
-            skmet.RocCurveDisplay(fpr=fpr, tpr=tpr).plot()
-            plt.title(f"AUC = {auc:0.4f}")
-            plt.savefig(f'{base}.roc.png')
+            skmet.RocCurveDisplay(fpr=fpr, tpr=tpr).plot(ax=roc_ax, name=f"{lvl} (AUC = {auc:0.3f})")
 
             prec, rec, _ = skmet.precision_recall_curve(y, y_prob)
             auc = skmet.auc(rec, prec)
             metrics['aupr'] = auc
 
-            skmet.PrecisionRecallDisplay(precision=prec, recall=rec).plot()
-            plt.title(f"AUPR = {auc:0.4f}")
-            plt.savefig(f'{base}.pr.png')
+            skmet.PrecisionRecallDisplay(precision=prec, recall=rec).plot(ax=pr_ax, name=f"{lvl} (AUPR = {auc:0.3f})")
 
             y_pred = (y_prob > 0.5).astype(int)
 
@@ -1109,12 +1156,14 @@ def train_confidence_model(argv=None):
             metrics['f1'] = skmet.f1_score(y, y_pred, average='macro')
             metrics['f1_w'] = skmet.f1_score(y, y_pred, average='weighted')
 
-            print(pd.Series(data=metrics))
+            all_metrics.append(pd.Series(data=metrics, name=lvl))
 
-        else:
-            logger.info("cannot evaluate calibration model without data")
-
-
+        logger.info(f"Saving ROC curve, PR curve, and classification metrics to {args.output_dir}")
+        roc_fig.savefig(os.path.join(args.output_dir, 'roc.png'), dpi=100)
+        pr_fig.savefig(os.path.join(args.output_dir, 'pr.png'), dpi=100)
+        df = pd.DataFrame(all_metrics)
+        df.to_csv(os.path.join(args.output_dir, 'metrics.csv'))
+        logger.info(f"Classification metrics for threshold of 0.5:\n{df}")
 
 
 if __name__ == '__main__':
