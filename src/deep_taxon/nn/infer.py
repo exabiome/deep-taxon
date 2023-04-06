@@ -38,6 +38,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('input', type=str, help='the input file to run inference on')
     parser.add_argument('checkpoint', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
+    parser.add_argument('--force', action='store_true', help='overwrite existing outputs file', default=False)
     parser.add_argument('-f', '--resnet_features', action='store_true', help='drop classifier from ResNet model before inference', default=False)
     parser.add_argument('-F', '--features', action='store_true', help='outputs are features i.e. do not softmax and compute predictions', default=False)
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
@@ -45,7 +46,6 @@ def parse_args(*addl_args, argv=None):
                         help='run in debug mode i.e. only run two batches')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
-    parser.add_argument("-H", "--hierarchy", default=False, action='store_true', help='force predictions to follow probability hierarchy')
 
     parser.add_argument('-N', '--nonrep', action='append_const', const='nonrep', dest='loaders', help='the dataset is nonrepresentative species')
     parser.add_argument('-k', '--num_workers', type=int, help='the number of workers to load data with', default=1)
@@ -55,6 +55,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-S', '--n_seqs', type=int, default=500, help='the number of sequences to aggregate chunks for between each write to disk')
     parser.add_argument('-p', '--maxprob', metavar='TOPN', default=2, type=int,
                         help='store the top TOPN probablities of each output. By default, TOPN=1')
+    parser.add_argument("-H", "--hierarchy", default=False, action='store_true', help='force predictions to follow probability hierarchy')
     parser.add_argument('-c', '--save_chunks', action='store_true', help='do store network outputs for each chunk', default=False)
     parser.add_argument('-O', '--overlap', action='store_true',  default=False,
                         help='overlap with step size used during training. default is to use nonoverlapping windows')
@@ -130,6 +131,10 @@ def process_args(args, comm=None):
         if not os.path.isdir(outdir):
             os.mkdir(outdir)
         args.output =  os.path.join(outdir, 'outputs.h5')
+
+    if os.path.exists(args.output) and not args.force:
+        print(f'Output file {args.output} exists. Exiting. Use --force to override this behavior', file=sys.stderr)
+        sys.exit(1)
 
     # setting classify to so that we can get labels when
     # we load data. We do this here because we assume that
@@ -245,7 +250,7 @@ def _compute_taxonomy_transforms(tt):
         mat = np.zeros((lower.max() + 1, upper.max() + 1), dtype=np.float32)
         mat[lower, upper] = 1.0
         transforms.append(torch.from_numpy(mat))
-    return transforms, levels
+    return transforms, levels.astype(np.string_)
 
 
 
@@ -335,7 +340,12 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
     args.logger.debug(f"rank {dataset.rank} - making lengths")
     seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
 
-    levels_dset = f.create_dataset('levels', shape=(n_levels,), dtype=h5py.special_dtype(vlen=str), data=levels)
+    levels_dset = f.create_dataset('levels', shape=(n_levels,), dtype=levels.dtype)
+    rank = 0
+    if 'comm' in fkwargs:
+        fkwargs['comm'].Get_rank()
+    if rank == 0:
+        levels_dset[:] = levels
 
     if all_seq_ids is None:
         seqlen_dset[:] = seq_lengths
