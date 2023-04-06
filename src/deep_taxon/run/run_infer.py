@@ -47,8 +47,9 @@ def run_inference(argv=None):
     parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk')
     parser.add_argument('-s', '--start', type=int, help='sample index to start at', default=None)
     parser.add_argument('-S', '--n_seqs', type=int, default=500, help='the number of sequences to aggregate chunks for between each write to disk')
-    parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
+    parser.add_argument('-p', '--maxprob', metavar='TOPN', default=2, type=int,
                         help='store the top TOPN probablities of each output. By default, TOPN=1')
+    parser.add_argument("-H", "--hierarchy", default=False, action='store_true', help='force predictions to follow probability hierarchy')
     parser.add_argument('-c', '--save_chunks', action='store_true', help='save network outputs for all chunks', default=False)
 
     parser.add_argument('-d', '--debug',        help="submit to debug queue", action='store_true', default=False)
@@ -66,6 +67,11 @@ def run_inference(argv=None):
         ext = '.nonrep'
     elif args.calib:
         ext = '.calib'
+
+    ext += f'.p{args.maxprob}'
+
+    if args.hierarchy:
+        ext += '.hier'
 
     outdir = os.path.splitext(args.checkpoint)[0] + ext
     if not os.path.exists(outdir):
