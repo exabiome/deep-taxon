@@ -157,47 +157,56 @@ def build_deployment_pkg(argv=None):
     logger.info(f'Using temporary directory {tmpdir}')
     logger.info(f'loading sample input from {args.input}')
 
-    manifest = {
-        'taxa_table': path("taxa_table.csv"),
-        'nn_model': path(args.nn_model),
-        'conf_model': path(args.conf_model),
-        'training_config': path(args.config),
-        'vocabulary': vocab,
-    }
-
-    io = get_hdf5io(args.input, 'r')
-    difile = io.read()
-    tt = difile.taxa_table
-    vocab = difile.seq_table.sequence.elements.data[:].tolist()
-    _load = lambda x: x[:]
-    for col in tt.columns:
-        col.transform(_load)
-    tt = tt.to_dataframe(index=True).set_index('taxon_id')
-    elements = dict()
-    for lvl in tt.columns[:-1]:
-        elements[lvl] = tt[lvl].elements.data[:].tolist()
-    elements['species'] = tt['species'].values
-    tt['species'] = np.arange(len(tt), dtype=int)
-    manifest['taxa_elements'] = elements
-    io.close()
 
     path = lambda x: os.path.join(tmpdir, os.path.basename(x))
 
+    manifest = {
+        'taxa_table': path("taxa_table.csv"),
+        'nn_model': path(args.nn_model),
+        'training_config': path(args.config),
+    }
+
+    logger.info(f"loading confidence model info from {args.conf_model}")
+    with open(args.conf_model, 'r') as f:
+        conf_data = json.load(f)
+
+    io = get_hdf5io(args.input, 'r')
+    difile = io.read()
+
+    manifest['vocabulary'] = difile.seq_table.sequence.elements.data[:].tolist()
+
+    # load taxa table columns so we can generate a DataFrame
+    tt = difile.taxa_table
+    _load = lambda x: x[:]
+    for col in tt.columns:
+        col.transform(_load)
+
+    tt_df = tt.to_dataframe(index=True).set_index('taxon_id').drop(['species'], axis=1)
+
+    for lvl_dat in conf_data:
+        lvl = lvl_dat['level']
+        if lvl == 'species':
+            lvl_dat['taxa'] = tt[lvl].data[:].tolist()
+        else:
+            lvl_dat['taxa'] = tt[lvl].elements.data[:].tolist()
+
+    io.close()
+
+    manifest['conf_model'] = conf_data
+
+
     logger.info(f"exporting taxa table CSV to {manifest['taxa_table']}")
-    tt.to_csv(manifest['taxa_table'])
+    tt_df.to_csv(manifest['taxa_table'])
     logger.info(f"copying {args.nn_model} to {manifest['nn_model']}")
     shutil.copyfile(args.nn_model, manifest['nn_model'])
-    logger.info(f"copying {args.conf_model} to {manifest['conf_model']}")
-    shutil.copyfile(args.conf_model, manifest['conf_model'])
     logger.info(f"copying {args.config} to {manifest['training_config']}")
     shutil.copyfile(args.config, manifest['training_config'])
-
 
 
     wd = os.path.dirname(tmpdir)
     zipdir = os.path.basename(tmpdir)
 
-    for k in ('taxa_table', 'nn_model', 'conf_model', 'training_config'):
+    for k in ('taxa_table', 'nn_model', 'training_config'):
         manifest[k] = os.path.basename(manifest[k])
 
     with open(os.path.join(tmpdir, 'manifest.json'), 'w') as f:
