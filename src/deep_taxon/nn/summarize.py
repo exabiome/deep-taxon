@@ -1,6 +1,7 @@
 import argparse
 import sys
 import glob
+import json
 import os.path
 import os
 import matplotlib.pyplot as plt
@@ -1029,6 +1030,11 @@ def _fit_model(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
     return lr, X, y
 
 
+def _to_onnx(model):
+    initial_type = [('float_input', FloatTensorType([None, model.coef_.shape[1]]))]
+    onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
+    return onx.SerializeToString().hex()
+
 def _write_model(model, basename, outdir, onnx, logger):
     if onnx:
         output_path = os.path.join(outdir, f'{basename}.onnx')
@@ -1126,6 +1132,7 @@ def train_confidence_model(argv=None):
         roc_ax = roc_fig.gca()
         pr_ax = pr_fig.gca()
 
+        rocs = list()
 
         for lvl, model, x, y in zip(levels, models, Xs, ys):
             logger.info(f"Evaluating {lvl}-level model")
@@ -1134,7 +1141,8 @@ def train_confidence_model(argv=None):
             metrics = dict()
 
             fpr, tpr, thresh = skmet.roc_curve(y, y_prob)
-            pd.DataFrame(data={'fpr': fpr, 'tpr': tpr, 'thresh': thresh}).to_csv(os.path.join(args.output_dir, f'{lvl}.roc.csv'))
+            rocs.append({'level': lvl, 'fpr': fpr.tolist(), 'tpr': tpr.tolist(), 'thresh': thresh.tolist(), 'onnx': _to_onnx(model)})
+
             auc = skmet.auc(fpr, tpr)
             metrics['auc'] = auc
 
@@ -1158,11 +1166,13 @@ def train_confidence_model(argv=None):
 
             all_metrics.append(pd.Series(data=metrics, name=lvl))
 
-        logger.info(f"Saving ROC curve, PR curve, and classification metrics to {args.output_dir}")
+        logger.info(f"Saving ROC curves, PR curves, and classification metrics to {args.output_dir}")
         roc_fig.savefig(os.path.join(args.output_dir, 'roc.png'), dpi=100)
         pr_fig.savefig(os.path.join(args.output_dir, 'pr.png'), dpi=100)
         df = pd.DataFrame(all_metrics)
         df.to_csv(os.path.join(args.output_dir, 'metrics.csv'))
+        with open(os.path.join(args.output_dir, 'conf_models.json'), 'w') as f:
+            json.dump(rocs, f)
         logger.info(f"Classification metrics for threshold of 0.5:\n{df}")
 
 
