@@ -259,7 +259,9 @@ def build_deployment_pkg(argv=None):
         else:
             lvl_dat['taxa'] = tt[lvl].elements.data[:].tolist()
         shutil.copy(os.path.join(os.path.dirname(args.conf_model_json), lvl_dat['model']), tmpdir)
-        lvl_dat['model'] = os.path.basename(lvl_dat.pop('model'))
+        shutil.copy(os.path.join(os.path.dirname(args.conf_model_json), lvl_dat['roc']), tmpdir)
+        lvl_dat['model'] = os.path.basename(lvl_dat['model'])
+        lvl_dat['roc'] = os.path.basename(lvl_dat['roc'])
         #lvl_dat['model'] = os.path.basename(lvl_dat['model_path'])
 
     with open(args.config, 'r') as f:
