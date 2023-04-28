@@ -173,7 +173,6 @@ def process_args(args, comm=None):
     for col in tt.columns:
         col.transform(_load)
     tt = tt.to_dataframe(index=True)
-    tt['species'] = np.arange(len(tt))
 
     args.total_seqs = len(args.difile)
 
@@ -242,6 +241,8 @@ def run_inference(argv=None):
 
 
 def _compute_taxonomy_transforms(tt):
+    tt = tt.copy()
+    tt['species'] = np.arange(len(tt))
     transforms = list()
     levels = tt.columns[1:].values
     for i in range(1, len(levels))[::-1]:
