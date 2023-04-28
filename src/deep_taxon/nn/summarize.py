@@ -16,6 +16,7 @@ import scipy.stats as stats
 #from skl2onnx import convert_sklearn
 #from skl2onnx.common.data_types import FloatTensorType
 import pickle
+import sk2torch
 
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV, SGDClassifier
 from sklearn.dummy import DummyClassifier
@@ -24,6 +25,11 @@ from sklearn.preprocessing import MaxAbsScaler, FunctionTransformer
 from sklearn.pipeline import Pipeline
 import sklearn.metrics as skmet
 
+from skorch import NeuralNetBinaryClassifier
+import skorch
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 from ..utils import parse_logger, ccm
 
@@ -1036,10 +1042,76 @@ def _fit_model(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
     return pipe, X, y
 
 
+class LogisticRegression(nn.Module):
+
+    def __init__(self, n_inputs=3):
+        super().__init__()
+        self.norm = nn.BatchNorm1d(n_inputs + 1)
+        self.weights = nn.Linear(n_inputs + 1, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, data, sample_weight):
+        return self._forward(data)
+
+    @torch.jit.export
+    def _forward(self, x):
+        diff = x[:, 1] - x[:, 2]
+        x = torch.column_stack([x, diff])
+        x = self.norm(x)
+        x = self.weights(x)
+        x = self.sigmoid(x)
+        return x
+
+
+class MyNet(NeuralNetBinaryClassifier):
+    def __init__(self, *args, criterion__reduce=False, **kwargs):
+        # make sure to set reduce=False in your criterion, since we need the loss
+        # for each sample so that it can be weighted
+        super().__init__(*args, criterion__reduce=criterion__reduce, **kwargs)
+
+    def get_loss(self, y_pred, y_true, X, *args, **kwargs):
+        # override get_loss to use the sample_weight from X
+        loss_unreduced = super().get_loss(y_pred, y_true, X, *args, **kwargs)
+        sample_weight = skorch.utils.to_tensor(X['sample_weight'], device=self.device)
+        loss_reduced = (sample_weight * loss_unreduced).mean()
+        return loss_reduced
+
+
+def _fit_skorch(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
+    maxprobs  = maxprobs[:, :2]
+    X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1).astype(np.float32)
+    X = torch.from_numpy(X)
+    y = torch.from_numpy((true == pred).astype(np.int32))
+
+    sample_weight = (X.shape[0] / (2 * torch.bincount(y, minlength=2)))[y]
+    y = y.float()
+
+    X = {'data': X, 'sample_weight': sample_weight}
+
+    max_epochs = 1 if debug else 10
+    pipe = MyNet(LogisticRegression,
+                 criterion=nn.BCELoss,
+                 optimizer=optim.AdamW,
+                 max_epochs=max_epochs)
+
+    logger.info(f"Building confidence model with \n{pipe}")
+    pipe.fit(X, y)
+
+    return pipe, X, y
+
+
+def _write_skorch(model, lvl, outdir, logger):
+    path = os.path.join(outdir, f"{lvl}.score.pt")
+    script = torch.jit.script(model.module_)
+    script.save(path)
+    return path
+
+
 def _to_onnx(model):
     initial_type = [('float_input', FloatTensorType([None, model.coef_.shape[1]]))]
     onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
     return onx.SerializeToString().hex()
+
 
 def _write_model(model, basename, outdir, onnx, logger, n_inputs):
     if onnx:
@@ -1056,6 +1128,7 @@ def _write_model(model, basename, outdir, onnx, logger, n_inputs):
             pickle.dump(model, f)
 
     return output_path
+
 
 def _write_roc(fpr, tpr, thresh, output_dir, lvl):
     path = os.path.join(output_dir, f"{lvl}.roc")
@@ -1104,8 +1177,6 @@ def train_confidence_model(argv=None):
 
         f.close()
 
-    Xs = list()
-    ys = list()
     models = list()
 
     if os.path.exists(args.output_dir) and not args.force:
@@ -1132,10 +1203,14 @@ def train_confidence_model(argv=None):
         for lvl_i, lvl in enumerate(levels):
             lvl = levels[lvl_i]
             logger.info(f"Building confidence model for {lvl}")
-            lr, X, y = _fit_model(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
+            #lr, X, y = _fit_model(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
+            #n_inputs.append(X.shape[1])
+            #outpath = _write_model(lr, lvl, args.output_dir, False, logger, n_inputs[-1])
 
-            n_inputs.append(X.shape[1])
-            outpath = _write_model(lr, lvl, args.output_dir, False, logger, n_inputs[-1])
+            lr, X, y = _fit_skorch(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
+            n_inputs.append(X['data'].shape[1])
+            outpath = _write_skorch(lr, lvl, args.output_dir, logger)
+
             logger.info(f"Evaluating {lvl} model")
 
             metrics = dict()
@@ -1158,8 +1233,6 @@ def train_confidence_model(argv=None):
             y_pred = lr.predict(X)
             logger.info(f"Accuracy is {skmet.accuracy_score(y, y_pred)}, (id = {id(lr)})")
             models.append(lr)
-            Xs.append(X)
-            ys.append(y)
 
             metrics['acc'] = skmet.accuracy_score(y, y_pred)
             metrics['prec'] = skmet.precision_score(y, y_pred)
