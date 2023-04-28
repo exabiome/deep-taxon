@@ -13,12 +13,15 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, precision_recall_curve
 import scipy.stats as stats
-from skl2onnx import convert_sklearn
-from skl2onnx.common.data_types import FloatTensorType
+#from skl2onnx import convert_sklearn
+#from skl2onnx.common.data_types import FloatTensorType
 import pickle
 
-from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.preprocessing import MaxAbsScaler
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV, SGDClassifier
+from sklearn.dummy import DummyClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import MaxAbsScaler, FunctionTransformer
+from sklearn.pipeline import Pipeline
 import sklearn.metrics as skmet
 
 
@@ -1004,30 +1007,33 @@ def aggregate_seqs(argv=None):
     outf.close()
     f.close()
 
+def add_diff(_X):
+    diff = _X[:, 1] - _X[:, 2]
+    return np.concatenate([_X, diff[:, np.newaxis]], axis=1)
 
 def _fit_model(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
+    maxprobs  = maxprobs[:, :2]
     X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1)
-    y = (true == pred).astype(int)
-
+    diff_tfm = FunctionTransformer(add_diff)
     scaler = MaxAbsScaler()
-    scaler.fit(X)
-
-    lrcv = LogisticRegressionCV(penalty='elasticnet', solver='saga', l1_ratios=[.1, .5, .7, .9, .95, .99, 1], n_jobs=n_jobs, cv=cvs)
 
     if debug:
-        logger.info(f"Skipping training")
-        lrcv.coef_ = np.ones(X.shape[1]).reshape(1, -1)
-        lrcv.intercept_ = np.ones(1)
-        lrcv.classes_ = np.arange(2)
+        lr = DummyClassifier(strategy="prior")
     else:
-        logger.info(f"Building confidence model with \n{lrcv}")
-        lrcv.fit(scaler.transform(X), y)
+        lr = SGDClassifier(loss='log_loss', early_stopping=True, validation_fraction=0.1,
+                             class_weight='balanced', alpha=1.0, learning_rate='adaptive', eta0=0.01)
 
-    lr = LogisticRegression()
-    lr.coef_ = scaler.transform(lrcv.coef_)
-    lr.intercept_ = lrcv.intercept_
-    lr.classes_ = lrcv.classes_
-    return lr, X, y
+
+    pipe = Pipeline([('add_diff', diff_tfm),
+                     ('scaler', scaler),
+                     ('lm', lr)])
+
+    y = (true == pred).astype(int)
+
+    logger.info(f"Building confidence model with \n{lr}")
+    pipe.fit(X, y)
+
+    return pipe, X, y
 
 
 def _to_onnx(model):
@@ -1035,22 +1041,26 @@ def _to_onnx(model):
     onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
     return onx.SerializeToString().hex()
 
-def _write_model(model, basename, outdir, onnx, logger):
+def _write_model(model, basename, outdir, onnx, logger, n_inputs):
     if onnx:
         output_path = os.path.join(outdir, f'{basename}.onnx')
-        logger.info(f"Saving {model} to ONNX file {output_path}")
-        initial_type = [('float_input', FloatTensorType([None, model.coef_.shape[1]]))]
+        logger.info(f"Saving {basename} model to ONNX file {output_path}")
+        initial_type = [('float_input', FloatTensorType([None, n_inputs]))]
         onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
         with open(output_path, "wb") as f:
             f.write(onx.SerializeToString())
     else:
         output_path = os.path.join(outdir, f'{basename}.pkl')
-        logger.info(f"Pickling {model} to {output_path}")
+        logger.info(f"Pickling {basename} model to {output_path}")
         with open(output_path, 'wb') as f:
             pickle.dump(model, f)
 
     return output_path
 
+def _write_roc(fpr, tpr, thresh, output_dir, lvl):
+    path = os.path.join(output_dir, f"{lvl}.roc")
+    np.savez(path, fpr=fpr, tpr=tpr, thresh=thresh)
+    return f"{path}.npz"
 
 def train_confidence_model(argv=None):
     from ..utils import get_logger
@@ -1096,85 +1106,89 @@ def train_confidence_model(argv=None):
 
     Xs = list()
     ys = list()
-    models = dict()
+    models = list()
 
     if os.path.exists(args.output_dir) and not args.force:
-        for pkl in glob.glob(f"{args.output_dir}/*.pkl"):
-            with open(pkl, 'rb') as f:
-                lr = pickle.load(f)
-            lvl = os.path.splitext(os.path.basename(pkl))[0]
-            models[lvl] = lr
-            if args.onnx:
-                logger.info(f"Converting {lvl}-level model found in {pkl} to ONNX format")
-                _write_model(lr, lvl, args.output_dir, True, logger)
+        logger.info(f"Found existing directory at {args.output_dir}. Exiting. (Use --force to override)")
+        #for pkl in glob.glob(f"{args.output_dir}/*.pkl"):
+        #    with open(pkl, 'rb') as f:
+        #        lr = pickle.load(f)
+        #    lvl = os.path.splitext(os.path.basename(pkl))[0]
+        #    models[lvl] = lr
+        #    if args.onnx:
+        #        logger.info(f"Converting {lvl}-level model found in {pkl} to ONNX format")
+        #        _write_model(lr, lvl, args.output_dir, True, logger)
 
     else:
         os.makedirs(args.output_dir, exist_ok=args.force)
-        for lvl_i in range(len(levels)):
-            logger.info(f"Building confidence model for {levels[lvl_i]}")
-            lr, X, y = _fit_model(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
-            models[levels[lvl_i]] = lr
-            Xs.append(X)
-            ys.append(y)
-            outpath = _write_model(lr, levels[lvl_i], args.output_dir, args.onnx, logger)
-
-    if args.eval:
-        if X is None:
-            logger.info(f"Cannot evaluate models without summary data. Failing")
-            exit(-1)
-
-        models = [models[k] for k in levels]
-
         all_metrics = list()
+        rocs = list()    # Save this with the model for filtering gtnet results
         roc_fig = plt.figure()
         pr_fig = plt.figure()
 
         roc_ax = roc_fig.gca()
         pr_ax = pr_fig.gca()
+        n_inputs = list()
+        for lvl_i, lvl in enumerate(levels):
+            lvl = levels[lvl_i]
+            logger.info(f"Building confidence model for {lvl}")
+            lr, X, y = _fit_model(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
 
-        rocs = list()
-
-        for lvl, model, x, y in zip(levels, models, Xs, ys):
-            logger.info(f"Evaluating {lvl}-level model")
-            y_prob = model.predict_proba(X)[:, 1]
+            n_inputs.append(X.shape[1])
+            outpath = _write_model(lr, lvl, args.output_dir, False, logger, n_inputs[-1])
+            logger.info(f"Evaluating {lvl} model")
 
             metrics = dict()
+            y_prob = lr.predict_proba(X)[:, 1]
 
             fpr, tpr, thresh = skmet.roc_curve(y, y_prob)
-            rocs.append({'level': lvl, 'fpr': fpr.tolist(), 'tpr': tpr.tolist(), 'thresh': thresh.tolist(), 'onnx': _to_onnx(model)})
-
+            path = _write_roc(fpr, tpr, thresh, args.output_dir, lvl)
+            rocs.append({'level': lvl, 'roc': os.path.basename(path)}) #'fpr': fpr.tolist(), 'tpr': tpr.tolist(), 'thresh': thresh.tolist()})
             auc = skmet.auc(fpr, tpr)
             metrics['auc'] = auc
-
             skmet.RocCurveDisplay(fpr=fpr, tpr=tpr).plot(ax=roc_ax, name=f"{lvl} (AUC = {auc:0.3f})")
 
             prec, rec, _ = skmet.precision_recall_curve(y, y_prob)
             auc = skmet.auc(rec, prec)
             metrics['aupr'] = auc
-
             skmet.PrecisionRecallDisplay(precision=prec, recall=rec).plot(ax=pr_ax, name=f"{lvl} (AUPR = {auc:0.3f})")
 
             y_pred = (y_prob > 0.5).astype(int)
 
-            metrics['acc'] = skmet.accuracy_score(y, y_pred)
-            metrics['prec'] = skmet.precision_score(y, y_pred, average='macro')
-            metrics['prec_w'] = skmet.precision_score(y, y_pred, average='weighted')
-            metrics['rec'] = skmet.recall_score(y, y_pred, average='macro')
-            metrics['rec_w'] = skmet.recall_score(y, y_pred, average='weighted')
-            metrics['f1'] = skmet.f1_score(y, y_pred, average='macro')
-            metrics['f1_w'] = skmet.f1_score(y, y_pred, average='weighted')
+            y_pred = lr.predict(X)
+            logger.info(f"Accuracy is {skmet.accuracy_score(y, y_pred)}, (id = {id(lr)})")
+            models.append(lr)
+            Xs.append(X)
+            ys.append(y)
 
-            all_metrics.append(pd.Series(data=metrics, name=lvl))
+            metrics['acc'] = skmet.accuracy_score(y, y_pred)
+            metrics['prec'] = skmet.precision_score(y, y_pred)
+            metrics['spec'] = skmet.recall_score(y, y_pred, pos_label=0)
+            metrics['rec'] = skmet.recall_score(y, y_pred)
+            metrics['f1'] = skmet.f1_score(y, y_pred)
+            metrics['id'] = id(lr)
+
+            for k, m in zip(('tn', 'fp', 'fn', 'tp'), skmet.confusion_matrix(y, y_pred).ravel()):
+                metrics[k] = int(m)
+            metrics['pos_rate'] = y.mean()
+
+            all_metrics.append(pd.Series(data=metrics, name=levels[lvl_i]))
 
         logger.info(f"Saving ROC curves, PR curves, and classification metrics to {args.output_dir}")
         roc_fig.savefig(os.path.join(args.output_dir, 'roc.png'), dpi=100)
         pr_fig.savefig(os.path.join(args.output_dir, 'pr.png'), dpi=100)
         df = pd.DataFrame(all_metrics)
+        logger.info(f"Classification metrics after training:\n{df}")
         df.to_csv(os.path.join(args.output_dir, 'metrics.csv'))
-        with open(os.path.join(args.output_dir, 'conf_models.json'), 'w') as f:
-            json.dump(rocs, f)
-        logger.info(f"Classification metrics for threshold of 0.5:\n{df}")
 
+        json_path = os.path.join(args.output_dir, 'conf_models.json')
+
+        for i, (lvl, model, _n_inputs) in enumerate(zip(levels, models, n_inputs)):
+            outpath = _write_model(model, lvl, args.output_dir, args.onnx, logger, _n_inputs)
+            rocs[i]['model'] = os.path.relpath(outpath, args.output_dir)
+
+        with open(json_path, 'w') as f:
+            json.dump(rocs, f, indent=2)
 
 if __name__ == '__main__':
     main()

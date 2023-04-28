@@ -8,6 +8,8 @@ from hdmf.common import get_hdf5io
 import torch
 import torch.nn as nn
 import torch.onnx
+import pytorch_lightning as pl
+import numpy as np
 
 from ..utils import get_logger
 from .loader import LazySeqDataset
@@ -117,26 +119,35 @@ def _compute_taxonomy_transforms(tt):
     transforms = list()
     levels = tt.columns[1:].values
     for i in range(1, len(levels))[::-1]:
-        lower = tt[levels[i]].values
-        upper = tt[levels[i-1]].values
+        lower = tt[levels[i]].values.astype(int)
+        upper = tt[levels[i-1]].values.astype(int)
         mat = np.zeros((lower.max() + 1, upper.max() + 1), dtype=np.float32)
         mat[lower, upper] = 1.0
         transforms.append(torch.from_numpy(mat))
     return transforms, levels.astype(np.string_)
 
 
-class MultilevelModel(nn.Module):
+class MultilevelModel(pl.LightningModule):
 
     def __init__(self, model, transforms):
         super().__init__()
         self.model = model
         self.sm = nn.Softmax(dim=1)
-        self.g = transforms[0]
-        self.f = transforms[1]
-        self.o = transforms[2]
-        self.c = transforms[3]
-        self.p = transforms[4]
-        self.d = transforms[5]
+        self.g = transforms[0].to_sparse_csr()
+        self.f = transforms[1].to_sparse_csr()
+        self.o = transforms[2].to_sparse_csr()
+        self.c = transforms[3].to_sparse_csr()
+        self.p = transforms[4].to_sparse_csr()
+        self.d = transforms[5].to_sparse_csr()
+        self.parse = torch.cumsum(torch.Tensor([self.d.shape[1],
+                                                self.p.shape[1],
+                                                self.c.shape[1],
+                                                self.o.shape[1],
+                                                self.f.shape[1],
+                                                self.g.shape[1],
+                                                self.g.shape[0]]), 0).int()
+        self.levels = ['domain', 'phylum', 'class', 'order',
+                       'family', 'genus', 'species']
 
     def forward(self, x):
         s = self.sm(self.model(x))
@@ -160,6 +171,7 @@ def build_deployment_pkg(argv=None):
     import tempfile
     import zipfile
     from hdmf.common import get_hdf5io
+    import ruamel.yaml as yaml
 
     desc = "Convert a Torch model checkpoint to ONNX format"
     epi = ("By default, the ONNX file will be written to same directory "
@@ -168,8 +180,8 @@ def build_deployment_pkg(argv=None):
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
     parser.add_argument('input', type=str, help='the input file to run inference on')
     parser.add_argument('config', type=str, help='the config file used for training')
-    parser.add_argument('nn_model', type=str, help='the NN model for doing predictions')
-    parser.add_argument('conf_model', type=str, help='the checkpoint file to use for running inference')
+    parser.add_argument('checkpoint', type=str, help='the NN model for doing predictions')
+    parser.add_argument('conf_model_json', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('output_dir', type=str, help='the directory to copy to before zipping')
     parser.add_argument('-f', '--force', action='store_true', default=False, help='overwrite output if it exists')
 
@@ -193,9 +205,11 @@ def build_deployment_pkg(argv=None):
     tmpdir = args.output_dir
     logger.info(f'Using temporary directory {tmpdir}')
     path = lambda x: os.path.join(tmpdir, os.path.basename(x))
+    def _cp_file(src_path):
+        shutil.copy(src_path, tmpdir)
+        return os.path.basename(src_path)
 
 
-    #### BEGIN: ONNX conversion
     logger.info(f'Loading config file from {args.config}')
     conf_args = process_config(args.config)
     for k, v in vars(conf_args).items():
@@ -214,48 +228,28 @@ def build_deployment_pkg(argv=None):
     for col in tt.columns:
         col.transform(_load)
 
-    #tt_df = tt.to_dataframe(index=True).set_index('taxon_id').drop(['species'], axis=1)
     tt_df = tt.to_dataframe(index=True)
-    transforms = _compute_taxonomy_transforms(tt_df)
+    transforms, levels = _compute_taxonomy_transforms(tt_df)
 
     size = len(difile.seq_table.sequence) // 10000000
-    dataset = LazySeqDataset(difile=difile, hparams=args, keep_open=True, size=size, rank=0, load=True)
+    size = 2
+    dataset = LazySeqDataset(difile=difile, hparams=args, keep_open=True)#, size=size, rank=0, load=True)
     input_sample = torch.stack([dataset[i][1] for i in range(16)])
 
     # load the model and override batch size
     logger.info(f'Loading model from {args.input} using config {args.config}')
+    args.input_nc = len(dataset.vocab)
     model = process_model(args, inference=True, taxa_table=difile.taxa_table)
 
     logger.info(f'Adding softmax layer and higher level transforms to model')
     model = MultilevelModel(model, transforms)
 
-    output = model(input_sample)
-    logger.info(f'Checking network: input shape = {input_sample.shape}, output shape = {output.shape}')
+    logger.info(f'Tracing model')
+    ts_out = path(os.path.splitext(args.checkpoint)[0] + '.pt')
+    traced = model.to_torchscript(file_path=ts_out, method='script')
 
-    #onnx_out = path(os.path.splitext(args.input)[0] + '.onnx')
-
-    onnx_out = BytesIO()
-
-    logger.info(f'Writing ONNX file to {onnx_out}')
-    with torch.no_grad():
-        torch.onnx.export(model,                                            # model being run
-                          input_sample,                                     # model input (or a tuple for multiple inputs)
-                          onnx_out,                                         # where to save the model (can be a file or file-like object)
-                          export_params=True,                               # store the trained parameter weights inside the model file
-                          opset_version=10,                                 # the ONNX version to export the model to
-                          do_constant_folding=True,                         # whether to execute constant folding for optimization
-                          input_names = ['input'],                          # the model's input names
-                          output_names = ['output'],                        # the model's output names
-                          dynamic_axes={'input' : {0 : 'batch_size'},       # variable length axes
-                                        'output' : {0 : 'batch_size'}})
-
-    onnx_out = onnx_out.getvalue().hex()
-
-    #### END: ONNX conversion
-
-
-    logger.info(f"Loading confidence model info from {args.conf_model}")
-    with open(args.conf_model, 'r') as f:
+    logger.info(f"Loading confidence model info from {args.conf_model_json}")
+    with open(args.conf_model_json, 'r') as f:
         conf_data = json.load(f)
 
     for lvl_dat in conf_data:
@@ -264,51 +258,45 @@ def build_deployment_pkg(argv=None):
             lvl_dat['taxa'] = tt[lvl].data[:].tolist()
         else:
             lvl_dat['taxa'] = tt[lvl].elements.data[:].tolist()
+        shutil.copy(os.path.join(os.path.dirname(args.conf_model_json), lvl_dat['model']), tmpdir)
+        lvl_dat['model'] = os.path.basename(lvl_dat.pop('model'))
+        #lvl_dat['model'] = os.path.basename(lvl_dat['model_path'])
 
-    io.close()
-
-
-    with open(conf_path, 'r') as f:
+    with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
     manifest = {
-        'nn_model': onnx_out,
-        'vocabulary': difile.seq_table.sequence.elements.data[:].tolist()
+        'nn_model': os.path.basename(ts_out),
+        'vocabulary': difile.seq_table.sequence.elements.data[:].tolist(),
         'training_config': config,
         'conf_model': conf_data,
     }
 
+    io.close()
 
-    #logger.info(f"exporting taxa table CSV to {manifest['taxa_table']}")
-    #tt_df.to_csv(manifest['taxa_table'])
-    #logger.info(f"copying {args.config} to {manifest['training_config']}")
-    #shutil.copyfile(args.config, manifest['training_config'])
-
-    #wd = os.path.dirname(tmpdir)
-    #zipdir = os.path.basename(tmpdir)
-
-    #for k in ('taxa_table', 'nn_model', 'training_config'):
-    #    manifest[k] = os.path.basename(manifest[k])
+    wd = os.path.dirname(tmpdir)
+    zipdir = os.path.basename(tmpdir)
 
     with open(os.path.join(tmpdir, 'manifest.json'), 'w') as f:
         json.dump(manifest, f, indent=4)
 
-    #ret_wd = os.getcwd()
-    #os.chdir(wd)
+    ret_wd = os.getcwd()
+    os.chdir(wd)
 
-    #zip_path = zipdir + ".zip"
-    #zipf = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED)
+    zip_path = zipdir + ".zip"
+    logger.info(f"Writing deployment package to {os.path.join(wd, zip_path)}")
+    zipf = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED)
 
 
-    #for root, dirs, files in os.walk(zipdir):
-    #    for file in files:
-    #        path = os.path.join(root, file)
-    #        logger.info(f'adding {path} to {zip_path}')
-    #        zipf.write(path)
+    for root, dirs, files in os.walk(zipdir):
+        for file in files:
+            path = os.path.join(root, file)
+            logger.info(f'adding {path} to {zip_path}')
+            zipf.write(path)
 
-    #zipf.close()
+    zipf.close()
 
-    #os.chdir(ret_wd)
+    os.chdir(ret_wd)
 
     #logger.info(f'removing {tmpdir}')
     #shutil.rmtree(tmpdir)
