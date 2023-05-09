@@ -133,12 +133,12 @@ class MultilevelModel(pl.LightningModule):
         super().__init__()
         self.model = model
         self.sm = nn.Softmax(dim=1)
-        self.g = transforms[0].to_sparse_csr()
-        self.f = transforms[1].to_sparse_csr()
-        self.o = transforms[2].to_sparse_csr()
-        self.c = transforms[3].to_sparse_csr()
-        self.p = transforms[4].to_sparse_csr()
-        self.d = transforms[5].to_sparse_csr()
+        self.register_buffer('g', transforms[0].to_sparse_csr(), persistent=True)
+        self.register_buffer('f', transforms[1].to_sparse_csr(), persistent=True)
+        self.register_buffer('o', transforms[2].to_sparse_csr(), persistent=True)
+        self.register_buffer('c', transforms[3].to_sparse_csr(), persistent=True)
+        self.register_buffer('p', transforms[4].to_sparse_csr(), persistent=True)
+        self.register_buffer('d', transforms[5].to_sparse_csr(), persistent=True)
         self.parse = torch.cumsum(torch.Tensor([self.d.shape[1],
                                                 self.p.shape[1],
                                                 self.c.shape[1],
