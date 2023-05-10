@@ -38,6 +38,7 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('input', type=str, help='the input file to run inference on')
     parser.add_argument('checkpoint', type=str, help='the checkpoint file to use for running inference')
     parser.add_argument('-o', '--output', type=str, help='the file to save outputs to', default=None)
+    parser.add_argument('--force', action='store_true', help='overwrite existing outputs file', default=False)
     parser.add_argument('-f', '--resnet_features', action='store_true', help='drop classifier from ResNet model before inference', default=False)
     parser.add_argument('-F', '--features', action='store_true', help='outputs are features i.e. do not softmax and compute predictions', default=False)
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
@@ -52,8 +53,9 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-B', '--n_batches', type=int, default=100, help='the number of batches to accumulate between each write to disk or aggregation')
     # parser.add_argument('-a', '--aggregate', action='store_true', help='aggregate chunks within sequences', default=False)
     parser.add_argument('-S', '--n_seqs', type=int, default=500, help='the number of sequences to aggregate chunks for between each write to disk')
-    parser.add_argument('-p', '--maxprob', metavar='TOPN', nargs='?', const=1, default=0, type=int,
+    parser.add_argument('-p', '--maxprob', metavar='TOPN', default=2, type=int,
                         help='store the top TOPN probablities of each output. By default, TOPN=1')
+    parser.add_argument("-H", "--hierarchy", default=False, action='store_true', help='force predictions to follow probability hierarchy')
     parser.add_argument('-c', '--save_chunks', action='store_true', help='do store network outputs for each chunk', default=False)
     parser.add_argument('-O', '--overlap', action='store_true',  default=False,
                         help='overlap with step size used during training. default is to use nonoverlapping windows')
@@ -88,7 +90,7 @@ def process_args(args, comm=None):
     logger = args.logger
     # set up logger
     if logger is None:
-        logger = logging.getLogger()
+        logger = logging.getLogger('inference')
         logger.setLevel(logging.INFO)
     if args.debug:
         logger.setLevel(logging.DEBUG)
@@ -130,6 +132,10 @@ def process_args(args, comm=None):
             os.mkdir(outdir)
         args.output =  os.path.join(outdir, 'outputs.h5')
 
+    if os.path.exists(args.output) and not args.force:
+        print(f'Output file {args.output} exists. Exiting. Use --force to override this behavior', file=sys.stderr)
+        sys.exit(1)
+
     # setting classify to so that we can get labels when
     # we load data. We do this here because we assume that
     # network is going to output features, and we want to use the
@@ -160,6 +166,13 @@ def process_args(args, comm=None):
         args.difile = io.read()
 
     args.difile.set_label_key(args.tgt_tax_lvl)
+
+    # read the taxonomy table so we can compute higher-order taxonomic probabilities
+    tt = args.difile.taxa_table
+    _load = lambda x: x[:]
+    for col in tt.columns:
+        col.transform(_load)
+    tt = tt.to_dataframe(index=True)
 
     args.total_seqs = len(args.difile)
 
@@ -193,7 +206,7 @@ def process_args(args, comm=None):
 
     model.eval()
 
-    ret = [model, dataset, loader, args, env]
+    ret = [model, dataset, loader, args, env, tt]
 
     if size > 1:
         args.device = torch.device('cuda:%d' % local_rank)
@@ -212,7 +225,7 @@ def run_inference(argv=None):
     """
 
     args = parse_args(argv=argv)
-    model, dataset, loader, args, env = process_args(args)
+    model, dataset, loader, args, env, tt = process_args(args)
 
     f_kwargs = dict()
     if env is not None:
@@ -224,12 +237,90 @@ def run_inference(argv=None):
         f_kwargs['driver'] = 'mpio'
         f_kwargs['comm'] = MPI.COMM_WORLD
 
-    parallel_chunked_inf_summ(model, dataset, loader, args, f_kwargs)
+    parallel_chunked_inf_summ(model, dataset, loader, args, f_kwargs, tt)
 
 
-def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
+def _compute_taxonomy_transforms(tt):
+    tt = tt.copy()
+    tt['species'] = np.arange(len(tt))
+    transforms = list()
+    levels = tt.columns[1:].values
+    for i in range(1, len(levels))[::-1]:
+        lower = tt[levels[i]].values
+        upper = tt[levels[i-1]].values
+        mat = np.zeros((lower.max() + 1, upper.max() + 1), dtype=np.float32)
+        mat[lower, upper] = 1.0
+        transforms.append(torch.from_numpy(mat))
+    return transforms, levels.astype(np.string_)
+
+
+
+### BEGIN: Helper functions for parallel_chunked_inf_summ
+def _write_hier_maxprobs(idx, outputs_q, n_levels, maxprob, tt, maxprobs_dset, preds_dset):
+    maxprobs = np.zeros((len(idx), n_levels, maxprob)) - 1.0
+    preds = np.zeros((len(idx), n_levels), dtype=int)
+    n_highest_taxa = tt[:, 0].max() + 1
+    # for each taxonomic level in each sequence, compute the
+    # max l probabilities normalized across probabilities
+    # for taxa within the upper taxonomic level's classification
+    # e.g. if a sequence is classified as an archaea, limit phylum
+    # classification to archaeal phyla
+    for seq_i in range(len(idx)):
+        mask = np.arange(n_highest_taxa)
+        for lvl_i in range(len(outputs_q)):
+            # get probabilities for taxa that are in the taxa classified
+            # in the upper level
+            valid_probs = outputs_q[lvl_i][seq_i][mask]
+            valid_probs /= valid_probs.sum()
+
+            k = max(valid_probs.shape[0] - maxprob, 0)
+            l = valid_probs.shape[0] - k
+            maxprobs[seq_i, lvl_i, :l] = np.sort(np.partition(valid_probs, k)[k:])[::-1]
+
+            pred = mask[np.argmax(valid_probs)]
+            if lvl_i + 1 < tt.shape[1]:
+                mask = np.unique(tt[tt[:, lvl_i] == pred, lvl_i + 1])
+            preds[seq_i, lvl_i] = pred
+
+    maxprobs_dset[idx] = maxprobs
+    preds_dset[idx] = preds
+
+def _write_maxprobs(idx, outputs_q, n_levels, maxprob, maxprobs_dset):
+    maxprobs = np.zeros((len(idx), n_levels, maxprob)) - 1.0
+    # for each taxonomic level in each sequence, compute the
+    # max l probabilities
+    for seq_i in range(len(idx)):
+        for lvl_i in range(len(outputs_q)):
+            oq = outputs_q[lvl_i][seq_i]
+            k = max(oq.shape[0] - maxprob, 0)
+            l = oq.shape[0] - k
+            maxprobs[seq_i, lvl_i, :l] = np.sort(np.partition(oq, k)[k:])[::-1]
+    maxprobs_dset[idx] = maxprobs
+
+
+def _write_preds(idx, outputs_q, n_levels, maxprob, preds_dset):
+    preds = np.zeros((len(idx), n_levels), dtype=int)
+    # for each taxonomic level in each sequence, compute the
+    # prediction based on the maximum probability
+    for seq_i in range(len(idx)):
+        for lvl_i in range(len(outputs_q)):
+            preds[seq_i, lvl_i] = np.argmax(outputs_q[lvl_i][seq_i])
+    preds_dset[idx] = preds
+
+
+def _compute_mean(idx, outputs_q, counts_q):
+    for oq in outputs_q:
+        for i in range(len(idx)):
+            oq[i] /= counts_q[i]
+### END: Helper functions for parallel_chunked_inf_summ
+
+
+def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
+
+    transforms, levels = _compute_taxonomy_transforms(tt)
 
     n_samples = args.total_seqs
+    n_levels = len(levels)
     args.logger.debug(f"rank {dataset.rank} - n_samples = {n_samples}")
     all_seq_ids = dataset.difile.id #get_sequence_subset()
     seq_lengths  = dataset.difile.lengths #get_seq_lengths()
@@ -239,18 +330,24 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
     if args.save_chunks:
         outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
     args.logger.debug(f"rank {dataset.rank} - making labels")
-    labels_dset = f.require_dataset('labels', shape=(n_samples,), dtype=int, fillvalue=-1)
+    labels_dset = f.require_dataset('labels', shape=(n_samples, n_levels), dtype=int, fillvalue=-1)
     labels_dset.attrs['n_classes'] = args.n_outputs
 
-    maxprob_dset = None
-    if args.maxprob > 0 :
-        args.logger.debug(f"rank {dataset.rank} - making maxprob")
-        maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, args.maxprob), dtype=float)
+    args.logger.debug(f"rank {dataset.rank} - making maxprob")
+    maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, n_levels, args.maxprob), dtype=float)
 
     args.logger.debug(f"rank {dataset.rank} - making preds")
-    preds_dset = f.require_dataset('preds', shape=(n_samples,), dtype=int, fillvalue=-1)
+    preds_dset = f.require_dataset('preds', shape=(n_samples, n_levels,), dtype=int, fillvalue=-1)
     args.logger.debug(f"rank {dataset.rank} - making lengths")
     seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
+
+    levels_dset = f.create_dataset('levels', shape=(n_levels,), dtype=levels.dtype)
+    rank = 0
+    if 'comm' in fkwargs:
+        fkwargs['comm'].Get_rank()
+    if rank == 0:
+        levels_dset[:] = levels
+
     if all_seq_ids is None:
         seqlen_dset[:] = seq_lengths
     else:
@@ -261,10 +358,12 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
 
     # to-write queues - we use those so we're not doing I/O at every iteration
-    outputs_q = list()
+    outputs_q = [[] for i in range(len(transforms) + 1)]
     labels_q = list()
     counts_q = list()
     seqs_q = list()
+
+    labels_tt = tt.iloc[:, 1:].values
 
     # write what's in the to-write queues
     if not hasattr(args, 'n_seqs'):
@@ -276,57 +375,64 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
 
     uniq_labels = set()
     args.logger.debug(f"rank {dataset.rank} - reading and processing")
-    for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(model, loader, args.device, debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0):
+    go_args = [model, loader, args.device]
+    go_kwargs = dict(debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0, transforms=transforms)
+
+    for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(*go_args, **go_kwargs):
 
         seqs, counts = np.unique(_seq_ids, return_counts=True)
-        outputs_sum = list()
+        outputs_sum = [[] for i in range(len(_outputs))]
         labels = list()
         for i in seqs:
             mask = _seq_ids == i
-            outputs_sum.append(_outputs[mask].sum(axis=0))
-            labels.append(_labels[mask][0])
+            for o_sum, _output in zip(outputs_sum, _outputs):
+                o_sum.append(_output[mask].sum(axis=0))
+            labels.append(labels_tt[_labels[mask][0]])
         uniq_labels.update(_labels)
 
         # Add the first sum of this iteration to the last sum of the
         # previous iteration if they belong to the same sequence
         if len(seqs_q) > 0 and seqs_q[-1] == seqs[0]:
-            outputs_q[-1] += outputs_sum[0]
+            for oq, osum in zip(outputs_q, outputs_sum):
+                oq[-1] += osum[0]
             counts_q[-1] += counts[0]
             # drop the first sum so we don't end up with duplicates
             seqs = seqs[1:]
             counts = counts[1:]
-            outputs_sum = outputs_sum[1:]
+            outputs_sum = [osum[1:] for osum in outputs_sum]
             labels = labels[1:]
 
-        outputs_q.extend(outputs_sum)
+        for oq, osum in zip(outputs_q, outputs_sum):
+            oq.extend(osum)
         seqs_q.extend(seqs)
         counts_q.extend(counts)
         labels_q.extend(labels)
 
         # write when we get above a certain number of sequences
-        if len(outputs_q) > args.n_seqs:
+        if len(seqs_q) > args.n_seqs:
+            # do not write the last sequence in case
+            # there are more chunks left for it
             idx = seqs_q[:-1]
             args.logger.debug(f"rank {dataset.rank} - saving these sequences {idx}")
-            # compute mean from sums
-            for i in range(len(idx)):
-                outputs_q[i] /= counts_q[i]
+
+            _compute_mean(idx, outputs_q, counts_q)
 
             if outputs_dset is not None:
-                outputs_dset[idx] = outputs_q[:-1]
+                for i in range(len(outputs_dset)):
+                    outputs_dset[i][idx] = outputs_q[i][:-1]
             labels_dset[idx] = labels_q[:-1]
 
-            if maxprob_dset is not None:
-                k = outputs_q[0].shape[0] - args.maxprob
-                maxprobs = list()
-                for i in range(len(idx)):
-                    maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
-                maxprob_dset[idx] = maxprobs
 
-            if preds_dset is not None:
-                preds = [np.argmax(outputs_q[i]) for i in range(len(idx))]
-                preds_dset[idx] = preds
+            if args.hierarchy:
+                _write_hier_maxprobs(idx, outputs_q, n_levels, args.maxprob, labels_tt, maxprob_dset, preds_dset)
+            else:
+                _write_maxprobs(idx, outputs_q, n_levels, args.maxprob, maxprob_dset)
+                _write_preds(idx, outputs_q, n_levels, args.maxprob, preds_dset)
 
-            outputs_q = outputs_q[-1:]
+
+            # drop everything except for the last sequence
+            # in case there are more chunks left for it
+            outputs_q = [oq[-1:] for oq in outputs_q]
             seqs_q = seqs_q[-1:]
             counts_q = counts_q[-1:]
             labels_q = labels_q[-1:]
@@ -334,29 +440,21 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs):
     args.logger.debug(f"rank {dataset.rank} - saving these sequences {seqs_q}")
     args.logger.debug(f"rank {dataset.rank} - came across these labels {list(sorted(uniq_labels))}")
     # clean up what's left in the to-write queue
-    for i in range(len(seqs_q)):
-        outputs_q[i] /= counts_q[i]
+    _compute_mean(seqs_q, outputs_q, counts_q)
 
-    if outputs_dset is not None:
-        outputs_dset[seqs_q] = outputs_q
     labels_dset[seqs_q] = labels_q
 
-    if maxprob_dset is not None:
-        k = outputs_q[0].shape[0] - args.maxprob
-        maxprobs = list()
-        for i in range(len(seqs_q)):
-            maxprobs.append(np.sort(np.partition(outputs_q[i], k)[k:])[::-1])
-        maxprob_dset[seqs_q] = maxprobs
-
-    if preds_dset is not None:
-        preds = [np.argmax(outputs_q[i]) for i in range(len(seqs_q))]
-        preds_dset[seqs_q] = preds
+    if args.hierarchy:
+        _write_hier_maxprobs(seqs_q, outputs_q, n_levels, args.maxprob, labels_tt, maxprob_dset, preds_dset)
+    else:
+        _write_maxprobs(seqs_q, outputs_q, n_levels, args.maxprob, maxprob_dset)
+        _write_preds(seqs_q, outputs_q, n_levels, args.maxprob, preds_dset)
 
     args.logger.info(f'rank {dataset.rank} - closing {args.output}')
     f.close()
 
 
-def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
+def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True, transforms=None):
     """
     Get model outputs for all samples in the given loader
 
@@ -379,19 +477,39 @@ def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
         generator
 
     """
-    indices, outputs, labels, orig_lens, seq_ids = [], [], [], [], []
     max_batches = 100 if debug else sys.maxsize
     from tqdm import tqdm
     file = sys.stdout
     it = loader
     if prog_bar:
         it = tqdm(it, file=sys.stdout)
+
+    n_levels = 1
+    if transforms is not None:
+        transforms = [v.to(device) for v in transforms]
+        n_levels = len(transforms) + 1
+
+    indices, outputs, labels, orig_lens, seq_ids = [], [[] for i in range(n_levels)], [], [], []
+
     with torch.no_grad():
         for idx, (i, X, y, olen, seq_i) in enumerate(it):
             X = X.to(device)
             with autocast():
-                out = model(X).to('cpu').detach()
-            outputs.append(out)
+                out = model(X)
+
+            if transforms is not None:
+                all_outputs = [out]
+                for tfm in transforms:
+                    all_outputs.append(all_outputs[-1].matmul(tfm))
+                    all_outputs[-2] = all_outputs[-2].to('cpu').detach()
+                all_outputs[-1] = all_outputs[-1].to('cpu').detach()
+                out = all_outputs[::-1]
+            else:
+                out = [out.to('cpu').detach()]
+
+            for o_i in range(n_levels):
+                outputs[o_i].append(out[o_i])
+
             indices.append(i.to('cpu').detach())
             labels.append(y.to('cpu').detach())
             orig_lens.append(olen.to('cpu').detach())
@@ -400,7 +518,7 @@ def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
                 break
             if chunks and (idx+1) % chunks == 0:
                 yield cat(indices, outputs, labels, orig_lens, seq_ids)
-                indices, outputs, labels, orig_lens, seq_ids = [], [], [], [], []
+                indices, outputs, labels, orig_lens, seq_ids = [], [[] for i in range(n_levels)], [], [], []
     if chunks is None:
         return cat(indices, outputs, labels, orig_lens, seq_ids)
     else:
@@ -410,7 +528,7 @@ def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True):
 
 def cat(indices, outputs, labels, orig_lens, seq_ids):
     ret = (torch.cat(indices).numpy(),
-           torch.cat(outputs).numpy(),
+           [torch.cat(o).numpy() for o in outputs],
            torch.cat(labels).numpy(),
            torch.cat(orig_lens).numpy(),
            torch.cat(seq_ids).numpy())

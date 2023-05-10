@@ -864,6 +864,8 @@ class LazyWindowChunkedDIFile:
         e = min(s + self.window, l)
 
         item = self.__get_helper(seq_i)
+        if isinstance(item['seq'], np.ndarray):
+            item['seq'] = torch.from_numpy(item['seq'])
         item['seq_idx'] = item['id']
 
         seq = torch.full((self.window,), self.padval, dtype=item['seq'].dtype)

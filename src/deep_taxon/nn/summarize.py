@@ -1,8 +1,10 @@
 import argparse
 import sys
 import glob
+import json
 import os.path
 import os
+import tempfile
 import matplotlib.pyplot as plt
 import h5py
 import seaborn as sns
@@ -12,6 +14,22 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, precision_recall_curve
 import scipy.stats as stats
+#from skl2onnx import convert_sklearn
+#from skl2onnx.common.data_types import FloatTensorType
+import pickle
+import sk2torch
+
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV, SGDClassifier
+from sklearn.dummy import DummyClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import MaxAbsScaler, FunctionTransformer
+from sklearn.pipeline import Pipeline
+import sklearn.metrics as skmet
+
+import skorch
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 from ..utils import parse_logger, ccm
 
@@ -995,23 +1013,158 @@ def aggregate_seqs(argv=None):
     outf.close()
     f.close()
 
-def train_confidence_model(argv=None):
-    import pickle
+def add_diff(_X):
+    diff = _X[:, 1] - _X[:, 2]
+    return np.concatenate([_X, diff[:, np.newaxis]], axis=1)
 
-    from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-    from sklearn.preprocessing import MaxAbsScaler
+def _fit_model(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
+    maxprobs  = maxprobs[:, :2]
+    X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1)
+    diff_tfm = FunctionTransformer(add_diff)
+    scaler = MaxAbsScaler()
+
+    if debug:
+        lr = DummyClassifier(strategy="prior")
+    else:
+        lr = SGDClassifier(loss='log_loss', early_stopping=True, validation_fraction=0.1,
+                             class_weight='balanced', alpha=1.0, learning_rate='adaptive', eta0=0.01)
+
+
+    pipe = Pipeline([('add_diff', diff_tfm),
+                     ('scaler', scaler),
+                     ('lm', lr)])
+
+    y = (true == pred).astype(int)
+
+    logger.info(f"Building confidence model with \n{lr}")
+    pipe.fit(X, y)
+
+    return pipe, X, y
+
+
+class LogisticRegression(nn.Module):
+
+    def __init__(self, n_inputs=3):
+        super().__init__()
+        self.norm = nn.BatchNorm1d(n_inputs + 1)
+        self.weights = nn.Linear(n_inputs + 1, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        diff = x[:, 1] - x[:, 2]
+        x = torch.column_stack([x, diff])
+        x = self.norm(x)
+        x = self.weights(x)
+        x = self.sigmoid(x)
+        return x
+
+class WeightedLogisticRegression(nn.Module):
+
+    def __init__(self, n_inputs=3):
+        super().__init__()
+        self.log_reg = LogisticRegression(n_inputs=n_inputs)
+
+    def forward(self, data, sample_weight):
+        return self.log_reg(data)
+
+class MyNet(skorch.NeuralNetBinaryClassifier):
+
+    def __init__(self, *args, criterion__reduction='none', **kwargs):
+        # make sure to set reduce=False in your criterion, since we need the loss
+        # for each sample so that it can be weighted
+        super().__init__(*args, criterion__reduction=criterion__reduction, **kwargs)
+
+    def get_loss(self, y_pred, y_true, X, *args, **kwargs):
+        # override get_loss to use the sample_weight from X
+        loss_unreduced = super().get_loss(y_pred, y_true, X, *args, **kwargs)
+        sample_weight = skorch.utils.to_tensor(X['sample_weight'], device=self.device)
+        loss_reduced = (sample_weight * loss_unreduced).mean()
+        return loss_reduced
+
+
+def _fit_skorch(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
+    maxprobs  = maxprobs[:, :2]
+    X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1).astype(np.float32)
+    X = torch.from_numpy(X)
+    y = torch.from_numpy((true == pred).astype(np.int32))
+
+    if debug:
+        X = X[:1024]
+        y = y[:1024]
+
+    sample_weight = (X.shape[0] / (2 * torch.bincount(y, minlength=2)))[y]
+    y = y.float()
+
+    X = {'data': X, 'sample_weight': sample_weight}
+
+    with tempfile.TemporaryDirectory(dir='.') as d:
+        pipe = MyNet(WeightedLogisticRegression,
+                     criterion=nn.BCELoss,
+                     optimizer=optim.AdamW,
+                     max_epochs=10,
+                     callbacks=[skorch.callbacks.Checkpoint(monitor='valid_acc_best',
+                                           dirname=d, load_best=True)],
+                     iterator_train__shuffle=True)
+
+        logger.info(f"Building confidence model with \n{pipe}")
+        pipe.fit(X, y)
+
+    return pipe, X, y
+
+
+def _write_skorch(model, lvl, outdir, logger):
+    path = os.path.join(outdir, f"{lvl}.score.pt")
+    model = model.module_.log_reg
+    model.eval()
+    with torch.no_grad():
+        script = torch.jit.script(model)
+        script.save(path)
+    return path
+
+
+def _to_onnx(model):
+    initial_type = [('float_input', FloatTensorType([None, model.coef_.shape[1]]))]
+    onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
+    return onx.SerializeToString().hex()
+
+
+def _write_model(model, basename, outdir, onnx, logger, n_inputs):
+    if onnx:
+        output_path = os.path.join(outdir, f'{basename}.onnx')
+        logger.info(f"Saving {basename} model to ONNX file {output_path}")
+        initial_type = [('float_input', FloatTensorType([None, n_inputs]))]
+        onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
+        with open(output_path, "wb") as f:
+            f.write(onx.SerializeToString())
+    else:
+        output_path = os.path.join(outdir, f'{basename}.pkl')
+        logger.info(f"Pickling {basename} model to {output_path}")
+        with open(output_path, 'wb') as f:
+            pickle.dump(model, f)
+
+    return output_path
+
+
+def _write_roc(fpr, tpr, thresh, output_dir, lvl):
+    path = os.path.join(output_dir, f"{lvl}.roc")
+    np.savez(path, fpr=fpr, tpr=tpr, thresh=thresh)
+    return f"{path}.npz"
+
+def train_confidence_model(argv=None):
     from ..utils import get_logger
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("output", type=str, help="the path to save the model to")
-    parser.add_argument("-s", "--summary", type=str, help='the summarized sequence NN outputs')
-    parser.add_argument('-O', '--onnx', metavar='PATH', nargs='?', const=True, default=False, type=str,
-                        help='Save data in ONNX format. If an argument is passed, it is assumed to be the path to a pickled model to convert to ONNX format')
+    parser.add_argument("output_dir", type=str, help="the directory to save models to")
+    parser.add_argument("summary", type=str, help='the summarized sequence NN outputs', nargs='?')
+    parser.add_argument('-O', '--onnx', default=False, action='store_true', help='Save data in ONNX format')
     parser.add_argument("-k", "--topk", metavar="TOPK", type=int, help="use the TOPK probabilities for building confidence model", default=None)
     parser.add_argument('-j', '--n_jobs', metavar='NJOBS', nargs='?', const=True, default=None, type=int,
                         help='the number of jobs to use for cross-validation. if NJOBS is not specified, use the number of folds i.e. 5')
     parser.add_argument('-c', '--cvs', metavar='NFOLDS', default=5, type=int,
                         help='the number of cross-validation folds to use. default is 5')
+    parser.add_argument("-e", "--eval", action='store_true', help='evaluate the train confidence model', default=False)
+    parser.add_argument("-f", "--force", action='store_true', help='force training i.e. do not use output if it exists', default=False)
+    parser.add_argument("-d", "--debug", action='store_true', help='Run workflow without training models', default=False)
 
     args = parser.parse_args(argv)
 
@@ -1020,55 +1173,111 @@ def train_confidence_model(argv=None):
 
     logger = get_logger()
 
-    if isinstance(args.onnx, str):
-        # just convert the given model to ONNX
-        with open(args.output, 'rb') as f:
-            lr = pickle.load(f)
-        args.output = args.onnx
-    else:
+    X, y = None, None
+    levels = None
+
+    if args.summary:
         # train a new model
-        logger.info(f"reading outputs summary data from {args.summary}")
+        logger.info(f"Reading outputs summary data from {args.summary}")
         f = h5py.File(args.summary, 'r')
+
+        levels = f['levels'].asstr()[:]
 
         true = f['labels'][:]
         pred = f['preds'][:]
 
         # the top-k probabilities, in descending order
-        maxprobs = f['maxprob'][:, :args.topk]
+        maxprobs = f['maxprob'][:, :, :args.topk]
         lengths = f['lengths'][:]
 
         f.close()
 
-        X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1)
-        y = (true == pred).astype(int)
+    models = list()
 
-        scaler = MaxAbsScaler()
-        scaler.fit(X)
+    if os.path.exists(args.output_dir) and not args.force:
+        logger.info(f"Found existing directory at {args.output_dir}. Exiting. (Use --force to override)")
+        #for pkl in glob.glob(f"{args.output_dir}/*.pkl"):
+        #    with open(pkl, 'rb') as f:
+        #        lr = pickle.load(f)
+        #    lvl = os.path.splitext(os.path.basename(pkl))[0]
+        #    models[lvl] = lr
+        #    if args.onnx:
+        #        logger.info(f"Converting {lvl}-level model found in {pkl} to ONNX format")
+        #        _write_model(lr, lvl, args.output_dir, True, logger)
 
-        lrcv = LogisticRegressionCV(penalty='elasticnet', solver='saga', l1_ratios=[.1, .5, .7, .9, .95, .99, 1], n_jobs=args.n_jobs, cv=args.cvs)
-        logger.info(f"building confidence model with \n{lrcv}")
-
-        lrcv.fit(scaler.transform(X), y)
-
-        lr = LogisticRegression()
-        lr.coef_ = scaler.transform(lrcv.coef_)
-        lr.intercept_ = lrcv.intercept_
-        lr.classes_ = lrcv.classes_
-
-    if args.onnx:
-        from skl2onnx import convert_sklearn
-        from skl2onnx.common.data_types import FloatTensorType
-
-        logger.info(f"saving {lr} to ONNX file {args.output}")
-        initial_type = [('float_input', FloatTensorType([None, lr.coef_.shape[1]]))]
-        onx = convert_sklearn(lr, target_opset=12, initial_types=initial_type, options={type(lr): {'zipmap': False}})
-        with open(args.output, "wb") as f:
-            f.write(onx.SerializeToString())
     else:
-        logger.info(f"pickling {lr} to {args.output}")
-        with open(args.output, 'wb') as f:
-            pickle.dump(lr, f)
+        os.makedirs(args.output_dir, exist_ok=args.force)
+        all_metrics = list()
+        rocs = list()    # Save this with the model for filtering gtnet results
+        roc_fig = plt.figure()
+        pr_fig = plt.figure()
 
+        roc_ax = roc_fig.gca()
+        pr_ax = pr_fig.gca()
+        n_inputs = list()
+        for lvl_i, lvl in enumerate(levels):
+            lvl = levels[lvl_i]
+            logger.info(f"Building confidence model for {lvl}")
+            #lr, X, y = _fit_model(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
+            #n_inputs.append(X.shape[1])
+            #outpath = _write_model(lr, lvl, args.output_dir, False, logger, n_inputs[-1])
+
+            lr, X, y = _fit_skorch(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
+            n_inputs.append(X['data'].shape[1])
+
+            logger.info(f"Evaluating {lvl} model")
+
+            metrics = dict()
+            y_prob = lr.predict_proba(X)[:, 1]
+
+            fpr, tpr, thresh = skmet.roc_curve(y, y_prob)
+            auc = skmet.auc(fpr, tpr)
+            metrics['auc'] = auc
+            skmet.RocCurveDisplay(fpr=fpr, tpr=tpr).plot(ax=roc_ax, name=f"{lvl} (AUC = {auc:0.3f})")
+
+            prec, rec, _ = skmet.precision_recall_curve(y, y_prob)
+            auc = skmet.auc(rec, prec)
+            metrics['aupr'] = auc
+            skmet.PrecisionRecallDisplay(precision=prec, recall=rec).plot(ax=pr_ax, name=f"{lvl} (AUPR = {auc:0.3f})")
+
+            y_pred = (y_prob > 0.5).astype(int)
+
+            y_pred = lr.predict(X)
+            logger.info(f"Accuracy is {skmet.accuracy_score(y, y_pred)}, (id = {id(lr)})")
+            models.append(lr)
+
+            metrics['acc'] = skmet.accuracy_score(y, y_pred)
+            metrics['prec'] = skmet.precision_score(y, y_pred)
+            metrics['spec'] = skmet.recall_score(y, y_pred, pos_label=0)
+            metrics['rec'] = skmet.recall_score(y, y_pred)
+            metrics['f1'] = skmet.f1_score(y, y_pred)
+            metrics['id'] = id(lr)
+
+            for k, m in zip(('tn', 'fp', 'fn', 'tp'), skmet.confusion_matrix(y, y_pred).ravel()):
+                metrics[k] = int(m)
+            metrics['pos_rate'] = float(y.mean())
+
+            all_metrics.append(pd.Series(data=metrics, name=levels[lvl_i]))
+
+            outpath = _write_skorch(lr, lvl, args.output_dir, logger)
+            path = _write_roc(fpr, tpr, thresh, args.output_dir, lvl)
+            rocs.append({'level': lvl, 'roc': os.path.basename(path), 'model': os.path.basename(outpath)}) #'fpr': fpr.tolist(), 'tpr': tpr.tolist(), 'thresh': thresh.tolist()})
+
+        logger.info(f"Saving ROC curves, PR curves, and classification metrics to {args.output_dir}")
+        roc_fig.savefig(os.path.join(args.output_dir, 'roc.png'), dpi=100)
+        pr_fig.savefig(os.path.join(args.output_dir, 'pr.png'), dpi=100)
+        df = pd.DataFrame(all_metrics)
+        logger.info(f"Classification metrics after training:\n{df}")
+        df.to_csv(os.path.join(args.output_dir, 'metrics.csv'))
+
+        json_path = os.path.join(args.output_dir, 'conf_models.json')
+
+        #for i, (lvl, model, _n_inputs) in enumerate(zip(levels, models, n_inputs)):
+        #    outpath = _write_model(model, lvl, args.output_dir, args.onnx, logger, _n_inputs)
+        #    rocs[i]['model'] = os.path.relpath(outpath, args.output_dir)
+
+        with open(json_path, 'w') as f:
+            json.dump(rocs, f, indent=2)
 
 if __name__ == '__main__':
     main()

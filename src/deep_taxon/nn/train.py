@@ -221,7 +221,8 @@ def process_args(args=None):
     )
 
     targs['accumulate_grad_batches'] = args.accumulate
-    targs['val_check_interval'] = 1 / args.n_val_checks
+    #targs['val_check_interval'] = 1 / args.n_val_checks
+    targs['check_val_every_n_epoch'] = 12
 
 
     env = None
@@ -559,7 +560,7 @@ def run_lightning(argv=None):
                                              filename='t-{epoch}-{step}',
                                              save_weights_only=False,
                                              train_time_interval=timedelta(minutes=args.timed_checkpoint),
-                                             save_top_k=1,
+                                             save_top_k=12,
                                              save_last=True,
                                              monitor=None))
 
