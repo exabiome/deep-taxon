@@ -26,7 +26,8 @@ from pytorch_lightning import Trainer as PLTrainer, seed_everything
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor, DeviceStatsMonitor, TQDMProgressBar
 
-from pytorch_lightning.profiler import PyTorchProfiler
+from pytorch_lightning.profilers import PyTorchProfiler
+
 
 from pytorch_lightning.plugins.environments import SLURMEnvironment, LSFEnvironment
 try:
@@ -551,6 +552,7 @@ def run_lightning(argv=None):
                                          mode=mode,
                                          monitor=monitor))
         if args.timed_checkpoint:
+            monitor, mode = (AbstractLit.train_loss, 'min') if (args.manifold or args.umap) else (AbstractLit.train_acc, 'max')
             if isinstance(args.timed_checkpoint, str):
                 args.timed_checkpoint = int(args.timed_checkpoint)
             else:
@@ -562,7 +564,8 @@ def run_lightning(argv=None):
                                              train_time_interval=timedelta(minutes=args.timed_checkpoint),
                                              save_top_k=12,
                                              save_last=True,
-                                             monitor=None))
+                                             mode=mode,
+                                             monitor=monitor))
 
     if args.early_stop:
         callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.001, patience=10, verbose=False, mode=mode))

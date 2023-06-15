@@ -14,7 +14,7 @@ class SplitCollater:
         l_idx = -1
         if isinstance(samples, tuple):
             samples = [samples]
-        for i, X, y, seq_id in samples:
+        for i, X, y, seq_id, genome in samples:
             if maxlen < X.shape[l_idx]:
                 maxlen = X.shape[l_idx]
         X_ret = list()
@@ -22,7 +22,8 @@ class SplitCollater:
         idx_ret = list()
         size_ret = list()
         seq_id_ret = list()
-        for i, X, y, seq_id in samples:
+        genome_ret = list()
+        for i, X, y, seq_id, genome in samples:
             dif = maxlen - X.shape[l_idx]
             X_ = X
             if dif > 0:
@@ -32,14 +33,16 @@ class SplitCollater:
             size_ret.append(X.shape[l_idx])
             idx_ret.append(i)
             seq_id_ret.append(seq_id)
+            genome_ret.append(genome)
         X_ret = torch.stack(X_ret)
         y_ret = torch.stack(y_ret)
         size_ret = torch.tensor(size_ret)
         idx_ret = torch.tensor(idx_ret)
         seq_id_ret = torch.tensor(seq_id_ret)
+        genome_ret = torch.tensor(genome_ret)
 
         if self.freq == 1.0 or rs.rand() < self.freq:
-            f = factors[rs.randint(len(factors))]
+            f = self.factors[rs.randint(len(self.factors))]
             y_ret = y_ret.repeat_interleave(f)
             seq_id_ret = seq_id_ret.repeat_interleave(f)
             idx_ret = idx_ret.repeat_interleave(f)
@@ -51,7 +54,7 @@ class SplitCollater:
             bad_chunk_pos = torch.where(n_bad_chunks > 0)[0]
             start_bad_chunks = bad_chunk_pos + q[bad_chunk_pos]
 
-        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret, genome_ret)
 
 
 class SeqCollater:
@@ -64,7 +67,7 @@ class SeqCollater:
         l_idx = -1
         if isinstance(samples, tuple):
             samples = [samples]
-        for i, X, y, seq_id in samples:
+        for i, X, y, seq_id, genome in samples:
             if maxlen < X.shape[l_idx]:
                 maxlen = X.shape[l_idx]
         X_ret = list()
@@ -72,7 +75,8 @@ class SeqCollater:
         idx_ret = list()
         size_ret = list()
         seq_id_ret = list()
-        for i, X, y, seq_id in samples:
+        genome_ret = list()
+        for i, X, y, seq_id, genome in samples:
             dif = maxlen - X.shape[l_idx]
             X_ = X
             if dif > 0:
@@ -82,6 +86,7 @@ class SeqCollater:
             size_ret.append(X.shape[l_idx])
             idx_ret.append(int(i))
             seq_id_ret.append(int(seq_id))
+            genome_ret.append(int(genome))
         X_ret = torch.stack(X_ret)
         y_ret = torch.stack(y_ret)
         size_ret = torch.tensor(size_ret)
@@ -101,12 +106,12 @@ class TrainingSeqCollater:
         l_idx = -1
         if isinstance(samples, tuple):
             samples = [samples]
-        for i, X, y, seq_id in samples:
+        for i, X, y, seq_id, genome_id in samples:
             if maxlen < X.shape[l_idx]:
                 maxlen = X.shape[l_idx]
         X_ret = list()
         y_ret = list()
-        for i, X, y, seq_id in samples:
+        for i, X, y, seq_id, genome_id in samples:
             dif = maxlen - X.shape[l_idx]
             X_ = X
             if dif > 0:
@@ -233,7 +238,7 @@ class TnfCollater:
             samples = [samples]
 
         maxlen = 0
-        for i, X, y, seq_id in samples:
+        for i, X, y, seq_id, genome in samples:
             if maxlen < X.shape[l_idx]:
                 maxlen = X.shape[l_idx]
 
@@ -242,7 +247,8 @@ class TnfCollater:
         idx_ret = list()
         size_ret = list()
         seq_id_ret = list()
-        for i, X, y, seq_id in samples:
+        genome_ret = list()
+        for i, X, y, seq_id, genome in samples:
             dif = maxlen - X.shape[l_idx]
             X_ = X
             if dif > 0:
@@ -252,6 +258,7 @@ class TnfCollater:
             size_ret.append(X.shape[l_idx])
             idx_ret.append(i)
             seq_id_ret.append(seq_id)
+            genome_ret.append(genome)
 
         # calculate tetranucleotide frequency
         chunks = torch.stack(X_ret)

@@ -340,6 +340,8 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
     preds_dset = f.require_dataset('preds', shape=(n_samples, n_levels,), dtype=int, fillvalue=-1)
     args.logger.debug(f"rank {dataset.rank} - making lengths")
     seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
+    args.logger.debug(f"rank {dataset.rank} - making lengths")
+    genomes_dset = f.require_dataset('genomes', shape=(n_samples,), dtype=int, fillvalue=-1)
 
     levels_dset = f.create_dataset('levels', shape=(n_levels,), dtype=levels.dtype)
     rank = 0
@@ -362,6 +364,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
     labels_q = list()
     counts_q = list()
     seqs_q = list()
+    genomes_q = list()
 
     labels_tt = tt.iloc[:, 1:].values
 
@@ -378,16 +381,18 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
     go_args = [model, loader, args.device]
     go_kwargs = dict(debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0, transforms=transforms)
 
-    for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(*go_args, **go_kwargs):
+    for idx, _outputs, _labels, _orig_lens, _seq_ids, _genome_ids in get_outputs(*go_args, **go_kwargs):
 
         seqs, counts = np.unique(_seq_ids, return_counts=True)
         outputs_sum = [[] for i in range(len(_outputs))]
         labels = list()
+        genomes = list()
         for i in seqs:
             mask = _seq_ids == i
             for o_sum, _output in zip(outputs_sum, _outputs):
                 o_sum.append(_output[mask].sum(axis=0))
             labels.append(labels_tt[_labels[mask][0]])
+            genomes.append(_genome_ids[mask][0])
         uniq_labels.update(_labels)
 
         # Add the first sum of this iteration to the last sum of the
@@ -401,12 +406,14 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
             counts = counts[1:]
             outputs_sum = [osum[1:] for osum in outputs_sum]
             labels = labels[1:]
+            genomes = genomes[1:]
 
         for oq, osum in zip(outputs_q, outputs_sum):
             oq.extend(osum)
         seqs_q.extend(seqs)
         counts_q.extend(counts)
         labels_q.extend(labels)
+        genomes_q.extend(genomes)
 
         # write when we get above a certain number of sequences
         if len(seqs_q) > args.n_seqs:
@@ -421,6 +428,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
                 for i in range(len(outputs_dset)):
                     outputs_dset[i][idx] = outputs_q[i][:-1]
             labels_dset[idx] = labels_q[:-1]
+            genomes_dset[idx] = genomes_q[:-1]
 
 
             if args.hierarchy:
@@ -436,6 +444,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
             seqs_q = seqs_q[-1:]
             counts_q = counts_q[-1:]
             labels_q = labels_q[-1:]
+            genomes_q = genomes_q[-1:]
 
     args.logger.debug(f"rank {dataset.rank} - saving these sequences {seqs_q}")
     args.logger.debug(f"rank {dataset.rank} - came across these labels {list(sorted(uniq_labels))}")
@@ -443,6 +452,7 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
     _compute_mean(seqs_q, outputs_q, counts_q)
 
     labels_dset[seqs_q] = labels_q
+    genomes_dset[seqs_q] = genomes_q
 
     if args.hierarchy:
         _write_hier_maxprobs(seqs_q, outputs_q, n_levels, args.maxprob, labels_tt, maxprob_dset, preds_dset)
@@ -489,10 +499,10 @@ def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True, 
         transforms = [v.to(device) for v in transforms]
         n_levels = len(transforms) + 1
 
-    indices, outputs, labels, orig_lens, seq_ids = [], [[] for i in range(n_levels)], [], [], []
+    indices, outputs, labels, orig_lens, seq_ids, genomes = [], [[] for i in range(n_levels)], [], [], [], []
 
     with torch.no_grad():
-        for idx, (i, X, y, olen, seq_i) in enumerate(it):
+        for idx, (i, X, y, olen, seq_i, genome) in enumerate(it):
             X = X.to(device)
             with autocast():
                 out = model(X)
@@ -514,24 +524,26 @@ def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True, 
             labels.append(y.to('cpu').detach())
             orig_lens.append(olen.to('cpu').detach())
             seq_ids.append(seq_i.to('cpu').detach())
+            genomes.append(genome.to('cpu').detach())
             if idx >= max_batches:
                 break
             if chunks and (idx+1) % chunks == 0:
                 yield cat(indices, outputs, labels, orig_lens, seq_ids)
-                indices, outputs, labels, orig_lens, seq_ids = [], [[] for i in range(n_levels)], [], [], []
+                indices, outputs, labels, orig_lens, seq_ids, genomes = [], [[] for i in range(n_levels)], [], [], [], []
     if chunks is None:
-        return cat(indices, outputs, labels, orig_lens, seq_ids)
+        return cat(indices, outputs, labels, orig_lens, seq_ids, genome)
     else:
         if len(indices) > 0:
-            yield cat(indices, outputs, labels, orig_lens, seq_ids)
+            yield cat(indices, outputs, labels, orig_lens, seq_ids, genome)
 
 
-def cat(indices, outputs, labels, orig_lens, seq_ids):
+def cat(indices, outputs, labels, orig_lens, seq_ids, genome):
     ret = (torch.cat(indices).numpy(),
            [torch.cat(o).numpy() for o in outputs],
            torch.cat(labels).numpy(),
            torch.cat(orig_lens).numpy(),
-           torch.cat(seq_ids).numpy())
+           torch.cat(seq_ids).numpy(),
+           torch.cat(genome).numpy())
     return ret
 
 
