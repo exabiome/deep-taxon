@@ -92,7 +92,8 @@ class SeqCollater:
         size_ret = torch.tensor(size_ret)
         idx_ret = torch.tensor(idx_ret)
         seq_id_ret = torch.tensor(seq_id_ret)
-        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret)
+        genome_ret = torch.tensor(genome_ret)
+        return (idx_ret, X_ret, y_ret, size_ret, seq_id_ret, genome_ret)
 
 
 class TrainingSeqCollater:
