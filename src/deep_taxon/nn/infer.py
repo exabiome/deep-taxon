@@ -44,6 +44,8 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-d', '--debug', action='store_true', default=False,
                         help='run in debug mode i.e. only run two batches')
+    parser.add_argument('--pdebug', action='store_true', default=False,
+                        help='run as rank 0 with 3 ranks to test parallel code')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
 
@@ -112,6 +114,9 @@ def process_args(args, comm=None):
         rank = env.global_rank()
         size = env.world_size()
 
+    if args.pdebug:
+        size = 3
+
     # Figure out the checkpoint file to read from
     # and where to save outputs to
     if args.output is None:
@@ -175,6 +180,7 @@ def process_args(args, comm=None):
     tt = tt.to_dataframe(index=True)
 
     args.total_seqs = len(args.difile)
+    args.total_genomes = np.unique(args.difile.seq_table.genome.data).shape[0]
 
     if not args.overlap:
         model.hparams.step = model.hparams.window
@@ -412,6 +418,28 @@ def _flush_queues(args, labels_tt, items_q, outputs_q, counts_q, maxprobs_dset, 
     del labels_q[:-1]
 
     return idx
+
+_stats = ['n_ctgs', 'max_len', 'mean_len', 'l50', 'n50', 'l90', 'n90']
+def _asm_stats(lengths):
+    lengths = np.sort(lengths)[::-1]
+    cumsum = np.cumsum(lengths)
+    max_len = cumsum[0]
+
+    len50 = cumsum[-1] * 0.5
+    N50 = np.where(cumsum > len50)[0][0]
+    L50 = lengths[N50]
+
+    len90 = cumsum[-1] * 0.9
+    N90 = np.where(cumsum > len90)[0][0]
+    L90 = lengths[N90]
+
+    return {'n_ctgs': len(lengths),
+            'max_len': max_len,
+            'mean_len': lengths.mean(),
+            'l50': L50,
+            'n50': N50,
+            'l90': L90,
+            'n90': N90}
 ### END: Helper functions for parallel_chunked_inf_summ
 
 
@@ -424,7 +452,8 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
     args.logger.debug(f"rank {dataset.rank} - n_samples = {n_samples}")
     all_seq_ids = dataset.difile.id #get_sequence_subset()
     seq_lengths  = dataset.difile.lengths #get_seq_lengths()
-    all_gnm_ids = np.unique(dataset.difile.genomes)
+    all_genomes = dataset.difile.genomes
+    all_gnm_ids = np.unique(all_genomes)
 
     f = h5py.File(args.output, 'w', **fkwargs)
     outputs_dset = None
@@ -453,26 +482,35 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
 
     gnm_grp = f.create_group("genomes")
 
+    n_genomes = args.total_genomes
     args.logger.debug(f"rank {dataset.rank} - making labels")
-    gnm_labels_dset = gnm_grp.require_dataset('labels', shape=(n_samples, n_levels), dtype=int, fillvalue=-1)
+    gnm_labels_dset = gnm_grp.require_dataset('labels', shape=(n_genomes, n_levels), dtype=int, fillvalue=-1)
     gnm_labels_dset.attrs['n_classes'] = args.n_outputs
     args.logger.debug(f"rank {dataset.rank} - making maxprob")
-    gnm_maxprobs_dset = gnm_grp.require_dataset('maxprob', shape=(n_samples, n_levels, args.maxprob), dtype=float)
+    gnm_maxprobs_dset = gnm_grp.require_dataset('maxprob', shape=(n_genomes, n_levels, args.maxprob), dtype=float)
     args.logger.debug(f"rank {dataset.rank} - making preds")
-    gnm_preds_dset = gnm_grp.require_dataset('preds', shape=(n_samples, n_levels,), dtype=int, fillvalue=-1)
+    gnm_preds_dset = gnm_grp.require_dataset('preds', shape=(n_genomes, n_levels,), dtype=int, fillvalue=-1)
     args.logger.debug(f"rank {dataset.rank} - making lengths")
-    gnmlen_dset = gnm_grp.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
+    gnmlen_dset = gnm_grp.require_dataset('lengths', shape=(n_genomes,), dtype=int, fillvalue=-1)
     gnm_lengths = np.bincount(dataset.difile.genomes, weights=dataset.difile.lengths)
 
-    if all_seq_ids is None:
-        gnmlen_dset[:] = gnm_lengths
-    else:
-        gnm_lengths = gnm_lengths[all_gnm_ids]
-        args.logger.debug(f"rank {dataset.rank} - writing gnm_lengths")
-        # iterate over indices individually - passing this off to h5py takes prohibitively long
-        for gnm_i, gnm_len in zip(all_gnm_ids, gnm_lengths):
-            gnmlen_dset[gnm_i] = gnm_len
+    stats_grp = gnm_grp.create_group("asm_stats")
+    asm_stat_dsets = dict()
+    for stat in _stats:
+        asm_stat_dsets[stat] = stats_grp.create_dataset(stat, shape=(n_genomes,), dtype=int, fillvalue=-1)
 
+    gnm_lengths = gnm_lengths[all_gnm_ids]
+    args.logger.debug(f"rank {dataset.rank} - writing gnm_lengths")
+    # iterate over indices individually - passing this off to h5py takes prohibitively long
+    for gnm_i, gnm_len in zip(all_gnm_ids, gnm_lengths):
+        gnmlen_dset[gnm_i] = gnm_len
+
+    args.logger.debug(f"rank {dataset.rank} - computing and writing assembly stats")
+    for gnm_i in all_gnm_ids:
+        mask = all_genomes == gnm_i
+        asm_stats = _asm_stats(seq_lengths[mask])
+        for stat in _stats:
+            asm_stat_dsets[stat][gnm_i] = asm_stats[stat]
 
     levels_dset = f.create_dataset('levels', shape=(n_levels,), dtype=levels.dtype)
     rank = 0
