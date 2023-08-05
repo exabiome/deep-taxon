@@ -19,6 +19,7 @@ def main():
             'ncbi-path': Command('gtdb.download.ncbi_path', 'Print path at NCBI FTP site to stdout'),
             'ncbi-fetch': Command('gtdb.download.ncbi_fetch', 'Retrieve sequence data from NCBI FTP site using rsync'),
             'make-fof': Command('gtdb.make_fof.make_fof', 'Find files and print paths for accessions'),
+            'get-accessions': Command('gtdb.make_fof.get_accessions', 'Print accessions from metadata file'),
             'prepare-data': Command('gtdb.prepare_data.prepare_data', 'Aggregate sequence data GTDB using a file-of-files'),
             'merge-meta': Command('gtdb.prepare_data.merge_metadata', 'Merge metadata files from different sources'),
             'count-sequence': Command('gtdb.prepare_data.count_sequence', 'Count the length of total sequence length for a set of accessions'),

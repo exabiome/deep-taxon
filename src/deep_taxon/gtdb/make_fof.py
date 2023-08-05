@@ -5,6 +5,48 @@ def get_taxa_id(path):
     return c + '_' + n
 
 
+def get_accessions(argv=None):
+    import argparse
+    import pandas as pd
+    import numpy as np
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('metadata', type=str, help='metadata file from GTDB')
+    rep_grp = parser.add_mutually_exclusive_group()
+    rep_grp.add_argument('-r', '--rep', action='store_true', default=False, help='keep representative genomes only. keep both by default')
+    rep_grp.add_argument('-t', '--nonrep_test', action='store_true', default=False, help='keep test non-representatives')
+    rep_grp.add_argument('-c', '--nonrep_calib', action='store_true', default=False, help='keep calibration non-representatives')
+
+    args = parser.parse_args(args=argv)
+
+    taxdf = pd.read_csv(args.metadata, header=0, sep='\t', usecols=['accession', 'gtdb_genome_representative', 'contig_count'])
+
+    taxdf = taxdf.set_index('accession')
+
+    if args.rep:
+        accessions = taxdf[taxdf.index == taxdf['gtdb_genome_representative']].index
+    elif (args.nonrep_test or args.nonrep_calib):
+        nonrep_taxdf = taxdf[taxdf.index != taxdf['gtdb_genome_representative']]
+
+        groups = nonrep_taxdf[['gtdb_genome_representative', 'contig_count']].groupby('gtdb_genome_representative')
+        min_ctgs = groups.idxmin()['contig_count']
+        max_ctgs = groups.idxmax()['contig_count']
+        best_worst_nonrep_accessions = np.unique(np.concatenate([min_ctgs, max_ctgs]))
+
+        tmp_taxdf = nonrep_taxdf.drop(best_worst_nonrep_accessions , axis=0)
+        groups = tmp_taxdf[['gtdb_genome_representative', 'contig_count']].groupby('gtdb_genome_representative')
+        min_ctgs = groups.idxmin()['contig_count']
+        max_ctgs = groups.idxmax()['contig_count']
+        accessions = np.unique(np.concatenate([min_ctgs, max_ctgs]))
+        if args.nonrep_test:
+            accessions = nonrep_taxdf.drop(accessions, axis=0).index
+    else:
+        accessions = taxdf.index
+
+    for acc in accessions:
+        print(acc[3:])
+
+
 def make_fof(argv=None):
     '''Find files and print paths for accessions'''
     import argparse
