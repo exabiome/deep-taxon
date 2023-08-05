@@ -1,6 +1,9 @@
 import argparse
+import json
 import logging
 import os
+import os.path as op
+import shutil
 import sys
 import warnings
 
@@ -67,9 +70,9 @@ def to_onnx(argv=None):
             setattr(args, k, v)
 
     if args.output is None:
-        args.output = f'{os.path.splitext(args.checkpoint)[0]}.onnx'
+        args.output = f'{op.splitext(args.checkpoint)[0]}.onnx'
 
-    if os.path.exists(args.output) and not args.force:
+    if op.exists(args.output) and not args.force:
         print(f'ONNX file {args.output} already exists. Use -f to overwrite', file=sys.stderr)
         sys.exit(1)
 
@@ -160,28 +163,43 @@ class MultilevelModel(pl.LightningModule):
         return torch.cat([d, p, c, o, f, g, s], dim=1)
 
 
+def _load_conf_model(conf_model_json, tgtdir):
+    with open(conf_model_json, 'r') as f:
+        conf_data = json.load(f)
+
+    os.mkdir(tgtdir)
+    for lvl_dat in conf_data:
+        lvl = lvl_dat['level']
+        shutil.copy(op.join(op.dirname(conf_model_json), lvl_dat['model']), tgtdir)
+        shutil.copy(op.join(op.dirname(conf_model_json), lvl_dat['roc']), tgtdir)
+        lvl_dat['model'] = op.join(op.basename(tgtdir), op.basename(lvl_dat['model']))
+        lvl_dat['roc'] = op.join(op.basename(tgtdir), op.basename(lvl_dat['roc']))
+
+    return conf_data
+
+
 def build_deployment_pkg(argv=None):
     """
     Convert a Torch model checkpoint to ONNX format
     """
 
     import json
-    import os
     import shutil
     import tempfile
     import zipfile
     from hdmf.common import get_hdf5io
     import ruamel.yaml as yaml
 
-    desc = "Convert a Torch model checkpoint to ONNX format"
-    epi = ("By default, the ONNX file will be written to same directory "
-           "as checkpoint")
+    desc = "Build the deployment package for GTNet"
+    epi = """The conf-model command should be run twice before running this. Once for building
+          confidence models for contigs and once for building confidence models for bins."""
 
     parser = argparse.ArgumentParser(description=desc, epilog=epi)
-    parser.add_argument('input', type=str, help='the input file to run inference on')
+    parser.add_argument('input', type=str, help='an deep-taxon input file containing sample input and taxonomy table')
     parser.add_argument('config', type=str, help='the config file used for training')
-    parser.add_argument('checkpoint', type=str, help='the NN model for doing predictions')
-    parser.add_argument('conf_model_json', type=str, help='the checkpoint file to use for running inference')
+    parser.add_argument('checkpoint', type=str, help='the torch checkpoint for doing predictions')
+    parser.add_argument('ctg_conf_model', type=str, help='the contigs confidence models JSON')
+    parser.add_argument('bin_conf_model', type=str, help='the bins confidence models JSON')
     parser.add_argument('output_dir', type=str, help='the directory to copy to before zipping')
     parser.add_argument('-f', '--force', action='store_true', default=False, help='overwrite output if it exists')
 
@@ -193,7 +211,7 @@ def build_deployment_pkg(argv=None):
 
     logger = get_logger()
 
-    if os.path.exists(args.output_dir):
+    if op.exists(args.output_dir):
         if args.force:
             logger.info(f"{args.output_dir} exists, removing tree")
             shutil.rmtree(args.output_dir)
@@ -204,11 +222,7 @@ def build_deployment_pkg(argv=None):
     os.mkdir(args.output_dir)
     tmpdir = args.output_dir
     logger.info(f'Using temporary directory {tmpdir}')
-    path = lambda x: os.path.join(tmpdir, os.path.basename(x))
-    def _cp_file(src_path):
-        shutil.copy(src_path, tmpdir)
-        return os.path.basename(src_path)
-
+    path = lambda x: op.join(tmpdir, op.basename(x))
 
     logger.info(f'Loading config file from {args.config}')
     conf_args = process_config(args.config)
@@ -245,54 +259,53 @@ def build_deployment_pkg(argv=None):
     model = MultilevelModel(model, transforms)
 
     logger.info(f'Tracing model')
-    ts_out = path(os.path.splitext(args.checkpoint)[0] + '.pt')
+    ts_out = path(op.splitext(args.checkpoint)[0] + '.pt')
     traced = model.to_torchscript(file_path=ts_out, method='script')
 
-    logger.info(f"Loading confidence model info from {args.conf_model_json}")
-    with open(args.conf_model_json, 'r') as f:
-        conf_data = json.load(f)
-
-    for lvl_dat in conf_data:
-        lvl = lvl_dat['level']
-        if lvl == 'species':
-            lvl_dat['taxa'] = tt[lvl].data[:].tolist()
-        else:
-            lvl_dat['taxa'] = tt[lvl].elements.data[:].tolist()
-        shutil.copy(os.path.join(os.path.dirname(args.conf_model_json), lvl_dat['model']), tmpdir)
-        shutil.copy(os.path.join(os.path.dirname(args.conf_model_json), lvl_dat['roc']), tmpdir)
-        lvl_dat['model'] = os.path.basename(lvl_dat['model'])
-        lvl_dat['roc'] = os.path.basename(lvl_dat['roc'])
-        #lvl_dat['model'] = os.path.basename(lvl_dat['model_path'])
+    logger.info(f"Loading confidence model info from {args.bin_conf_model} and {args.ctg_conf_model}")
+    conf_data = {
+        'contigs': _load_conf_model(args.ctg_conf_model, op.join(tmpdir, 'contigs')),
+        'bins': _load_conf_model(args.bin_conf_model, op.join(tmpdir, 'bins'))
+    }
 
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
+    taxa = list()
+    for lvl in tt.colnames[1:]:
+        taxa.append({'level': lvl})
+        if lvl == 'species':
+            taxa[-1]['taxa'] = tt[lvl].data[:].tolist()
+        else:
+            taxa[-1]['taxa'] = tt[lvl].elements.data[:].tolist()
+
     manifest = {
-        'nn_model': os.path.basename(ts_out),
+        'nn_model': op.basename(ts_out),
         'vocabulary': difile.seq_table.sequence.elements.data[:].tolist(),
         'training_config': config,
         'conf_model': conf_data,
+        'taxa': taxa,
     }
 
     io.close()
 
-    wd = os.path.dirname(tmpdir)
-    zipdir = os.path.basename(tmpdir)
+    wd = op.dirname(tmpdir)
+    zipdir = op.basename(tmpdir)
 
-    with open(os.path.join(tmpdir, 'manifest.json'), 'w') as f:
-        json.dump(manifest, f, indent=4)
+    with open(op.join(tmpdir, 'manifest.json'), 'w') as f:
+        json.dump(manifest, f)
 
     ret_wd = os.getcwd()
     os.chdir(wd)
 
     zip_path = zipdir + ".zip"
-    logger.info(f"Writing deployment package to {os.path.join(wd, zip_path)}")
+    logger.info(f"Writing deployment package to {op.join(wd, zip_path)}")
     zipf = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED)
 
 
     for root, dirs, files in os.walk(zipdir):
         for file in files:
-            path = os.path.join(root, file)
+            path = op.join(root, file)
             logger.info(f'adding {path} to {zip_path}')
             zipf.write(path)
 
@@ -302,7 +315,6 @@ def build_deployment_pkg(argv=None):
 
     #logger.info(f'removing {tmpdir}')
     #shutil.rmtree(tmpdir)
-
     #logger.info(f'deployment package saved to {tmpdir}.zip')
 
 
@@ -346,11 +358,11 @@ def run_onnx_inference(argv=None):
 
     files = ('taxa_table', 'nn_model', 'conf_model', 'training_config')
     # read manifest
-    with open(os.path.join(args.deploy_dir, 'manifest.json'), 'r') as f:
+    with open(op.join(args.deploy_dir, 'manifest.json'), 'r') as f:
         manifest = json.load(f)
     # remap files in deploy_dir to be relative to where we are running
     for key in files:
-        manifest[key] = os.path.join(args.deploy_dir, os.path.basename(manifest[key]))
+        manifest[key] = op.join(args.deploy_dir, op.basename(manifest[key]))
 
     model_path = manifest['nn_model']
     conf_model_path = manifest['conf_model']

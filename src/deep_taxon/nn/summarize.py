@@ -1099,12 +1099,6 @@ def _write_skorch(model, lvl, outdir, logger):
     return path
 
 
-def _to_onnx(model):
-    initial_type = [('float_input', FloatTensorType([None, model.coef_.shape[1]]))]
-    onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
-    return onx.SerializeToString().hex()
-
-
 def _write_model(model, basename, outdir, onnx, logger, n_inputs):
     if onnx:
         output_path = os.path.join(outdir, f'{basename}.onnx')
