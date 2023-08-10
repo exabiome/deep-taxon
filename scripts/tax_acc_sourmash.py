@@ -3,7 +3,7 @@ import pandas as pd
 import re
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 
-from exabiome.utils import parse_logger
+from deep_taxon.utils import parse_logger
 
 parser = argparse.ArgumentParser()
 parser.add_argument('lca', type=str, help='sourmash LCA output')
@@ -37,7 +37,7 @@ def func(row):
 
 logger.info(f'reading GTDB metadata file from {args.metadata}')
 keep_cols = ['accession', 'gtdb_taxonomy', 'gtdb_genome_representative']
-taxdf = pd.read_csv(args.metadata, header=0, sep='\t')[keep_cols].apply(func, axis=1).set_index('accession')
+taxdf = pd.read_csv(args.metadata, header=0, sep='\t', usecols=keep_cols).apply(func, axis=1).set_index('accession')
 
 
 # "GCA_000380905.1-1094-AQYW01000001.1 Nanoarchaeota archaeon SCGC AAA011-L22 DUSEL4_1DRAFT_contig_80.81_C, whole genome shotgun sequence",nomatch,,,,,,,,

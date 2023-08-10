@@ -191,3 +191,17 @@ def balsplit(weights, size, rank=None):
         return np.array(np.sort(ids[rank]))
     else:
         return [np.array(np.sort(ids[i])) for i in range(size)]
+
+
+def path_size(path):
+    path = path[:-1]
+    return (path, os.path.getsize(path))
+
+
+class ArgumentParser(argparse.ArgumentParser):
+
+    def __init__(self, prog=None, **kwargs):
+        kwargs.set_default('prog', f"{os.path.basename(sys.argv[0])} {sys.argv[1]}")
+        super().__init__(prog=prog, **kwargs)
+
+
