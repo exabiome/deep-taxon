@@ -44,6 +44,8 @@ def parse_args(*addl_args, argv=None):
     parser.add_argument('-g', '--gpus', nargs='?', const=True, default=False, help='use GPU')
     parser.add_argument('-d', '--debug', action='store_true', default=False,
                         help='run in debug mode i.e. only run two batches')
+    parser.add_argument('--pdebug', action='store_true', default=False,
+                        help='run as rank 0 with 3 ranks to test parallel code')
     parser.add_argument('-l', '--logger', type=parse_logger, default='', help='path to logger [stdout]')
     parser.add_argument('-b', '--batch_size', type=int, help='batch size', default=64)
 
@@ -112,6 +114,9 @@ def process_args(args, comm=None):
         rank = env.global_rank()
         size = env.world_size()
 
+    if args.pdebug:
+        size = 3
+
     # Figure out the checkpoint file to read from
     # and where to save outputs to
     if args.output is None:
@@ -175,12 +180,14 @@ def process_args(args, comm=None):
     tt = tt.to_dataframe(index=True)
 
     args.total_seqs = len(args.difile)
+    args.total_genomes = np.unique(args.difile.seq_table.genome.data).shape[0]
 
     if not args.overlap:
         model.hparams.step = model.hparams.window
 
     if size > 1:
-        dataset = LazySeqDataset(difile=args.difile, hparams=argparse.Namespace(**model.hparams), keep_open=True, comm=comm, size=size, rank=rank)
+        dataset = LazySeqDataset(difile=args.difile, hparams=argparse.Namespace(**model.hparams),
+                                 keep_open=True, comm=comm, size=size, rank=rank, bal_gnm=True)
     else:
         dataset = LazySeqDataset(difile=args.difile, hparams=argparse.Namespace(**model.hparams), keep_open=True)
 
@@ -312,6 +319,127 @@ def _compute_mean(idx, outputs_q, counts_q):
     for oq in outputs_q:
         for i in range(len(idx)):
             oq[i] /= counts_q[i]
+
+def _reduce_chunks(labels_tt, ids, outputs, chunk_labels):
+    """ Reduce outputs and labels for each item
+
+    Args:
+        labels_tt:  the integerized taxonomy table
+        ids:        the ids for each chunk
+        outputs:    the output for each chunk
+
+    Returns:
+        items:          the unique items from *ids*
+        counts:         the number of occurence of each unique item in *ids*
+        outputs_sum:    the reduced output for each unique item
+        labels:         the label for each item
+    """
+    values, counts = np.unique(ids, return_counts=True)
+    outputs_sum = [[] for i in range(len(outputs))]
+    labels = list()
+    for i in values:
+        mask = ids == i
+        for o_sum, _output in zip(outputs_sum, outputs):
+            o_sum.append(_output[mask].sum(axis=0))
+        labels.append(labels_tt[chunk_labels[mask][0]])
+    return values, counts, outputs_sum, labels
+
+
+def _update_queues(items_q, items, outputs_q, outputs_sum, counts_q, counts, labels_q, labels):
+    """Update queues
+    Args:
+        items_q:        the IDs of the items in queue
+        items:          the IDs of the items at this iteration
+        outputs_q:      the outputs of the items in the queue
+        outputs_sum:    the reduced outputs for the chunks of each items at this iteration
+        counts_q:       the number of chunks that have gone into each item in the queue
+        counts:         the number of chunks for each item at this iteration
+        labels_q:       the labels of each item in the queue
+        labels:         the labels for each item at this iteration
+    """
+    # Add the first sum of this iteration to the last sum of
+    # the previous iteration if they belong to the same sequence
+    if len(items_q) > 0 and items_q[-1] == items[0]:
+        for oq, osum in zip(outputs_q, outputs_sum):
+            oq[-1] += osum[0]
+        counts_q[-1] += counts[0]
+        # drop the first sum so we don't end up with duplicates
+        items = items[1:]
+        counts = counts[1:]
+        outputs_sum = [osum[1:] for osum in outputs_sum]
+        labels = labels[1:]
+
+    for oq, osum in zip(outputs_q, outputs_sum):
+        oq.extend(osum)
+    items_q.extend(items)
+    counts_q.extend(counts)
+    labels_q.extend(labels)
+
+def _flush_queues(args, labels_tt, items_q, outputs_q, counts_q, maxprobs_dset, preds_dset, labels_q, labels_dset, final=False):
+    """Empty queues
+    Args:
+        args:           the args from parallel_chunked_inf_summ
+        labels_tt:      the integerized taxonomy table
+        items_q:        the IDs of the items in queue
+        outputs_q:      the outputs of the items in the queue
+        counts_q:       the number of chunks that have gone into each item in the queue
+        maxprobs_dset:  the dataset to write maxprobabilities to
+        preds_dset:     the dataset to write predictions to
+        labels_q:       the labels of each item in the queue
+        labels_dset:    the dataset to write labels to
+        final:          True if this is the final flush of the queues, False otherwise
+    """
+    # do not write the last sequence in case
+    # there are more chunks left for it
+    if final:
+        idx = items_q
+    else:
+        idx = items_q[:-1]
+
+
+    n_levels = labels_tt.shape[1]
+
+    _compute_mean(idx, outputs_q, counts_q)
+
+    labels_dset[idx] = labels_q if final else labels_q[:-1]
+
+    if args.hierarchy:
+        _write_hier_maxprobs(idx, outputs_q, n_levels, args.maxprob, labels_tt, maxprobs_dset, preds_dset)
+    else:
+        _write_maxprobs(idx, outputs_q, n_levels, args.maxprob, maxprobs_dset)
+        _write_preds(idx, outputs_q, n_levels, args.maxprob, preds_dset)
+
+    # drop everything except for the last sequence
+    # in case there are more chunks left for it
+    for oq in outputs_q:
+        del oq[:-1]
+    del items_q[:-1]
+    del counts_q[:-1]
+    del labels_q[:-1]
+
+    return idx
+
+_stats = ['n_ctgs', 'max_len', 'mean_len', 'l50', 'n50', 'l90', 'n90']
+def _asm_stats(lengths):
+    lengths = np.sort(lengths)[::-1]
+    cumsum = np.cumsum(lengths)
+    max_len = cumsum[0]
+
+    len50 = cumsum[-1] * 0.5
+    N50 = np.where(cumsum > len50)[0][0]
+    L50 = lengths[N50]
+
+    len90 = cumsum[-1] * 0.9
+    N90 = np.where(cumsum > len90)[0][0]
+    L90 = lengths[N90]
+
+    return {'n_ctgs': len(lengths),
+            'max_len': max_len,
+            'mean_len': lengths.mean(),
+            'l50': L50,
+            'n50': N50,
+            'l90': L90,
+            'n90': N90}
 ### END: Helper functions for parallel_chunked_inf_summ
 
 
@@ -324,29 +452,25 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
     args.logger.debug(f"rank {dataset.rank} - n_samples = {n_samples}")
     all_seq_ids = dataset.difile.id #get_sequence_subset()
     seq_lengths  = dataset.difile.lengths #get_seq_lengths()
+    all_genomes = dataset.difile.genomes
+    all_gnm_ids = np.unique(all_genomes)
 
     f = h5py.File(args.output, 'w', **fkwargs)
     outputs_dset = None
     if args.save_chunks:
         outputs_dset = f.require_dataset('outputs', shape=(n_samples, args.n_outputs), dtype=float)
+
+    # Set up datasets for sequences
+    seq_grp = f.create_group("sequences")
     args.logger.debug(f"rank {dataset.rank} - making labels")
-    labels_dset = f.require_dataset('labels', shape=(n_samples, n_levels), dtype=int, fillvalue=-1)
+    labels_dset = seq_grp.require_dataset('labels', shape=(n_samples, n_levels), dtype=int, fillvalue=-1)
     labels_dset.attrs['n_classes'] = args.n_outputs
-
     args.logger.debug(f"rank {dataset.rank} - making maxprob")
-    maxprob_dset = f.require_dataset('maxprob', shape=(n_samples, n_levels, args.maxprob), dtype=float)
-
+    maxprobs_dset = seq_grp.require_dataset('maxprob', shape=(n_samples, n_levels, args.maxprob), dtype=float)
     args.logger.debug(f"rank {dataset.rank} - making preds")
-    preds_dset = f.require_dataset('preds', shape=(n_samples, n_levels,), dtype=int, fillvalue=-1)
+    preds_dset = seq_grp.require_dataset('preds', shape=(n_samples, n_levels,), dtype=int, fillvalue=-1)
     args.logger.debug(f"rank {dataset.rank} - making lengths")
-    seqlen_dset = f.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
-
-    levels_dset = f.create_dataset('levels', shape=(n_levels,), dtype=levels.dtype)
-    rank = 0
-    if 'comm' in fkwargs:
-        fkwargs['comm'].Get_rank()
-    if rank == 0:
-        levels_dset[:] = levels
+    seqlen_dset = seq_grp.require_dataset('lengths', shape=(n_samples,), dtype=int, fillvalue=-1)
 
     if all_seq_ids is None:
         seqlen_dset[:] = seq_lengths
@@ -356,14 +480,58 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
         for i in range(len(seq_lengths)):
             seqlen_dset[all_seq_ids[i]] = seq_lengths[i]
 
+    gnm_grp = f.create_group("genomes")
+
+    n_genomes = args.total_genomes
+    args.logger.debug(f"rank {dataset.rank} - making labels")
+    gnm_labels_dset = gnm_grp.require_dataset('labels', shape=(n_genomes, n_levels), dtype=int, fillvalue=-1)
+    gnm_labels_dset.attrs['n_classes'] = args.n_outputs
+    args.logger.debug(f"rank {dataset.rank} - making maxprob")
+    gnm_maxprobs_dset = gnm_grp.require_dataset('maxprob', shape=(n_genomes, n_levels, args.maxprob), dtype=float)
+    args.logger.debug(f"rank {dataset.rank} - making preds")
+    gnm_preds_dset = gnm_grp.require_dataset('preds', shape=(n_genomes, n_levels,), dtype=int, fillvalue=-1)
+    args.logger.debug(f"rank {dataset.rank} - making lengths")
+    gnmlen_dset = gnm_grp.require_dataset('lengths', shape=(n_genomes,), dtype=int, fillvalue=-1)
+    gnm_lengths = np.bincount(dataset.difile.genomes, weights=dataset.difile.lengths)
+
+    stats_grp = gnm_grp.create_group("asm_stats")
+    asm_stat_dsets = dict()
+    for stat in _stats:
+        asm_stat_dsets[stat] = stats_grp.create_dataset(stat, shape=(n_genomes,), dtype=int, fillvalue=-1)
+
+    gnm_lengths = gnm_lengths[all_gnm_ids]
+    args.logger.debug(f"rank {dataset.rank} - writing gnm_lengths")
+    # iterate over indices individually - passing this off to h5py takes prohibitively long
+    for gnm_i, gnm_len in zip(all_gnm_ids, gnm_lengths):
+        gnmlen_dset[gnm_i] = gnm_len
+
+    args.logger.debug(f"rank {dataset.rank} - computing and writing assembly stats")
+    for gnm_i in all_gnm_ids:
+        mask = all_genomes == gnm_i
+        asm_stats = _asm_stats(seq_lengths[mask])
+        for stat in _stats:
+            asm_stat_dsets[stat][gnm_i] = asm_stats[stat]
+
+    levels_dset = f.create_dataset('levels', shape=(n_levels,), dtype=levels.dtype)
+    rank = 0
+    if 'comm' in fkwargs:
+        fkwargs['comm'].Get_rank()
+    if rank == 0:
+        levels_dset[:] = levels
 
     # to-write queues - we use those so we're not doing I/O at every iteration
     outputs_q = [[] for i in range(len(transforms) + 1)]
+    gnm_outputs_q = [[] for i in range(len(transforms) + 1)]
     labels_q = list()
+    gnm_labels_q = list()
     counts_q = list()
+    gnm_counts_q = list()
     seqs_q = list()
+    genomes_q = list()
 
-    labels_tt = tt.iloc[:, 1:].values
+    labels_tt = tt.iloc[:, 1:]
+    labels_tt['species'] = np.arange(len(labels_tt))
+    labels_tt = labels_tt.values
 
     # write what's in the to-write queues
     if not hasattr(args, 'n_seqs'):
@@ -378,77 +546,48 @@ def parallel_chunked_inf_summ(model, dataset, loader, args, fkwargs, tt):
     go_args = [model, loader, args.device]
     go_kwargs = dict(debug=args.debug, chunks=args.n_batches, prog_bar=dataset.rank==0, transforms=transforms)
 
-    for idx, _outputs, _labels, _orig_lens, _seq_ids in get_outputs(*go_args, **go_kwargs):
+    for idx, _outputs, _labels, _orig_lens, _seq_ids, _genome_ids in get_outputs(*go_args, **go_kwargs):
 
-        seqs, counts = np.unique(_seq_ids, return_counts=True)
-        outputs_sum = [[] for i in range(len(_outputs))]
-        labels = list()
-        for i in seqs:
-            mask = _seq_ids == i
-            for o_sum, _output in zip(outputs_sum, _outputs):
-                o_sum.append(_output[mask].sum(axis=0))
-            labels.append(labels_tt[_labels[mask][0]])
         uniq_labels.update(_labels)
 
-        # Add the first sum of this iteration to the last sum of the
-        # previous iteration if they belong to the same sequence
-        if len(seqs_q) > 0 and seqs_q[-1] == seqs[0]:
-            for oq, osum in zip(outputs_q, outputs_sum):
-                oq[-1] += osum[0]
-            counts_q[-1] += counts[0]
-            # drop the first sum so we don't end up with duplicates
-            seqs = seqs[1:]
-            counts = counts[1:]
-            outputs_sum = [osum[1:] for osum in outputs_sum]
-            labels = labels[1:]
+        # sum the outputs of the chunks for each sequence
+        seqs, counts, outputs_sum, labels = _reduce_chunks(labels_tt, _seq_ids, _outputs, _labels)
 
-        for oq, osum in zip(outputs_q, outputs_sum):
-            oq.extend(osum)
-        seqs_q.extend(seqs)
-        counts_q.extend(counts)
-        labels_q.extend(labels)
+        # sum the outputs of the chunks for each genome
+        genomes, gnm_counts, gnm_outputs_sum, gnm_labels = _reduce_chunks(labels_tt, _genome_ids, _outputs, _labels)
 
-        # write when we get above a certain number of sequences
+        # update the queues for each sequence
+        _update_queues(seqs_q, seqs, outputs_q, outputs_sum, counts_q, counts, labels_q, labels)
+
+        # update the queues for each genome
+        _update_queues(genomes_q, genomes, gnm_outputs_q, gnm_outputs_sum, gnm_counts_q, gnm_counts, gnm_labels_q, gnm_labels)
+
+        # flush the sequences queues once we have more than specified
         if len(seqs_q) > args.n_seqs:
-            # do not write the last sequence in case
-            # there are more chunks left for it
-            idx = seqs_q[:-1]
+            idx = _flush_queues(args, labels_tt, seqs_q,
+                                outputs_q, counts_q, maxprobs_dset, preds_dset,
+                                labels_q, labels_dset)
             args.logger.debug(f"rank {dataset.rank} - saving these sequences {idx}")
 
-            _compute_mean(idx, outputs_q, counts_q)
+        # flush the genomes queues once we have more than specified
+        if len(genomes_q) > args.n_seqs:
+            idx = _flush_queues(args, labels_tt, genomes_q,
+                                gnm_outputs_q, gnm_counts_q, gnm_maxprobs_dset, gnm_preds_dset,
+                                gnm_labels_q, gnm_labels_dset)
+            args.logger.debug(f"rank {dataset.rank} - saving these genomes {idx}")
 
-            if outputs_dset is not None:
-                for i in range(len(outputs_dset)):
-                    outputs_dset[i][idx] = outputs_q[i][:-1]
-            labels_dset[idx] = labels_q[:-1]
-
-
-            if args.hierarchy:
-                _write_hier_maxprobs(idx, outputs_q, n_levels, args.maxprob, labels_tt, maxprob_dset, preds_dset)
-            else:
-                _write_maxprobs(idx, outputs_q, n_levels, args.maxprob, maxprob_dset)
-                _write_preds(idx, outputs_q, n_levels, args.maxprob, preds_dset)
-
-
-            # drop everything except for the last sequence
-            # in case there are more chunks left for it
-            outputs_q = [oq[-1:] for oq in outputs_q]
-            seqs_q = seqs_q[-1:]
-            counts_q = counts_q[-1:]
-            labels_q = labels_q[-1:]
-
-    args.logger.debug(f"rank {dataset.rank} - saving these sequences {seqs_q}")
     args.logger.debug(f"rank {dataset.rank} - came across these labels {list(sorted(uniq_labels))}")
     # clean up what's left in the to-write queue
-    _compute_mean(seqs_q, outputs_q, counts_q)
 
-    labels_dset[seqs_q] = labels_q
+    idx = _flush_queues(args, labels_tt, seqs_q,
+                        outputs_q, counts_q, maxprobs_dset, preds_dset,
+                        labels_q, labels_dset, final=True)
+    args.logger.debug(f"rank {dataset.rank} - saving these sequences {idx}")
 
-    if args.hierarchy:
-        _write_hier_maxprobs(seqs_q, outputs_q, n_levels, args.maxprob, labels_tt, maxprob_dset, preds_dset)
-    else:
-        _write_maxprobs(seqs_q, outputs_q, n_levels, args.maxprob, maxprob_dset)
-        _write_preds(seqs_q, outputs_q, n_levels, args.maxprob, preds_dset)
+    idx = _flush_queues(args, labels_tt, genomes_q,
+                        gnm_outputs_q, gnm_counts_q, gnm_maxprobs_dset, gnm_preds_dset,
+                        gnm_labels_q, gnm_labels_dset, final=True)
+    args.logger.debug(f"rank {dataset.rank} - saving these genomes {idx}")
 
     args.logger.info(f'rank {dataset.rank} - closing {args.output}')
     f.close()
@@ -489,10 +628,10 @@ def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True, 
         transforms = [v.to(device) for v in transforms]
         n_levels = len(transforms) + 1
 
-    indices, outputs, labels, orig_lens, seq_ids = [], [[] for i in range(n_levels)], [], [], []
+    indices, outputs, labels, orig_lens, seq_ids, genomes = [], [[] for i in range(n_levels)], [], [], [], []
 
     with torch.no_grad():
-        for idx, (i, X, y, olen, seq_i) in enumerate(it):
+        for idx, (i, X, y, olen, seq_i, genome) in enumerate(it):
             X = X.to(device)
             with autocast():
                 out = model(X)
@@ -514,24 +653,26 @@ def get_outputs(model, loader, device, debug=False, chunks=None, prog_bar=True, 
             labels.append(y.to('cpu').detach())
             orig_lens.append(olen.to('cpu').detach())
             seq_ids.append(seq_i.to('cpu').detach())
+            genomes.append(genome.to('cpu').detach())
             if idx >= max_batches:
                 break
             if chunks and (idx+1) % chunks == 0:
-                yield cat(indices, outputs, labels, orig_lens, seq_ids)
-                indices, outputs, labels, orig_lens, seq_ids = [], [[] for i in range(n_levels)], [], [], []
+                yield cat(indices, outputs, labels, orig_lens, seq_ids, genomes)
+                indices, outputs, labels, orig_lens, seq_ids, genomes = [], [[] for i in range(n_levels)], [], [], [], []
     if chunks is None:
-        return cat(indices, outputs, labels, orig_lens, seq_ids)
+        return cat(indices, outputs, labels, orig_lens, seq_ids, genomes)
     else:
         if len(indices) > 0:
-            yield cat(indices, outputs, labels, orig_lens, seq_ids)
+            yield cat(indices, outputs, labels, orig_lens, seq_ids, genomes)
 
 
-def cat(indices, outputs, labels, orig_lens, seq_ids):
+def cat(indices, outputs, labels, orig_lens, seq_ids, genome):
     ret = (torch.cat(indices).numpy(),
            [torch.cat(o).numpy() for o in outputs],
            torch.cat(labels).numpy(),
            torch.cat(orig_lens).numpy(),
-           torch.cat(seq_ids).numpy())
+           torch.cat(seq_ids).numpy(),
+           torch.cat(genome).numpy())
     return ret
 
 

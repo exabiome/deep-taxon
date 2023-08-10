@@ -613,6 +613,7 @@ class LazySeqDataset(Dataset):
         kwargs.setdefault('tnf', False)
         kwargs.setdefault('weighted', None)
         kwargs.setdefault('shm', False)
+        kwargs.setdefault('bal_gnm', False)
 
         self.comm = kwargs.pop('comm', None)
 
@@ -691,7 +692,8 @@ class LazySeqDataset(Dataset):
                                               tree_graph=tree_graph,
                                               load=kwargs['load'],
                                               shm=kwargs['shm'],
-                                              indices=seq_indices)
+                                              indices=seq_indices,
+                                              bal_gnm = kwargs['bal_gnm'])
         self._set_subset(train=self._train_subset, validate=self._validate_subset, test=self._test_subset)
 
         self.__len = len(self.difile)
@@ -805,10 +807,11 @@ class LazySeqDataset(Dataset):
         seq = item['seq']
         label = item['label']
         seq_id = item.get('seq_idx', -1)
+        genome_id = item.get('genome', -1)
         ## one-hot encode sequence
         #seq = torch.as_tensor(seq, dtype=torch.int64)
         seq = torch.as_tensor(seq)
         if self.__ohe:
             seq = F.one_hot(seq, num_classes=len(self.difile.vocab)).float()
         label = torch.as_tensor(label, dtype=self._label_dtype)
-        return (idx, seq, label, seq_id)
+        return (idx, seq, label, seq_id, genome_id)

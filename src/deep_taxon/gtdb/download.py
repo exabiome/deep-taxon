@@ -83,7 +83,7 @@ def get_accessions(args):
             accessions = [tip.name[3:].replace(' ', '_') for tip in root.tips()]
         elif args.metadata:
             accessions = pd.read_csv(args.accession, header=0, sep='\t').accession
-            accessions = [acc[3:] for acc in accessions]
+            accessions = accessions.str[3:]
         else:
             accessions = [args.accession]
     return accessions
@@ -102,7 +102,7 @@ def ncbi_fetch(args):
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument('-f', '--file', action='store_true', default=False, help='accession is a file with a list of accessions, one per line')
     grp.add_argument('-t', '--tree', action='store_true', default=False, help='accessions is a tree file with accessions')
-    grp.add_argument('-m', '--metadata', action='store_true', default=False, help='accession is a file with a list of accessions, one per line')
+    grp.add_argument('-m', '--metadata', action='store_true', default=False, help='accessions is a metdata file from GTDB')
 
     parser.add_argument('-p', '--processes', type=int, help='the number of rsync subprocesses to run', default=1)
     parser.add_argument('-q', '--quiet', action='store_true', default=False, help='print less information to log file')

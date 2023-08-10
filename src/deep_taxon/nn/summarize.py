@@ -17,7 +17,6 @@ import scipy.stats as stats
 #from skl2onnx import convert_sklearn
 #from skl2onnx.common.data_types import FloatTensorType
 import pickle
-import sk2torch
 
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV, SGDClassifier
 from sklearn.dummy import DummyClassifier
@@ -1017,30 +1016,6 @@ def add_diff(_X):
     diff = _X[:, 1] - _X[:, 2]
     return np.concatenate([_X, diff[:, np.newaxis]], axis=1)
 
-def _fit_model(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
-    maxprobs  = maxprobs[:, :2]
-    X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1)
-    diff_tfm = FunctionTransformer(add_diff)
-    scaler = MaxAbsScaler()
-
-    if debug:
-        lr = DummyClassifier(strategy="prior")
-    else:
-        lr = SGDClassifier(loss='log_loss', early_stopping=True, validation_fraction=0.1,
-                             class_weight='balanced', alpha=1.0, learning_rate='adaptive', eta0=0.01)
-
-
-    pipe = Pipeline([('add_diff', diff_tfm),
-                     ('scaler', scaler),
-                     ('lm', lr)])
-
-    y = (true == pred).astype(int)
-
-    logger.info(f"Building confidence model with \n{lr}")
-    pipe.fit(X, y)
-
-    return pipe, X, y
-
 
 class LogisticRegression(nn.Module):
 
@@ -1051,7 +1026,7 @@ class LogisticRegression(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        diff = x[:, 1] - x[:, 2]
+        diff = x[:, -2] - x[:, -1]
         x = torch.column_stack([x, diff])
         x = self.norm(x)
         x = self.weights(x)
@@ -1082,11 +1057,11 @@ class MyNet(skorch.NeuralNetBinaryClassifier):
         return loss_reduced
 
 
-def _fit_skorch(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
+def _fit_skorch(maxprobs, features, true, pred, logger, debug):
     maxprobs  = maxprobs[:, :2]
-    X = np.concatenate([lengths[:, np.newaxis], maxprobs], axis=1).astype(np.float32)
+    X = np.concatenate([features, maxprobs], axis=1).astype(np.float32)
     X = torch.from_numpy(X)
-    y = torch.from_numpy((true == pred).astype(np.int32))
+    y = torch.from_numpy((true == pred).astype(int))
 
     if debug:
         X = X[:1024]
@@ -1095,6 +1070,7 @@ def _fit_skorch(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
     sample_weight = (X.shape[0] / (2 * torch.bincount(y, minlength=2)))[y]
     y = y.float()
 
+    n_inputs = X.shape[1]
     X = {'data': X, 'sample_weight': sample_weight}
 
     with tempfile.TemporaryDirectory(dir='.') as d:
@@ -1104,7 +1080,8 @@ def _fit_skorch(maxprobs, lengths, true, pred, cvs, n_jobs, logger, debug):
                      max_epochs=10,
                      callbacks=[skorch.callbacks.Checkpoint(monitor='valid_acc_best',
                                            dirname=d, load_best=True)],
-                     iterator_train__shuffle=True)
+                     iterator_train__shuffle=True,
+                     module__n_inputs=n_inputs)
 
         logger.info(f"Building confidence model with \n{pipe}")
         pipe.fit(X, y)
@@ -1120,12 +1097,6 @@ def _write_skorch(model, lvl, outdir, logger):
         script = torch.jit.script(model)
         script.save(path)
     return path
-
-
-def _to_onnx(model):
-    initial_type = [('float_input', FloatTensorType([None, model.coef_.shape[1]]))]
-    onx = convert_sklearn(model, target_opset=12, initial_types=initial_type, options={type(model): {'zipmap': False}})
-    return onx.SerializeToString().hex()
 
 
 def _write_model(model, basename, outdir, onnx, logger, n_inputs):
@@ -1156,39 +1127,52 @@ def train_confidence_model(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("output_dir", type=str, help="the directory to save models to")
     parser.add_argument("summary", type=str, help='the summarized sequence NN outputs', nargs='?')
-    parser.add_argument('-O', '--onnx', default=False, action='store_true', help='Save data in ONNX format')
     parser.add_argument("-k", "--topk", metavar="TOPK", type=int, help="use the TOPK probabilities for building confidence model", default=None)
-    parser.add_argument('-j', '--n_jobs', metavar='NJOBS', nargs='?', const=True, default=None, type=int,
-                        help='the number of jobs to use for cross-validation. if NJOBS is not specified, use the number of folds i.e. 5')
-    parser.add_argument('-c', '--cvs', metavar='NFOLDS', default=5, type=int,
-                        help='the number of cross-validation folds to use. default is 5')
+    parser.add_argument("-b", "--bins", action='store_true', default=False,
+                        help='compute confidence models for bins/genomes. By default, build models for contigs/sequences')
     parser.add_argument("-e", "--eval", action='store_true', help='evaluate the train confidence model', default=False)
     parser.add_argument("-f", "--force", action='store_true', help='force training i.e. do not use output if it exists', default=False)
     parser.add_argument("-d", "--debug", action='store_true', help='Run workflow without training models', default=False)
 
     args = parser.parse_args(argv)
 
-    if args.n_jobs and isinstance(args.n_jobs, bool):
-        args.n_jobs = args.cvs
 
     logger = get_logger()
 
     X, y = None, None
     levels = None
 
+    features = None
     if args.summary:
         # train a new model
-        logger.info(f"Reading outputs summary data from {args.summary}")
         f = h5py.File(args.summary, 'r')
-
         levels = f['levels'].asstr()[:]
+        if args.bins:
+            logger.info(f"Training confidence models for bins")
+            logger.info(f"Reading genome summary data from {args.summary}")
+            grp = f['genomes']
+            true = grp['labels'][:]
+            pred = grp['preds'][:]
 
-        true = f['labels'][:]
-        pred = f['preds'][:]
+            # the top-k probabilities, in descending order
+            maxprobs = grp['maxprob'][:, :, :args.topk]
 
-        # the top-k probabilities, in descending order
-        maxprobs = f['maxprob'][:, :, :args.topk]
-        lengths = f['lengths'][:]
+            # get assembly statistics
+            grp = grp['asm_stats']
+            features = np.column_stack([grp['n_ctgs'], grp['l50'], grp['max_len']])
+
+        else:
+            logger.info(f"Training confidence models for contigs")
+            logger.info(f"Reading sequence summary data from {args.summary}")
+            grp = f['sequences']
+            true = grp['labels'][:]
+            pred = grp['preds'][:]
+
+            # the top-k probabilities, in descending order
+            maxprobs = grp['maxprob'][:, :, :args.topk]
+
+            # get sequence length
+            features = grp['lengths'][:][:, np.newaxis]
 
         f.close()
 
@@ -1196,14 +1180,6 @@ def train_confidence_model(argv=None):
 
     if os.path.exists(args.output_dir) and not args.force:
         logger.info(f"Found existing directory at {args.output_dir}. Exiting. (Use --force to override)")
-        #for pkl in glob.glob(f"{args.output_dir}/*.pkl"):
-        #    with open(pkl, 'rb') as f:
-        #        lr = pickle.load(f)
-        #    lvl = os.path.splitext(os.path.basename(pkl))[0]
-        #    models[lvl] = lr
-        #    if args.onnx:
-        #        logger.info(f"Converting {lvl}-level model found in {pkl} to ONNX format")
-        #        _write_model(lr, lvl, args.output_dir, True, logger)
 
     else:
         os.makedirs(args.output_dir, exist_ok=args.force)
@@ -1218,11 +1194,8 @@ def train_confidence_model(argv=None):
         for lvl_i, lvl in enumerate(levels):
             lvl = levels[lvl_i]
             logger.info(f"Building confidence model for {lvl}")
-            #lr, X, y = _fit_model(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
-            #n_inputs.append(X.shape[1])
-            #outpath = _write_model(lr, lvl, args.output_dir, False, logger, n_inputs[-1])
 
-            lr, X, y = _fit_skorch(maxprobs[:, lvl_i], lengths, true[:, lvl_i], pred[:, lvl_i], args.cvs, args.n_jobs, logger, args.debug)
+            lr, X, y = _fit_skorch(maxprobs[:, lvl_i], features, true[:, lvl_i], pred[:, lvl_i], logger, args.debug)
             n_inputs.append(X['data'].shape[1])
 
             logger.info(f"Evaluating {lvl} model")

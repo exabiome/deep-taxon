@@ -1,5 +1,6 @@
 import re
 import subprocess
+import sys
 from abc import abstractmethod, ABCMeta
 from collections import OrderedDict
 
@@ -83,6 +84,7 @@ class AbstractJob(metaclass=ABCMeta):
         self.jobname = kwargs.get('jobname')
         self.nodes = kwargs.get('nodes')
         self.wait = kwargs.get('wait')
+        self.cmdline = kwargs.get('cmdline', " ".join(sys.argv))
         self.conda_env = None
         self.modules = list()
         self.debug = False
@@ -195,6 +197,8 @@ class AbstractJob(metaclass=ABCMeta):
     def write(self, f, options=None):
         self.write_header(f, options)
         print(file=f)
+        if self.cmdline is not None:
+            print(f"# {self.cmdline}", file=f)
         for var in self.clear_var:
             print(f"unset {var}", file=f)
         print(file=f)

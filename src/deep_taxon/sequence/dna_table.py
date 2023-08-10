@@ -521,6 +521,8 @@ class DeepIndexFile(Container):
             # swap everything in
             log('Loading data subset - loading IDs', print_msg=verbose)
             self.seq_table['id'].transform(lambda x: x[:][self.__indices])
+            log('Loading data subset - loading genome IDs', print_msg=verbose)
+            self.seq_table['genome'].transform(lambda x: x[:][self.__indices])
             log('Loading data subset - swapping in lengths', print_msg=verbose)
             self.seq_table['length'].transform(lambda x: subset_lengths)
             log('Loading data subset - swapping in sequence index', print_msg=verbose)
@@ -533,6 +535,8 @@ class DeepIndexFile(Container):
             _load = lambda x: x.astype(int)[:]
             log('Loading data - loading IDs', print_msg=verbose)
             self.seq_table['id'].transform(_load)
+            log('Loading data - loading genome IDs', print_msg=verbose)
+            self.seq_table['genome'].transform(_load)
             log('Loading data - loading sequence lengths', print_msg=verbose)
             self.seq_table['length'].transform(_load)
             log('Loading data - loading sequence index', print_msg=verbose)
@@ -644,12 +648,12 @@ def chunk_sequence(difile, wlen, step=None, min_seq_len=100):
     return seq_idx, chunk_start, chunk_end, labels, mask.mean()
 
 
-def lazy_chunk_sequence(difile, wlen, step=None, min_seq_len=100):
+def lazy_chunk_sequence(lengths, wlen, step=None, min_seq_len=100):
     if wlen < min_seq_len:
         raise ValueError('window size (wlen) must be greater than or equal to minimum chunk length (min_seq_len)')
 
     # the length of each sequence
-    lengths = np.asarray(difile.get_seq_lengths(), dtype=int)
+    lengths = np.asarray(lengths, dtype=int)
 
     # C_min is the shortest chunk before filtering (for each sequence)
     C_min = lengths % step
@@ -692,10 +696,14 @@ class LazyWindowChunkedDIFile:
     }
 
 
-    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, tree_graph=False, load=True, shm=False, indices=None):
-        counts, frac_good = lazy_chunk_sequence(difile, window, step, min_seq_len)
+    def __init__(self, difile, window, step, min_seq_len=100, rank=0, size=1, revcomp=False, tree_graph=False, load=True, shm=False, indices=None, bal_gnm=False):
+        counts, frac_good = lazy_chunk_sequence(difile.get_seq_lengths(), window, step, min_seq_len)
         if size > 1 and indices is None:
-            indices = balsplit(counts, size, rank)
+            if bal_gnm:
+                gnm_ids = difile.seq_table['genome'].data.astype(int)[:]
+                indices = np.where(np.isin(gnm_ids, balsplit(np.bincount(gnm_ids, weights=counts), size, rank)))[0]
+            else:
+                indices = balsplit(counts, size, rank)
         if indices is not None:
             counts = counts[indices]
             difile.set_sequence_subset(indices)
@@ -705,6 +713,8 @@ class LazyWindowChunkedDIFile:
         self.lengths = difile.seq_table['length'].data
         log('setting ids', print_msg=rank==0)
         self.id = difile.seq_table['id'].data
+        log('setting genomes', print_msg=rank==0)
+        self.genomes = difile.seq_table['genome'].data.astype(int)[:]
         log('setting labels', print_msg=rank==0)
         self.labels = torch.from_numpy(difile._labels)  # store as torch Tensor since this is used for loss calculations
 
@@ -781,7 +791,8 @@ class LazyWindowChunkedDIFile:
         idx = self.id[arg]
         label = self.labels[arg]
         length = self.lengths[arg]
-        return {'id': idx, 'seq': seq, 'label': label, 'length': length}
+        genome = self.genomes[arg]
+        return {'id': idx, 'seq': seq, 'label': label, 'length': length, 'genome': genome}
 
     def get_label_classes(self):
         return self._classes
