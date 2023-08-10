@@ -7,10 +7,8 @@
 #SBATCH -o /pscratch/sd/a/ajtritt/exabiome/deep-taxon/gtnet/sota/bins/sourmash_log/%A_%a.log
 #SBATCH -e /pscratch/sd/a/ajtritt/exabiome/deep-taxon/gtnet/sota/bins/sourmash_log/%A_%a.log
 #SBATCH -n 1
-#SBATCH --array=2-40
+#SBATCH --array=0-39
 
-# --array=2-40
-#
 module load parallel
 
 seq -f "%04g" $SLURM_ARRAY_TASK_ID 40 2000  | parallel -j 50 bash cmd_bins.sh {}
