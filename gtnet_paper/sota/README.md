@@ -14,7 +14,8 @@ python setup.py install
 
 Get test accessions from metadata file and make file-of-files
 ```bash
-deep-taxon get-accessions -t ../../input/gtdb/r207/metadata_r207.tsv > metadata_r207.test.accs.tsv
+gunzip metadata_r207.tsv.gz
+deep-taxon get-accessions -t metadata_r207.tsv > metadata_r207.test.accs.tsv
 deep-taxon make-fof --genomic $CFS/m3513/endurable/ncbi/genomes metadata_r207.test.accs.tsv > metadata_r207.test.fof
 ```
 
@@ -161,4 +162,60 @@ CSV="$INDIR/metadata_r207.test.$i.sourmash.csv"
 
 sourmash sketch dna $FNA_DIR/*.fna -p scaled=10000,k=51 -o $SIG
 sourmash lca classify --db $DB --query $SIG -o $CSV
+```
+
+
+
+Running GTNet
+=============
+Create and activate the `gtnet-gtnet-paper` environment:
+
+```bash
+conda create --file=gtnet-gtnet-paper.yaml
+conda activate gtnet-gtnet-paper
+```
+
+Run from `./gtnet` and activate `gtnet-gtnet-paper` environment
+
+Contigs
+-------
+Run GTNet on chunks created in "Settup up data" above. Do this using a Slurm Job Array
+
+```bash
+sbatch cmd_contigs.array.sh
+```
+
+This relies on the script `cmd_contigs.sh`. It should be backed up with this file, but in case it is not, here is what it should look like:
+
+```bash
+arg=$((SLURM_LOCALID + 1))
+part=${!arg}
+
+INDIR="../contigs"
+FNA="$INDIR/metadata_r207.test.$part.fna"
+RAW="$INDIR/metadata_r207.test.$part.gtnet.raw.csv"
+CSV="$INDIR/metadata_r207.test.$part.gtnet.csv"
+
+gtnet predict -s -g -D $SLURM_LOCALID -o $RAW $FNA
+gtnet filter -o $CSV $RAW
+```
+
+Bins
+----
+Run GTNet on chunks created in "Settup up data" above. Do this using a Slurm Job Array
+
+```bash
+sbatch cmd_bins.array.sh
+```
+
+This relies on the script `cmd_bins.sh`. It should be backed up with this file, but in case it is not, here is what it should look like:
+
+```bash
+part=${1:?"Missing partition argument"}
+
+INDIR="../bins"
+FNA_DIR="$INDIR/$part"
+CSV="$INDIR/metadata_r207.test.$part.gtnet.$SLURM_LOCALID.csv"
+
+gtnet classify -g -D $SLURM_LOCALID -o $CSV `ls $FNA_DIR/*.fna | awk "NR % 4 == $SLURM_LOCALID"`
 ```
