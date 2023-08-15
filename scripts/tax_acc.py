@@ -9,8 +9,9 @@ class TaxClfParser(metaclass=abc.ABCMeta):
 
     LEVELS = ['domain', 'phylum', 'class', 'order', 'family', 'genus', 'species']
 
-    def __init__(self, contigs=False):
+    def __init__(self, contigs=False, logger=None):
         self.contigs = contigs
+        self.logger = logger if logger is not None else parse_logger('')
 
     @abc.abstractmethod
     def strip_accession(self, row):
@@ -35,6 +36,7 @@ class TaxClfParser(metaclass=abc.ABCMeta):
         return row
 
     def read(self, csv):
+        self.logger.info(f'Reading {csv}')
         return pd.read_csv(csv, sep=self.get_separator()).apply(self.format_row, axis=1).set_index('accession')
 
 
@@ -177,6 +179,9 @@ class BinAnalysis(Analysis):
 if __name__ == '__main__':
 
     import argparse
+    import logging
+    import multiprocessing as mp
+    import sys
 
     parser = argparse.ArgumentParser()
     parser.add_argument('metadata', type=str, help='GTDB metadata file')
@@ -186,6 +191,7 @@ if __name__ == '__main__':
     parser.add_argument('csv', type=str, nargs='+', help='CSV formatted classification output')
     parser.add_argument('-f', '--fof', action='store_true', help='csv argument is a file of files', default=False)
     parser.add_argument('-c', '--contigs', action='store_true', help='CSVs are contig classifications', default=False)
+    parser.add_argument('-p', '--n_procs', type=int, help='The number of processes to use for reading', default=0)
 
     args = parser.parse_args()
 
@@ -197,7 +203,18 @@ if __name__ == '__main__':
         args.csv = tmp
         del tmp
 
-    logger = parse_logger('')
+    if args.n_procs > 0:
+        pool = mp.Pool(args.n_procs)
+        map_func = pool.imap
+        logger = mp.get_logger()
+    else:
+        map_func = map
+        logger = logging.getLogger()
+
+    hdlr = logging.StreamHandler(sys.stderr)
+    hdlr.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+    logger.setLevel(logging.INFO)
+    logger.addHandler(hdlr)
 
 
     if args.clf == 'cat':
@@ -219,10 +236,8 @@ if __name__ == '__main__':
         logger.info(f"Loading metadata from {args.metadata}")
         analysis = BinAnalysis(args.metadata)
 
-    for csv in args.csv:
-        logger.info(f'Reading {csv}')
-        lca_df = tcparser.read(csv)
-        logger.info(f'Tallying classification results for {csv}')
+    for csv_i, lca_df in enumerate(map_func(tcparser.read, args.csv)):
+        logger.info(f'Tallying classification results for {args.csv[csv_i]}')
         analysis.add_classifications(lca_df)
 
     logger.info(f"Saving results to {args.output}")
