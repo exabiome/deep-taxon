@@ -1,0 +1,21 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: deep-taxon
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Andrew
+    family-names: Tritt
+    email: ajtritt@lbl.gov
+    affiliation: Lawrence Berkeley National Laboratory
+    orcid: 'https://orcid.org/0000-0002-1617-449X'
+repository-code: 'https://github.com/exabiome/deep-taxon'
+abstract: >-
+  deep-taxon is a suite of tools for training deep neural
+  networks for taxonomic classification based on the Genome
+  Taxonomy Database (GTDB)
+license: BSD-3-Clause-LBNL
